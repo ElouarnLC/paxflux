@@ -19,8 +19,20 @@ export async function getNextSequence(): Promise<number> {
   });
 }
 
+function generateActionId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback for non-secure contexts (HTTP over LAN IP)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export async function enqueueCountAction(direction: Direction): Promise<OutboxActionRecord> {
-  const clientActionId = crypto.randomUUID();
+  const clientActionId = generateActionId();
   const sequence = await getNextSequence();
   const now = Date.now();
 
@@ -51,7 +63,7 @@ export async function enqueueReversalAction(targetClientActionId: string): Promi
   }
 
   // Case 2 & 3: Target was sent or attempted -> Create formal compensating reversal action
-  const clientActionId = crypto.randomUUID();
+  const clientActionId = generateActionId();
   const sequence = await getNextSequence();
   const now = Date.now();
 

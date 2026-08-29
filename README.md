@@ -106,6 +106,27 @@ npm run build
 
 ---
 
+## Environment Variables & Configuration
+
+PaxFlux is configured via environment variables. Defaults are pre-configured for direct local network / LAN usage without requiring external services.
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `PUBLIC_BASE_URL` | *(none / optional)* | Public HTTPS URL (e.g. `https://counter.yourfestival.org`). When set with `https://`, enables strict HTTPS security headers (CSP `upgrade-insecure-requests`, secure cookie flags) and is used to construct absolute pairing URLs. **Leave unset or empty for direct local HTTP / LAN access.** |
+| `PORT` | `3000` | Port on which the HTTP server listens inside the container. |
+| `HOST` | `0.0.0.0` | Host binding address. |
+| `DATA_DIR` | `./data` (or `/data` in Docker) | Directory storing the persistent SQLite database (`app.db`). |
+| `BACKUP_DIR` | `./backups` (or `/backups` in Docker) | Directory storing automated SQLite snapshots and recovery points. |
+| `LOG_LEVEL` | `info` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). |
+| `TRUST_PROXY` | `false` | Enable (`true` or IP list) when running behind a reverse proxy (Caddy, Traefik, Nginx). |
+| `BACKUP_INTERVAL_LIVE_MINUTES` | `5` | Periodic snapshot interval during active live event execution. |
+| `BACKUP_RETENTION_COUNT` | `300` | Maximum retained snapshot archive count before rotating oldest. |
+| `PAIRING_TTL_MINUTES` | `30` | Expiration window for unredeemed checkpoint pairing tokens. |
+| `STAFF_SESSION_HOURS` | `12` | Staff/admin authentication session lifetime. |
+| `DEVICE_SESSION_GRACE_HOURS` | `24` | Post-event offline sync grace period for field counters. |
+
+---
+
 ## Operator Runbooks
 
 ### Creating a Manual Backup

@@ -67,6 +67,7 @@ export async function buildApp(options: AppOptions) {
         frameAncestors: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
+        upgradeInsecureRequests: env.PUBLIC_BASE_URL?.startsWith('https') ? [] : null,
       },
     },
     referrerPolicy: { policy: 'no-referrer' },
