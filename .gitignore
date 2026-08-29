@@ -10,17 +10,17 @@ build/
 .vite/
 .output/
 
-# Application runtime data & backups
-data/
-backups/
+# Application runtime data & backups (root level only)
+/data/
+/backups/
 *.db
 *.db-wal
 *.db-shm
 *.db-journal
-setup-token.txt
+/setup-token.txt
 
 # Test scratches & coverage
-tests/scratch-*
+/tests/scratch-*
 coverage/
 .nyc_output/
 
