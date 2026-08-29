@@ -199,13 +199,13 @@ export async function flushOutbox(): Promise<BatchSyncResponse | null> {
     const data: BatchSyncResponse = await response.json();
 
     // Delete acknowledged actions
-    const acknowledgedIds = new Set(
+    const acknowledgedIds = new Set<string>(
       data.acknowledged
-        .filter((ack) => ack.status === 'applied' || ack.status === 'duplicate')
-        .map((ack) => ack.clientActionId)
+        .filter((ack: any) => ack.status === 'applied' || ack.status === 'duplicate')
+        .map((ack: any) => ack.clientActionId as string)
     );
 
-    for (const id of acknowledgedIds) {
+    for (const id of Array.from(acknowledgedIds)) {
       await localDb.outbox_actions.delete(id);
     }
 

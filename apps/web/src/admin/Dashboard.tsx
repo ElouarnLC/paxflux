@@ -76,7 +76,7 @@ export const Dashboard: React.FC = () => {
     url: selectedEventId ? `/api/v1/events/${selectedEventId}/stream` : '',
     enabled: !!selectedEventId,
     onState: (state: CompactEventState) => {
-      setEventDetail((prev) => {
+      setEventDetail((prev: any) => {
         if (!prev) return prev;
         const updatedSpaces: Record<string, number> = {};
         for (const s of state.spaces) {
@@ -308,8 +308,8 @@ export const Dashboard: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {eventDetail?.spaces
-              .filter((s) => s.kind !== 'external')
-              .map((sp) => {
+              .filter((s: any) => s.kind !== 'external')
+              .map((sp: any) => {
                 const occ = eventDetail.occupancy.spaces[sp.id] || 0;
                 const spCap = sp.capacity || 0;
                 const pct = spCap > 0 ? (occ / spCap) * 100 : 0;
@@ -376,7 +376,7 @@ export const Dashboard: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono">
-                {eventDetail?.devices.map((dev) => (
+                {eventDetail?.devices.map((dev: any) => (
                   <tr key={dev.id} className="hover:bg-slate-950/40">
                     <td className="py-3 px-4 font-sans font-medium text-white">{dev.checkpointName}</td>
                     <td className="py-3 px-4 font-sans text-slate-300">{dev.label}</td>

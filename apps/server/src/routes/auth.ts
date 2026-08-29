@@ -66,7 +66,7 @@ export async function registerAuthRoutes(app: FastifyInstance, db: AppDb, env: E
             'Paramètres invalides',
             'Les données du formulaire sont invalides.',
             undefined,
-            parseResult.error.errors.map((e) => ({
+            parseResult.error.errors.map((e: any) => ({
               name: e.path.join('.'),
               reason: e.message,
             }))

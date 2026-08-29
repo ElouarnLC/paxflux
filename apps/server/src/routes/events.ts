@@ -44,7 +44,7 @@ export async function registerEventRoutes(app: FastifyInstance, db: AppDb, env: 
             'Paramètres invalides',
             'Données d’événement invalides.',
             undefined,
-            parseResult.error.errors.map((e) => ({
+            parseResult.error.errors.map((e: any) => ({
               name: e.path.join('.'),
               reason: e.message,
             }))

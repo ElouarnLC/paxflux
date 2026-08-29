@@ -107,7 +107,7 @@ export const AnalyticsView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 font-mono">
-              {data.checkpointStats.map((cp) => (
+              {data.checkpointStats.map((cp: any) => (
                 <tr key={cp.checkpointId}>
                   <td className="py-3 px-4 font-sans font-medium text-white">{cp.checkpointName}</td>
                   <td className="py-3 px-4 text-emerald-400">+{cp.entries}</td>

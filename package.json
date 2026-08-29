@@ -12,8 +12,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "npm run build --workspaces",
-    "typecheck": "npm run typecheck --workspaces",
+    "build": "npm run build -w @paxflux/shared && npm run build -w @paxflux/server && npm run build -w @paxflux/web",
+    "typecheck": "npm run typecheck -w @paxflux/shared && npm run typecheck -w @paxflux/server && npm run typecheck -w @paxflux/web",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

@@ -51,7 +51,7 @@ export async function registerCountingRoutes(
             'Payload invalide',
             'Format de batch d’actions invalide.',
             undefined,
-            parseResult.error.errors.map((e) => ({
+            parseResult.error.errors.map((e: any) => ({
               name: e.path.join('.'),
               reason: e.message,
             }))
@@ -156,7 +156,7 @@ export async function registerCountingRoutes(
             'Paramètres invalides',
             'Motif et comptage observé requis.',
             undefined,
-            parseResult.error.errors.map((e) => ({
+            parseResult.error.errors.map((e: any) => ({
               name: e.path.join('.'),
               reason: e.message,
             }))
