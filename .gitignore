@@ -9,6 +9,7 @@ dist/
 build/
 .vite/
 .output/
+*.tsbuildinfo
 
 # Application runtime data & backups (root level only)
 /data/

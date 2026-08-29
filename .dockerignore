@@ -1,0 +1,15 @@
+# Ignore host dependencies and build artifacts
+node_modules
+dist
+build
+.vite
+*.tsbuildinfo
+.git
+.github
+.env*
+data
+backups
+*.db*
+setup-token.txt
+tests/scratch-*
+coverage
