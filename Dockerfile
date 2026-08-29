@@ -2,21 +2,18 @@
 # PaxFlux Multi-Stage Production Dockerfile (Node.js 24 LTS Alpine)
 # ==============================================================================
 
-# --- Stage 1: Build Dependencies & Compile TypeScript / React Assets ---
+# --- Stage 1: Build TypeScript & Vite Assets ---
 FROM node:24-alpine AS builder
 
 WORKDIR /app
 
-# Install build prerequisites
-RUN apk add --no-cache python3 make g++
-
-# Copy package manifests for workspace caching
+# Copy package manifests for workspace installation
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY apps/server/package.json ./apps/server/
 COPY apps/web/package.json ./apps/web/
 
-# Clean install all dependencies (including dev dependencies)
+# Clean install all dependencies (including devDependencies needed for build)
 RUN npm ci
 
 # Copy source tree
@@ -30,10 +27,20 @@ COPY tsconfig.base.json ./
 # Build shared library, server, and web PWA bundle
 RUN npm run build
 
-# Prune dev dependencies for lean production image
-RUN npm prune --production
+# --- Stage 2: Production Dependencies Only ---
+FROM node:24-alpine AS prod-deps
 
-# --- Stage 2: Production Minimal Runtime Image ---
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY apps/server/package.json ./apps/server/
+COPY apps/web/package.json ./apps/web/
+
+# Install only runtime production dependencies without dev tools
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
+# --- Stage 3: Production Minimal Runtime Image ---
 FROM node:24-alpine AS runner
 
 ENV NODE_ENV=production \
@@ -50,13 +57,15 @@ RUN addgroup -g 10001 -S paxflux && \
     mkdir -p /data /backups /app && \
     chown -R paxflux:paxflux /data /backups /app
 
-# Copy production artifacts from builder
-COPY --chown=paxflux:paxflux --from=builder /app/package.json ./
-COPY --chown=paxflux:paxflux --from=builder /app/node_modules ./node_modules
+# Copy production node_modules from prod-deps stage
+COPY --chown=paxflux:paxflux --from=prod-deps /app/package.json ./
+COPY --chown=paxflux:paxflux --from=prod-deps /app/node_modules ./node_modules
+COPY --chown=paxflux:paxflux --from=prod-deps /app/packages/shared/package.json ./packages/shared/package.json
+COPY --chown=paxflux:paxflux --from=prod-deps /app/apps/server/package.json ./apps/server/package.json
+
+# Copy compiled artifacts from builder stage
 COPY --chown=paxflux:paxflux --from=builder /app/packages/shared/dist ./packages/shared/dist
-COPY --chown=paxflux:paxflux --from=builder /app/packages/shared/package.json ./packages/shared/package.json
 COPY --chown=paxflux:paxflux --from=builder /app/apps/server/dist ./apps/server/dist
-COPY --chown=paxflux:paxflux --from=builder /app/apps/server/package.json ./apps/server/package.json
 COPY --chown=paxflux:paxflux --from=builder /app/apps/web/dist ./apps/web/dist
 COPY --chown=paxflux:paxflux --from=builder /app/drizzle ./drizzle
 
