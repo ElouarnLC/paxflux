@@ -24,10 +24,12 @@ tests/scratch-*
 coverage/
 .nyc_output/
 
-# Environment files
+# Environment & local overrides
 .env
 .env.local
 .env.*.local
+docker-compose.override.yml
+docker-compose.override.yaml
 
 # OS files
 .DS_Store

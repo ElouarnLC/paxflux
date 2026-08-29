@@ -7,7 +7,7 @@ services:
     container_name: paxflux
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${PAXFLUX_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
