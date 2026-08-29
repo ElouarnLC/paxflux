@@ -1,0 +1,53 @@
+services:
+  paxflux:
+    image: paxflux:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: paxflux-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DATA_DIR=/data
+      - BACKUP_DIR=/backups
+      - PUBLIC_BASE_URL=https://${DOMAIN:-paxflux.example.com}
+      - TRUST_PROXY=true
+    volumes:
+      - paxflux_data:/data
+      - paxflux_backups:/backups
+    networks:
+      - paxflux_net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: paxflux-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-paxflux.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - paxflux
+    networks:
+      - paxflux_net
+
+networks:
+  paxflux_net:
+    driver: bridge
+
+volumes:
+  paxflux_data:
+    driver: local
+  paxflux_backups:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local

@@ -1,0 +1,17 @@
+{$DOMAIN:paxflux.example.com} {
+    encode gzip zstd
+
+    # Proxy to PaxFlux single container backend
+    reverse_proxy paxflux:3000 {
+        # Streaming SSE buffering disabled
+        flush_interval -1
+    }
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+    }
+}

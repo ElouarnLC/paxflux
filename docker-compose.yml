@@ -1,0 +1,34 @@
+services:
+  paxflux:
+    image: paxflux:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: paxflux
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DATA_DIR=/data
+      - BACKUP_DIR=/backups
+      - LOG_LEVEL=info
+      - BACKUP_INTERVAL_LIVE_MINUTES=5
+      - BACKUP_RETENTION_COUNT=300
+    volumes:
+      - paxflux_data:/data
+      - paxflux_backups:/backups
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health/ready"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  paxflux_data:
+    driver: local
+  paxflux_backups:
+    driver: local

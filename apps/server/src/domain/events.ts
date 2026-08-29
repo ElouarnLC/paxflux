@@ -1,0 +1,112 @@
+import { AppDb } from '../db/index.js';
+import { events, spaces, spaceState } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { EventStatus, SpaceModel, CheckpointModel, CompactEventState } from '@paxflux/shared';
+import { validateCheckpointRules } from './checkpoints.js';
+import { calculateAggregateOccupancy } from './spaces.js';
+
+export interface LifecycleValidationError {
+  code: string;
+  message: string;
+}
+
+export function isValidStatusTransition(current: EventStatus, next: EventStatus, isAdmin: boolean = false): boolean {
+  if (current === next) return true;
+
+  switch (current) {
+    case 'draft':
+      return next === 'live';
+    case 'live':
+      return next === 'closing' || next === 'closed';
+    case 'closing':
+      return next === 'closed' || next === 'live';
+    case 'closed':
+      return next === 'archived' || (isAdmin && next === 'live');
+    case 'archived':
+      return false; // Read-only
+    default:
+      return false;
+  }
+}
+
+export function validateEventForLive(
+  event: { capacity: number },
+  spacesList: SpaceModel[],
+  checkpointsList: CheckpointModel[]
+): LifecycleValidationError | null {
+  if (event.capacity < 0) {
+    return { code: 'INVALID_CAPACITY', message: 'Event capacity cannot be negative.' };
+  }
+
+  const internalLeaves = spacesList.filter((s) => s.kind === 'leaf' && s.isActive);
+  if (internalLeaves.length === 0) {
+    return {
+      code: 'NO_INTERNAL_LEAF_SPACES',
+      message: 'The event must have at least one active internal leaf space.',
+    };
+  }
+
+  const activeCheckpoints = checkpointsList.filter((c) => c.isActive);
+  if (activeCheckpoints.length === 0) {
+    return {
+      code: 'NO_ACTIVE_CHECKPOINTS',
+      message: 'The event must have at least one active checkpoint.',
+    };
+  }
+
+  const spacesMap = new Map(spacesList.map((s) => [s.id, s]));
+  for (const cp of activeCheckpoints) {
+    const cpError = validateCheckpointRules(cp, spacesMap);
+    if (cpError) {
+      return { code: `INVALID_CHECKPOINT_${cpError.code}`, message: `Checkpoint "${cp.name}": ${cpError.message}` };
+    }
+  }
+
+  return null;
+}
+
+export async function getCompactEventState(db: AppDb, eventId: string): Promise<CompactEventState | null> {
+  const eventRecord = await db.select().from(events).where(eq(events.id, eventId)).get();
+  if (!eventRecord) return null;
+
+  const allSpaces = await db.select().from(spaces).where(eq(spaces.eventId, eventId)).all();
+  const spaceStates = await db.select().from(spaceState).where(eq(spaceState.eventId, eventId)).all();
+
+  const leafMap = new Map<string, number>();
+  let totalLeafOccupancy = 0;
+
+  for (const state of spaceStates) {
+    leafMap.set(state.spaceId, state.occupancy);
+  }
+
+  const aggMap = calculateAggregateOccupancy(
+    allSpaces.map((s) => ({ id: s.id, parentId: s.parentId, kind: s.kind })),
+    leafMap
+  );
+
+  const spacesPayload = allSpaces.map((s) => {
+    let occ = 0;
+    if (s.kind === 'leaf') {
+      occ = leafMap.get(s.id) || 0;
+      totalLeafOccupancy += occ;
+    } else if (s.kind === 'aggregate') {
+      occ = aggMap.get(s.id) || 0;
+    }
+    return {
+      id: s.id,
+      name: s.name,
+      kind: s.kind as any,
+      occupancy: occ,
+      capacity: s.capacity,
+    };
+  });
+
+  return {
+    version: eventRecord.version,
+    eventStatus: eventRecord.status as any,
+    eventOccupancy: totalLeafOccupancy,
+    eventCapacity: eventRecord.capacity,
+    spaces: spacesPayload,
+    serverTimeMs: Date.now(),
+  };
+}
