@@ -104,6 +104,21 @@ npx vitest run
 npm run build
 ```
 
+### End-to-end tests (Playwright)
+
+`tests/e2e/` holds a separate Playwright suite (excluded from the vitest run
+above via `vitest.config.ts`) driving the app through a real browser against
+the built single-process server. Install the managed browser once per
+machine, then run the suite:
+
+```bash
+# One-time local setup: installs Playwright's managed Chromium build
+npx playwright install chromium
+
+# Builds all workspaces and runs the suite (see playwright.config.ts)
+npm run test:e2e
+```
+
 ---
 
 ## Environment Variables & Configuration

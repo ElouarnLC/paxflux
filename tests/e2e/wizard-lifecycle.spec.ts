@@ -26,14 +26,8 @@ test.describe('Wizard de création d\'événement', () => {
     await page.getByRole('button', { name: /Valider et Lancer/i }).click();
     await page.waitForTimeout(1000);
 
-    // The wizard must not surface an error while trying to move the event
-    // live automatically, and the flow must land back on the dashboard.
-    // Today it calls POST /events/:id/start with no request body — which
-    // Fastify's default JSON parser rejects outright (400
-    // FST_ERR_CTP_EMPTY_JSON_BODY, since apiFetch always sets
-    // Content-Type: application/json even for bodyless mutations) — so
-    // the "hidden" auto-start silently fails and the wizard gets stuck on
-    // step 4 with a generic error banner.
+    // The wizard must not surface an error while creating the event, and
+    // the flow must land back on the dashboard.
     await expect(page.getByText(/Erreur lors de la création/i)).not.toBeVisible();
     await expect(page).toHaveURL(/\/admin$/);
 
@@ -42,10 +36,10 @@ test.describe('Wizard de création d\'événement', () => {
     const created = events.find((e) => e.name === 'Repro Draft Wizard');
     expect(created).toBeTruthy();
 
-    // Even once the request bug above is fixed, a newly created event must
-    // stay in `draft` so staff can review the topology and run a preflight
-    // before it goes live — not be started automatically with no separate
-    // review step.
+    // A newly created event must stay in `draft` so staff can review the
+    // topology and run a preflight before it goes live. Today the wizard
+    // calls POST /events/:id/start automatically at the end of step 4, with
+    // no separate review step — the event comes back `live`.
     expect(created.status).toBe('draft');
   });
 

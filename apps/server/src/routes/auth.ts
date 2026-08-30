@@ -12,7 +12,7 @@ import {
   AuthSessionResponse,
 } from '@paxflux/shared';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
-import { hashToken } from '../auth/csrf.js';
+import { hashToken, deriveCsrfToken } from '../auth/csrf.js';
 import {
   createStaffSession,
   setStaffSessionCookie,
@@ -274,20 +274,17 @@ export async function registerAuthRoutes(app: FastifyInstance, db: AppDb, env: E
         );
     }
 
-    const sessionRecord = await db
-      .select({ csrfHash: staffSessions.csrfHash })
-      .from(staffSessions)
-      .where(eq(staffSessions.id, sessionData.sessionId))
-      .get();
-
-    // Re-issue a fresh CSRF token if session valid
-    const { token: newCsrfToken, hash: newCsrfHash } = hashToken(sessionData.sessionId) ? { token: crypto.randomBytes(32).toString('base64url'), hash: '' } : { token: '', hash: '' };
-    const csrfHash = hashToken(newCsrfToken);
-    await db.update(staffSessions).set({ csrfHash }).where(eq(staffSessions.id, sessionData.sessionId));
+    // Re-derive (never rotate) the session's CSRF token: this endpoint is
+    // what lets an admin page hydrate CSRF after a direct reload, and it
+    // may be called concurrently (multiple tabs sharing the same session,
+    // React StrictMode's double-invoke in dev). Deriving deterministically
+    // from the session's own secret means every caller gets the exact same
+    // token the server already stored at login — no write, no race.
+    const csrfToken = deriveCsrfToken(sessionData.tokenHash);
 
     const response: AuthSessionResponse = {
       user: sessionData.user,
-      csrfToken: newCsrfToken,
+      csrfToken,
     };
 
     return reply.status(200).send(response);
