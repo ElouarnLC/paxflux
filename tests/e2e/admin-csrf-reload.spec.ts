@@ -23,7 +23,7 @@ test('une mutation admin fonctionne après un rechargement direct de /admin', as
   await page.getByRole('button', { name: 'Suivant' }).click();
   await page.getByRole('button', { name: 'Suivant' }).click();
   await page.getByRole('button', { name: 'Suivant' }).click();
-  await page.getByRole('button', { name: /Valider et Lancer/i }).click();
+  await page.getByRole('button', { name: /Créer l'événement/i }).click();
   await page.waitForTimeout(500);
 
   // Without a working AuthProvider, this mutation fails with a 403

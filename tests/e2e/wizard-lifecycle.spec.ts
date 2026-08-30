@@ -23,7 +23,7 @@ test.describe('Wizard de création d\'événement', () => {
     await page.getByRole('button', { name: 'Suivant' }).click(); // step1 -> step2
     await page.getByRole('button', { name: 'Suivant' }).click(); // step2 -> step3
     await page.getByRole('button', { name: 'Suivant' }).click(); // step3 -> step4
-    await page.getByRole('button', { name: /Valider et Lancer/i }).click();
+    await page.getByRole('button', { name: /Créer l'événement/i }).click();
     await page.waitForTimeout(1000);
 
     // The wizard must not surface an error while creating the event, and

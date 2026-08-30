@@ -8,6 +8,7 @@ import {
   CreateEventRequestSchema,
   UpdateEventRequestSchema,
   createProblemDetails,
+  PreflightResponse,
 } from '@paxflux/shared';
 import { requireStaffAuth } from '../auth/staff-sessions.js';
 import { isValidStatusTransition, validateEventForLive } from '../domain/events.js';
@@ -182,6 +183,47 @@ export async function registerEventRoutes(app: FastifyInstance, db: AppDb, env: 
 
     const updated = await db.select().from(events).where(eq(events.id, id)).get();
     return reply.status(200).send(updated);
+  });
+
+  // GET /api/v1/events/:id/preflight
+  app.get('/api/v1/events/:id/preflight', async (req, reply) => {
+    const sessionData = await requireStaffAuth(req, reply, db, env);
+    if (!sessionData) return;
+
+    const { id } = req.params as { id: string };
+    const eventRecord = await db.select().from(events).where(eq(events.id, id)).get();
+
+    if (!eventRecord) {
+      return reply.status(404).send(createProblemDetails(404, 'EVENT_NOT_FOUND', 'Événement introuvable', 'Événement introuvable.'));
+    }
+
+    if (eventRecord.status !== 'draft') {
+      const response: PreflightResponse = {
+        ready: false,
+        error: {
+          code: 'INVALID_LIFECYCLE_TRANSITION',
+          message: 'Seul un événement en brouillon peut être démarré.',
+        },
+      };
+      return reply.status(200).send(response);
+    }
+
+    const allSpaces = await db.select().from(spaces).where(eq(spaces.eventId, id)).all();
+    const allCheckpoints = await db.select().from(checkpoints).where(eq(checkpoints.eventId, id)).all();
+
+    // Reuses the exact same check POST /start performs, so preflight can
+    // never claim "ready" for a topology that /start would then reject.
+    const validationError = validateEventForLive(
+      { capacity: eventRecord.capacity },
+      allSpaces as any,
+      allCheckpoints as any
+    );
+
+    const response: PreflightResponse = {
+      ready: validationError === null,
+      error: validationError,
+    };
+    return reply.status(200).send(response);
   });
 
   // POST /api/v1/events/:id/start

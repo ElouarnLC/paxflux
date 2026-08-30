@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { useSSE } from '../sse/useSSE.js';
+import { LifecycleControls } from './LifecycleControls.js';
 import {
   EventDetailResponse,
   EventModel,
@@ -298,6 +299,14 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* 1b. Lifecycle Controls */}
+        {currentEvent ? (
+          <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">Cycle de vie de l'événement</h3>
+            <LifecycleControls event={currentEvent} onChanged={refreshDetails} />
+          </section>
+        ) : null}
 
         {/* 2. Space Breakdown */}
         <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">

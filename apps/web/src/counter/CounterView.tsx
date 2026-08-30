@@ -144,7 +144,11 @@ export const CounterView: React.FC = () => {
   const remaining = capacity - displayedOccupancy;
 
   const eventStatus = serverState?.eventStatus ?? bootstrap?.event.status ?? 'draft';
-  const isCountingAllowed = eventStatus === 'live' || eventStatus === 'closing';
+  // Only a `live` event accepts new taps. `closing` still lets a device
+  // drain actions already queued in its outbox from before the closing
+  // transition (see offline/outbox.ts flushOutbox) — this gate only
+  // blocks *new* ones from being created via the buttons below.
+  const isCountingAllowed = eventStatus === 'live';
 
   // Handle Tap Count
   const handleTap = useCallback(
@@ -253,6 +257,13 @@ export const CounterView: React.FC = () => {
                 Le comptage continue sur cet appareil. La jauge globale peut être incomplète tant que la synchronisation n'est pas rétablie.
               </p>
             </div>
+          </div>
+        ) : null}
+
+        {eventStatus === 'draft' ? (
+          <div className="mt-3 p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-200 text-xs flex items-center gap-2">
+            <Lock className="w-4 h-4 text-slate-400 flex-shrink-0" />
+            <span className="font-medium">Cet événement n'a pas encore démarré. Le comptage sera activé dès son passage en direct.</span>
           </div>
         ) : null}
 

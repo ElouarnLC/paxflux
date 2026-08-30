@@ -109,9 +109,9 @@ export const EventWizard: React.FC = () => {
         });
       }
 
-      // Start event directly
-      await apiFetch(`/api/v1/events/${eventRes.id}/start`, { method: 'POST' });
-
+      // The event is created in `draft`. Staff review the topology and run
+      // the preflight check from the dashboard before explicitly starting
+      // it live — the wizard itself never starts an event.
       navigate('/admin', { replace: true });
     } catch (err: any) {
       setError(err.detail || 'Erreur lors de la création de l’événement.');
@@ -362,7 +362,9 @@ export const EventWizard: React.FC = () => {
         {step === 4 ? (
           <div className="space-y-4">
             <h2 className="text-xl font-bold text-white mb-1">4. Validation de la Topologie</h2>
-            <p className="text-slate-400 text-xs mb-4">Vérifiez la structure avant de lancer l'événement.</p>
+            <p className="text-slate-400 text-xs mb-4">
+              Vérifiez la structure, puis enregistrez l'événement en brouillon. Vous le lancerez explicitement depuis le tableau de bord, après vérification du préflight.
+            </p>
 
             <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300 space-y-2">
               <p>Événement : <strong className="text-white">{name}</strong> (Capacité : {capacity})</p>
@@ -390,7 +392,7 @@ export const EventWizard: React.FC = () => {
                 className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-950/60"
               >
                 <CheckCircle className="w-4 h-4" />
-                Valider et Lancer l'Événement
+                Créer l'événement (brouillon)
               </button>
             </div>
           </div>
