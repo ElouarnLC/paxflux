@@ -1,5 +1,6 @@
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyReply } from 'fastify';
 import crypto from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { AppDb } from '../db/index.js';
 import { Env } from '../config/env.js';
 import { events, spaces, checkpoints, spaceState } from '../db/schema.js';
@@ -9,13 +10,57 @@ import {
   UpdateSpaceRequestSchema,
   CreateCheckpointRequestSchema,
   UpdateCheckpointRequestSchema,
+  CreateEventDraftRequestSchema,
   createProblemDetails,
 } from '@paxflux/shared';
 import { requireStaffAuth } from '../auth/staff-sessions.js';
 import { validateSpaceRules } from '../domain/spaces.js';
 import { validateCheckpointRules } from '../domain/checkpoints.js';
+import { createEventDraftAtomic } from '../domain/topology.js';
 
-export async function registerTopologyRoutes(app: FastifyInstance, db: AppDb, env: Env) {
+export async function registerTopologyRoutes(app: FastifyInstance, sqlite: DatabaseSync, db: AppDb, env: Env) {
+  // POST /api/v1/events/drafts — Phase 4: create a draft event and its full
+  // topology (spaces + checkpoints) in one SQLite transaction. See
+  // domain/topology.ts for the atomicity guarantee. This is the only entry
+  // point the wizard uses; POST /events, /spaces and /checkpoints remain
+  // available individually for other flows (they already reuse the same
+  // validators and draft-only gating).
+  app.post('/api/v1/events/drafts', async (req, reply) => {
+    const sessionData = await requireStaffAuth(req, reply, db, env, 'admin');
+    if (!sessionData) return;
+
+    const parseResult = CreateEventDraftRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return reply
+        .status(400)
+        .send(
+          createProblemDetails(
+            400,
+            'VALIDATION_ERROR',
+            'Paramètres invalides',
+            'Payload de topologie invalide.',
+            undefined,
+            parseResult.error.errors.map((e: any) => ({
+              name: e.path.join('.'),
+              reason: e.message,
+            }))
+          )
+        );
+    }
+
+    const result = await createEventDraftAtomic(sqlite, db, parseResult.data, sessionData.user.id);
+    if (!result.ok) {
+      if (result.status === 500) {
+        app.log.error({ detail: result.detail }, 'Atomic event-draft creation failed unexpectedly');
+      }
+      return reply
+        .status(result.status)
+        .send(createProblemDetails(result.status, result.code, 'Création de topologie refusée', result.detail));
+    }
+
+    return reply.status(201).send(result);
+  });
+
   // GET /api/v1/events/:id/spaces
   app.get('/api/v1/events/:id/spaces', async (req, reply) => {
     const sessionData = await requireStaffAuth(req, reply, db, env);
@@ -116,7 +161,7 @@ export async function registerTopologyRoutes(app: FastifyInstance, db: AppDb, en
 
     const { name, spaceAId, spaceBId, allowAToB, allowBToA, labelAToB, labelBToA, sortOrder } = parseResult.data;
     const existingSpaces = await db.select().from(spaces).where(eq(spaces.eventId, eventId)).all();
-    const spacesMap = new Map(existingSpaces.map((s) => [s.id, s as any]));
+    const spacesMap = new Map(existingSpaces.map((s) => [s.id, s]));
 
     const cpError = validateCheckpointRules({ spaceAId, spaceBId, allowAToB, allowBToA }, spacesMap);
     if (cpError) {
@@ -144,5 +189,186 @@ export async function registerTopologyRoutes(app: FastifyInstance, db: AppDb, en
 
     const created = await db.select().from(checkpoints).where(eq(checkpoints.id, cpId)).get();
     return reply.status(201).send(created);
+  });
+
+  // Shared guard for the draft-only editing routes below: 404 if the event
+  // doesn't exist, 409 TOPOLOGY_LOCKED once it has left `draft` — the same
+  // rule already enforced by POST /spaces and POST /checkpoints above.
+  async function requireDraftEvent(reply: FastifyReply, eventId: string) {
+    const eventRecord = await db.select().from(events).where(eq(events.id, eventId)).get();
+    if (!eventRecord) {
+      reply.status(404).send(createProblemDetails(404, 'EVENT_NOT_FOUND', 'Événement introuvable', 'Événement introuvable.'));
+      return null;
+    }
+    if (eventRecord.status !== 'draft') {
+      reply
+        .status(409)
+        .send(createProblemDetails(409, 'TOPOLOGY_LOCKED', 'Topologie verrouillée', 'La topologie ne peut être modifiée qu’en mode brouillon.'));
+      return null;
+    }
+    return eventRecord;
+  }
+
+  // PATCH /api/v1/events/:id/spaces/:spaceId
+  app.patch('/api/v1/events/:id/spaces/:spaceId', async (req, reply) => {
+    const sessionData = await requireStaffAuth(req, reply, db, env, 'admin');
+    if (!sessionData) return;
+
+    const { id: eventId, spaceId } = req.params as { id: string; spaceId: string };
+    if (!(await requireDraftEvent(reply, eventId))) return;
+
+    const existingSpace = await db.select().from(spaces).where(and(eq(spaces.id, spaceId), eq(spaces.eventId, eventId))).get();
+    if (!existingSpace) {
+      return reply.status(404).send(createProblemDetails(404, 'SPACE_NOT_FOUND', 'Espace introuvable', 'Espace introuvable.'));
+    }
+
+    const parseResult = UpdateSpaceRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Paramètres invalides', 'Données d’espace invalides.'));
+    }
+
+    const patch = parseResult.data;
+    const otherSpaces = await db.select().from(spaces).where(and(eq(spaces.eventId, eventId), eq(spaces.isActive, true))).all();
+
+    const parentId = patch.parentId !== undefined ? patch.parentId : existingSpace.parentId;
+    const capacity = patch.capacity !== undefined ? patch.capacity : existingSpace.capacity;
+    const ruleError = validateSpaceRules({ kind: existingSpace.kind, parentId, capacity }, otherSpaces, spaceId);
+    if (ruleError) {
+      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Règle topologique enfreinte', ruleError.message));
+    }
+
+    await db
+      .update(spaces)
+      .set({
+        ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+        ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
+        ...(patch.capacity !== undefined ? { capacity: patch.capacity } : {}),
+        ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
+        ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+        updatedAtMs: Date.now(),
+      })
+      .where(eq(spaces.id, spaceId));
+
+    const updated = await db.select().from(spaces).where(eq(spaces.id, spaceId)).get();
+    return reply.status(200).send(updated);
+  });
+
+  // DELETE /api/v1/events/:id/spaces/:spaceId
+  app.delete('/api/v1/events/:id/spaces/:spaceId', async (req, reply) => {
+    const sessionData = await requireStaffAuth(req, reply, db, env, 'admin');
+    if (!sessionData) return;
+
+    const { id: eventId, spaceId } = req.params as { id: string; spaceId: string };
+    if (!(await requireDraftEvent(reply, eventId))) return;
+
+    const existingSpace = await db.select().from(spaces).where(and(eq(spaces.id, spaceId), eq(spaces.eventId, eventId))).get();
+    if (!existingSpace) {
+      return reply.status(404).send(createProblemDetails(404, 'SPACE_NOT_FOUND', 'Espace introuvable', 'Espace introuvable.'));
+    }
+
+    const referencingCheckpoint = await db
+      .select()
+      .from(checkpoints)
+      .where(and(eq(checkpoints.eventId, eventId), eq(checkpoints.spaceAId, spaceId)))
+      .get();
+    const referencingCheckpointB = await db
+      .select()
+      .from(checkpoints)
+      .where(and(eq(checkpoints.eventId, eventId), eq(checkpoints.spaceBId, spaceId)))
+      .get();
+    const childSpace = await db.select().from(spaces).where(and(eq(spaces.eventId, eventId), eq(spaces.parentId, spaceId))).get();
+
+    if (referencingCheckpoint || referencingCheckpointB || childSpace) {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'SPACE_IN_USE',
+            'Espace utilisé',
+            'Cet espace est référencé par un checkpoint ou un espace enfant ; supprimez-les d’abord.'
+          )
+        );
+    }
+
+    await db.delete(spaceState).where(and(eq(spaceState.eventId, eventId), eq(spaceState.spaceId, spaceId)));
+    await db.delete(spaces).where(eq(spaces.id, spaceId));
+
+    return reply.status(200).send({ success: true });
+  });
+
+  // PATCH /api/v1/events/:id/checkpoints/:checkpointId
+  app.patch('/api/v1/events/:id/checkpoints/:checkpointId', async (req, reply) => {
+    const sessionData = await requireStaffAuth(req, reply, db, env, 'admin');
+    if (!sessionData) return;
+
+    const { id: eventId, checkpointId } = req.params as { id: string; checkpointId: string };
+    if (!(await requireDraftEvent(reply, eventId))) return;
+
+    const existingCheckpoint = await db
+      .select()
+      .from(checkpoints)
+      .where(and(eq(checkpoints.id, checkpointId), eq(checkpoints.eventId, eventId)))
+      .get();
+    if (!existingCheckpoint) {
+      return reply.status(404).send(createProblemDetails(404, 'CHECKPOINT_NOT_FOUND', 'Checkpoint introuvable', 'Checkpoint introuvable.'));
+    }
+
+    const parseResult = UpdateCheckpointRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Paramètres invalides', 'Données de checkpoint invalides.'));
+    }
+
+    const patch = parseResult.data;
+    const allowAToB = patch.allowAToB !== undefined ? patch.allowAToB : existingCheckpoint.allowAToB;
+    const allowBToA = patch.allowBToA !== undefined ? patch.allowBToA : existingCheckpoint.allowBToA;
+
+    const existingSpaces = await db.select().from(spaces).where(eq(spaces.eventId, eventId)).all();
+    const spacesMap = new Map(existingSpaces.map((s) => [s.id, s]));
+    const cpError = validateCheckpointRules(
+      { spaceAId: existingCheckpoint.spaceAId, spaceBId: existingCheckpoint.spaceBId, allowAToB, allowBToA },
+      spacesMap
+    );
+    if (cpError) {
+      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Checkpoint invalide', cpError.message));
+    }
+
+    await db
+      .update(checkpoints)
+      .set({
+        ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+        ...(patch.allowAToB !== undefined ? { allowAToB: patch.allowAToB } : {}),
+        ...(patch.allowBToA !== undefined ? { allowBToA: patch.allowBToA } : {}),
+        ...(patch.labelAToB !== undefined ? { labelAToB: patch.labelAToB.trim() } : {}),
+        ...(patch.labelBToA !== undefined ? { labelBToA: patch.labelBToA.trim() } : {}),
+        ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
+        ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+        updatedAtMs: Date.now(),
+      })
+      .where(eq(checkpoints.id, checkpointId));
+
+    const updated = await db.select().from(checkpoints).where(eq(checkpoints.id, checkpointId)).get();
+    return reply.status(200).send(updated);
+  });
+
+  // DELETE /api/v1/events/:id/checkpoints/:checkpointId
+  app.delete('/api/v1/events/:id/checkpoints/:checkpointId', async (req, reply) => {
+    const sessionData = await requireStaffAuth(req, reply, db, env, 'admin');
+    if (!sessionData) return;
+
+    const { id: eventId, checkpointId } = req.params as { id: string; checkpointId: string };
+    if (!(await requireDraftEvent(reply, eventId))) return;
+
+    const existingCheckpoint = await db
+      .select()
+      .from(checkpoints)
+      .where(and(eq(checkpoints.id, checkpointId), eq(checkpoints.eventId, eventId)))
+      .get();
+    if (!existingCheckpoint) {
+      return reply.status(404).send(createProblemDetails(404, 'CHECKPOINT_NOT_FOUND', 'Checkpoint introuvable', 'Checkpoint introuvable.'));
+    }
+
+    await db.delete(checkpoints).where(eq(checkpoints.id, checkpointId));
+    return reply.status(200).send({ success: true });
   });
 }

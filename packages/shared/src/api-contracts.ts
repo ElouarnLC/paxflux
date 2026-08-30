@@ -98,6 +98,45 @@ export const UpdateCheckpointRequestSchema = z.object({
 });
 export type UpdateCheckpointRequest = z.infer<typeof UpdateCheckpointRequestSchema>;
 
+// Atomic event-draft creation (Phase 4 — event + full topology in one
+// transaction). Spaces reference each other (parent/child) and checkpoints
+// reference their endpoint spaces via a client-supplied `clientId`, stable
+// only within this one payload, since none of them have a server id yet.
+export const DraftSpaceInputSchema = z.object({
+  clientId: z.string().min(1).max(64),
+  name: z.string().min(1).max(100),
+  kind: z.enum(['leaf', 'aggregate', 'external']),
+  parentClientId: z.string().min(1).max(64).nullable().optional(),
+  capacity: z.number().int().min(0).nullable().optional(),
+  sortOrder: z.number().int().default(0),
+});
+export type DraftSpaceInput = z.infer<typeof DraftSpaceInputSchema>;
+
+export const DraftCheckpointInputSchema = z.object({
+  name: z.string().min(1).max(100),
+  spaceAClientId: z.string().min(1).max(64),
+  spaceBClientId: z.string().min(1).max(64),
+  allowAToB: z.boolean().default(true),
+  allowBToA: z.boolean().default(true),
+  labelAToB: z.string().min(1).max(50),
+  labelBToA: z.string().min(1).max(50),
+  sortOrder: z.number().int().default(0),
+});
+export type DraftCheckpointInput = z.infer<typeof DraftCheckpointInputSchema>;
+
+export const CreateEventDraftRequestSchema = z.object({
+  event: CreateEventRequestSchema,
+  spaces: z.array(DraftSpaceInputSchema).min(1).max(64),
+  checkpoints: z.array(DraftCheckpointInputSchema).max(128).default([]),
+});
+export type CreateEventDraftRequest = z.infer<typeof CreateEventDraftRequestSchema>;
+
+export interface CreateEventDraftResponse {
+  event: EventModel;
+  spaces: SpaceModel[];
+  checkpoints: CheckpointModel[];
+}
+
 // Device Invites & Pairing
 export const CreateDeviceInviteRequestSchema = z.object({
   checkpointId: z.string().uuid(),
