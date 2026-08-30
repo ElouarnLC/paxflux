@@ -109,10 +109,12 @@ export const EventWizard: React.FC = () => {
         });
       }
 
-      // The event is created in `draft`. Staff review the topology and run
-      // the preflight check from the dashboard before explicitly starting
-      // it live — the wizard itself never starts an event.
-      navigate('/admin', { replace: true });
+      // The event is created in `draft`. Open that specific event on the
+      // dashboard for review — not just "/admin", which would otherwise
+      // default to an existing live event and hide the new draft. Staff
+      // run the preflight check and explicitly start it live from there;
+      // the wizard itself never starts an event.
+      navigate(`/admin?event=${eventRes.id}`, { replace: true });
     } catch (err: any) {
       setError(err.detail || 'Erreur lors de la création de l’événement.');
     } finally {

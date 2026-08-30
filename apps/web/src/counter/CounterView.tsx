@@ -14,6 +14,7 @@ import {
   DeviceBootstrapResponse,
   CompactEventState,
   Direction,
+  EventStatus,
   OutboxActionRecord,
 } from '@paxflux/shared';
 import {
@@ -30,6 +31,10 @@ import {
 export const CounterView: React.FC = () => {
   const [bootstrap, setBootstrap] = useState<DeviceBootstrapResponse | null>(null);
   const [serverState, setServerState] = useState<CompactEventState | null>(null);
+  // Most recent lifecycle status pushed over SSE (event-status), so
+  // draft -> live, live -> closing and closing -> closed take effect
+  // immediately without requiring a reload.
+  const [liveStatus, setLiveStatus] = useState<EventStatus | null>(null);
   const [lastAction, setLastAction] = useState<OutboxActionRecord | null>(null);
   const [isUndoing, setIsUndoing] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -123,6 +128,11 @@ export const CounterView: React.FC = () => {
         updatedAtMs: Date.now(),
       });
     },
+    onMessage: (message) => {
+      if (message.type === 'event-status') {
+        setLiveStatus(message.data.status);
+      }
+    },
   });
 
   // Calculate optimistic occupancy
@@ -143,7 +153,7 @@ export const CounterView: React.FC = () => {
   const capacity = serverState?.eventCapacity ?? bootstrap?.event.capacity ?? 0;
   const remaining = capacity - displayedOccupancy;
 
-  const eventStatus = serverState?.eventStatus ?? bootstrap?.event.status ?? 'draft';
+  const eventStatus = liveStatus ?? serverState?.eventStatus ?? bootstrap?.event.status ?? 'draft';
   // Only a `live` event accepts new taps. `closing` still lets a device
   // drain actions already queued in its outbox from before the closing
   // transition (see offline/outbox.ts flushOutbox) — this gate only

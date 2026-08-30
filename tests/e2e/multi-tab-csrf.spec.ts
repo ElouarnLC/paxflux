@@ -34,7 +34,7 @@ test('deux onglets partageant la même session peuvent recharger puis muter chac
     await page.getByRole('button', { name: /Créer l'événement/i }).click();
     await page.waitForTimeout(500);
     await expect(page.getByText(/token CSRF|Erreur lors de la création/i)).not.toBeVisible();
-    await expect(page).toHaveURL(/\/admin$/);
+    await expect(page).toHaveURL(/\/admin(\?|$)/);
   }
 
   // Each tab mutates independently after its own reload — neither token

@@ -1,9 +1,44 @@
 import { AppDb } from '../db/index.js';
-import { events, spaces, spaceState } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { events, spaces, spaceState, deviceSessions, checkpoints } from '../db/schema.js';
+import { eq, and, isNull } from 'drizzle-orm';
 import { EventStatus, SpaceModel, CheckpointModel, CompactEventState } from '@paxflux/shared';
 import { validateCheckpointRules } from './checkpoints.js';
 import { calculateAggregateOccupancy } from './spaces.js';
+
+const DEVICE_ONLINE_THRESHOLD_MS = 45_000;
+
+export interface UnsyncedDevice {
+  deviceId: string;
+  checkpointName: string;
+  label: string;
+  isOnline: boolean;
+  pendingCount: number;
+}
+
+/**
+ * Active (non-revoked) devices that are either offline or still have
+ * unsent actions — SPEC §5.4: a normal `closing -> closed` transition is
+ * only allowed once every active device has synced.
+ */
+export async function getUnsyncedActiveDevices(db: AppDb, eventId: string): Promise<UnsyncedDevice[]> {
+  const now = Date.now();
+  const rows = await db
+    .select({ device: deviceSessions, checkpoint: checkpoints })
+    .from(deviceSessions)
+    .innerJoin(checkpoints, eq(deviceSessions.checkpointId, checkpoints.id))
+    .where(and(eq(deviceSessions.eventId, eventId), isNull(deviceSessions.revokedAtMs)))
+    .all();
+
+  return rows
+    .map(({ device, checkpoint }) => ({
+      deviceId: device.id,
+      checkpointName: checkpoint.name,
+      label: device.label,
+      isOnline: device.lastSeenAtMs !== null && now - device.lastSeenAtMs <= DEVICE_ONLINE_THRESHOLD_MS,
+      pendingCount: device.lastPendingCount,
+    }))
+    .filter((d) => !d.isOnline || d.pendingCount > 0);
+}
 
 export interface LifecycleValidationError {
   code: string;
@@ -17,7 +52,10 @@ export function isValidStatusTransition(current: EventStatus, next: EventStatus,
     case 'draft':
       return next === 'live';
     case 'live':
-      return next === 'closing' || next === 'closed';
+      // draft -> live -> closing -> closed -> archived: `closing` is the
+      // only mandatory drain step. A live event can never close directly
+      // (see SPEC §5.3/§5.4) — /close only ever accepts `closing`.
+      return next === 'closing';
     case 'closing':
       return next === 'closed' || next === 'live';
     case 'closed':

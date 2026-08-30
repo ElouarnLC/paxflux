@@ -31,5 +31,5 @@ test('une mutation admin fonctionne après un rechargement direct de /admin', as
   // reload wipes the in-memory CSRF token and nothing re-fetches it
   // outside of the `/` bootstrap route.
   await expect(page.getByText(/token CSRF|Erreur lors de la création/i)).not.toBeVisible();
-  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page).toHaveURL(/\/admin(\?|$)/);
 });

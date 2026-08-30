@@ -1,5 +1,12 @@
 import { test, expect, Page } from '@playwright/test';
-import { ADMIN_USERNAME, ADMIN_PASSWORD, getAdminSession, adminApi } from './helpers.js';
+import {
+  ADMIN_USERNAME,
+  ADMIN_PASSWORD,
+  getAdminSession,
+  adminApi,
+  createDraftEventWithMainCheckpoint,
+  startEvent,
+} from './helpers.js';
 
 async function loginAsAdmin(page: Page) {
   await page.goto('/login');
@@ -27,9 +34,10 @@ test.describe('Wizard de création d\'événement', () => {
     await page.waitForTimeout(1000);
 
     // The wizard must not surface an error while creating the event, and
-    // the flow must land back on the dashboard.
+    // the flow must land back on the dashboard (opened on the new event —
+    // see the "ouvre explicitement le brouillon créé" test below).
     await expect(page.getByText(/Erreur lors de la création/i)).not.toBeVisible();
-    await expect(page).toHaveURL(/\/admin$/);
+    await expect(page).toHaveURL(/\/admin(\?|$)/);
 
     const session = await getAdminSession();
     const events = await adminApi<any[]>(session, 'GET', '/api/v1/events');
@@ -41,6 +49,40 @@ test.describe('Wizard de création d\'événement', () => {
     // calls POST /events/:id/start automatically at the end of step 4, with
     // no separate review step — the event comes back `live`.
     expect(created.status).toBe('draft');
+  });
+
+  test('ouvre explicitement le brouillon créé, même si un ancien événement live existe déjà', async ({ page }) => {
+    // An older event is already live — Dashboard's default selection logic
+    // prefers a live/closing event over the first one in the list, which
+    // would silently hide a freshly created draft if the wizard just
+    // navigated to a bare "/admin".
+    const session = await getAdminSession();
+    const oldTopo = await createDraftEventWithMainCheckpoint(session, {
+      name: 'Ancien Événement En Direct',
+      capacity: 200,
+    });
+    await startEvent(session, oldTopo.eventId);
+
+    await loginAsAdmin(page);
+    await page.getByRole('link', { name: /nouvel événement|créer un événement/i }).click();
+    await page.waitForURL('**/admin/events/new');
+
+    await page.locator('input[type="text"]').first().fill('Nouveau Brouillon À Revoir');
+    await page.locator('input[type="number"]').first().fill('40');
+    await page.getByRole('button', { name: 'Suivant' }).click();
+    await page.getByRole('button', { name: 'Suivant' }).click();
+    await page.getByRole('button', { name: 'Suivant' }).click();
+    await page.getByRole('button', { name: /Créer l'événement/i }).click();
+
+    await page.waitForURL(/\/admin\?event=/);
+
+    // The dashboard's main event heading must show the new draft, not the
+    // pre-existing live event (both are in the events list, so a bare
+    // page-wide text search would also match the old one inside the
+    // <select> options) — and its lifecycle controls must offer the
+    // draft -> live "Démarrer" action, not "Débuter la fermeture".
+    await expect(page.locator('p.text-2xl.font-black')).toHaveText('Nouveau Brouillon À Revoir');
+    await expect(page.getByRole('button', { name: /Démarrer l'événement/i })).toBeVisible();
   });
 
   test('le wizard permet de configurer plusieurs portes entre les mêmes espaces', async ({ page }) => {

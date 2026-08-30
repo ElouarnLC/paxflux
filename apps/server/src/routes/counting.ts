@@ -9,7 +9,7 @@ import {
   movements,
   deviceSessions,
 } from '../db/schema.js';
-import { eq, and, desc, count } from 'drizzle-orm';
+import { eq, and, desc, count, isNull } from 'drizzle-orm';
 import {
   BatchSyncRequestSchema,
   CreateAdjustmentRequestSchema,
@@ -262,7 +262,7 @@ export async function registerCountingRoutes(
       })
       .from(deviceSessions)
       .innerJoin(checkpoints, eq(deviceSessions.checkpointId, checkpoints.id))
-      .where(and(eq(deviceSessions.eventId, eventId), eq(deviceSessions.revokedAtMs, null as any)))
+      .where(and(eq(deviceSessions.eventId, eventId), isNull(deviceSessions.revokedAtMs)))
       .all();
 
     const now = Date.now();
