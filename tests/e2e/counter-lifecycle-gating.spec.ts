@@ -87,6 +87,12 @@ test('les actions déjà en attente avant `closing` continuent d\'être drainée
   await context.setOffline(false);
   await expect(page.getByText(/EN LIGNE/)).toBeVisible({ timeout: 10_000 });
 
-  const stateAfter = await getEventState(session, topo.eventId);
-  expect(stateAfter.occupancy.global).toBe(stateBaseline.occupancy.global + 1);
+  // The "EN LIGNE" badge flipping is a reasonable signal, but the batch
+  // flush it reflects (pendingCount reaching 0 client-side) and the
+  // server having actually applied and persisted the movement are two
+  // different moments. Poll instead of reading once, to avoid a race with
+  // that async flush.
+  await expect
+    .poll(async () => (await getEventState(session, topo.eventId)).occupancy.global, { timeout: 10_000 })
+    .toBe(stateBaseline.occupancy.global + 1);
 });

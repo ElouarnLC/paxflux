@@ -186,7 +186,28 @@ export async function requireStaffAuth(
       .where(eq(staffSessions.id, sessionData.sessionId))
       .get();
 
-    if (!csrfHeader || !sessionRecord || !verifyCsrfToken(csrfHeader, sessionRecord.csrfHash)) {
+    // Accept either: (a) the token matching this session's stored
+    // csrfHash — true by construction for every session created after
+    // deriveCsrfToken was introduced, and also true for a pre-upgrade
+    // ("legacy") session as long as the client is still holding the
+    // original random token it got at login; or (b) the deterministic
+    // token re-derived from tokenHash — what /auth/session now always
+    // returns, including for a legacy session after it re-hydrates.
+    // Without (b), a legacy session would authenticate fine but 403 on
+    // every mutation once its client refreshes and picks up the new
+    // derived token. We deliberately never overwrite a legacy csrfHash to
+    // "fix" this, since that would instead break an older tab of the same
+    // session still holding the original random token. This dual check
+    // is self-limiting: it only ever matters for sessions that predate
+    // the upgrade, and naturally stops mattering once the last one
+    // expires (see STAFF_SESSION_HOURS).
+    const isValidCsrf =
+      !!csrfHeader &&
+      !!sessionRecord &&
+      (verifyCsrfToken(csrfHeader, sessionRecord.csrfHash) ||
+        verifyCsrfToken(csrfHeader, hashToken(deriveCsrfToken(sessionData.tokenHash))));
+
+    if (!isValidCsrf) {
       reply.status(403).send(
         createProblemDetails(403, 'INVALID_CSRF', 'Token CSRF invalide', 'Le token CSRF est manquant ou invalide.')
       );
