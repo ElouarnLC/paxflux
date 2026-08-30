@@ -25,6 +25,13 @@ build/
 coverage/
 .nyc_output/
 
+# Playwright E2E
+/tests/e2e/.data/
+/tests/e2e/.backups/
+/playwright-report/
+/test-results/
+/blob-report/
+
 # Environment & local overrides
 .env
 .env.local
