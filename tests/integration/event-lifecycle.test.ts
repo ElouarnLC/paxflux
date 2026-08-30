@@ -329,6 +329,56 @@ describe('Event lifecycle transitions & preflight', () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().status).toBe('closed');
     });
+
+    it('a rejected action in a batch still counts as pending, even when the client reports pendingCount: 0', async () => {
+      const { event, checkpoint } = await startLiveEvent();
+
+      const inviteRes = await app.inject({
+        method: 'POST',
+        url: `/api/v1/events/${event.id}/device-invites`,
+        headers: authHeaders(),
+        payload: { checkpointId: checkpoint.id, expiresInMinutes: 30 },
+      });
+      const { token } = inviteRes.json();
+      const pairRes = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token, appVersion: '1.0.0' } });
+      const deviceSessionId = pairRes.json().deviceSession.id as string;
+      const deviceCookie = pairRes.cookies[0];
+
+      // A reversal targeting an action the server has never seen is
+      // rejected (ORIGINAL_MOVEMENT_NOT_FOUND) — the client keeps it in its
+      // outbox (Phase 6 concern), but still reports `pendingCount: 0`
+      // because it only counts what it deletes locally (applied/duplicate).
+      const batchRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/actions/batch',
+        headers: { cookie: `${deviceCookie.name}=${deviceCookie.value}` },
+        payload: {
+          actions: [
+            {
+              clientActionId: crypto.randomUUID(),
+              sequence: 1,
+              type: 'reversal',
+              targetClientActionId: crypto.randomUUID(),
+              clientCreatedAtMs: Date.now(),
+            },
+          ],
+          pendingCount: 0,
+          appVersion: '1.0.0',
+        },
+      });
+      expect(batchRes.statusCode).toBe(200);
+      expect(batchRes.json().acknowledged[0].status).toBe('rejected');
+
+      const deviceRow = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
+      expect(deviceRow?.lastPendingCount).toBe(1);
+
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+
+      const closeRes = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+
+      expect(closeRes.statusCode).toBe(409);
+      expect(closeRes.json().code).toBe('DEVICES_NOT_SYNCED');
+    });
   });
 
   describe('POST /force-close', () => {

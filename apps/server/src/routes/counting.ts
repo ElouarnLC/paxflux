@@ -107,12 +107,24 @@ export async function registerCountingRoutes(
       }
     }
 
+    // The client's own `pendingCount` only accounts for the actions it
+    // deletes locally, i.e. `applied`/`duplicate` — it never subtracts
+    // `rejected` ones, since the client intentionally keeps those in its
+    // outbox (their retry/UX handling is Phase 6). A rejected action is
+    // still genuinely unsynced from the admin's point of view, so it must
+    // still count towards `lastPendingCount`, or a device with only
+    // rejected actions left could be reported as fully synced (0 pending)
+    // and let a normal `/close` through despite having a movement it never
+    // reconciled.
+    const rejectedCount = acknowledgments.filter((a) => a.status === 'rejected').length;
+    const effectivePendingCount = pendingCount + rejectedCount;
+
     // Update device session status
     await db
       .update(deviceSessions)
       .set({
         lastSeenAtMs: now,
-        lastPendingCount: pendingCount,
+        lastPendingCount: effectivePendingCount,
         appVersion: appVersion || deviceSession.appVersion,
       })
       .where(eq(deviceSessions.id, deviceSession.id));
