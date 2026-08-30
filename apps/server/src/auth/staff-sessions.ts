@@ -11,13 +11,14 @@ import {
   CSRF_HEADER_NAME,
   createProblemDetails,
 } from '@paxflux/shared';
-import { generateCsrfToken, hashToken, verifyCsrfToken, validateOriginAndFetchMetadata } from './csrf.js';
+import { deriveCsrfToken, hashToken, verifyCsrfToken, validateOriginAndFetchMetadata } from './csrf.js';
 import { Env } from '../config/env.js';
 
 export interface StaffSessionData {
   sessionId: string;
   user: StaffUser;
-  csrfToken?: string;
+  /** The session's own secret hash — used to re-derive its stable CSRF token. */
+  tokenHash: string;
 }
 
 export function getStaffCookieName(env: Env): string {
@@ -35,7 +36,11 @@ export async function createStaffSession(
   const sessionToken = crypto.randomBytes(32).toString('base64url');
   const tokenHash = hashToken(sessionToken);
 
-  const { token: csrfToken, hash: csrfHash } = generateCsrfToken();
+  // Deterministic, not random: stable for the life of this session so that
+  // concurrent GET /api/v1/auth/session calls never hand out mismatched
+  // tokens (see deriveCsrfToken).
+  const csrfToken = deriveCsrfToken(tokenHash);
+  const csrfHash = hashToken(csrfToken);
 
   const now = Date.now();
   const expiresAtMs = now + sessionHours * 3600 * 1000;
@@ -101,6 +106,7 @@ export async function authenticateStaffRequest(
 
   return {
     sessionId: session.id,
+    tokenHash: session.tokenHash,
     user: {
       id: user.id,
       username: user.username,

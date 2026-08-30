@@ -8,6 +8,25 @@ export function generateCsrfToken(): { token: string; hash: string } {
   return { token, hash };
 }
 
+const CSRF_DOMAIN_SEPARATION = 'paxflux-csrf-v1';
+
+/**
+ * Deterministically derives a session's CSRF token from its session
+ * secret (staffSessions.tokenHash), instead of generating a new random one
+ * per call. The token is stable for the lifetime of the session: any
+ * number of concurrent GET /api/v1/auth/session calls (multiple tabs,
+ * React StrictMode's double-invoke, a race between two requests) derive
+ * the same value, so none of them can invalidate a token another caller is
+ * about to use. A fresh session (new login) has a fresh tokenHash, so the
+ * derived CSRF token changes across sessions as before.
+ */
+export function deriveCsrfToken(sessionTokenHash: string): string {
+  return crypto
+    .createHmac('sha256', sessionTokenHash)
+    .update(CSRF_DOMAIN_SEPARATION)
+    .digest('base64url');
+}
+
 export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
