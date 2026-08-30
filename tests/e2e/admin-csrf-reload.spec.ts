@@ -8,9 +8,10 @@ test('une mutation admin fonctionne après un rechargement direct de /admin', as
   await page.getByRole('button', { name: 'Connexion' }).click();
   await page.waitForURL('**/admin');
 
-  // Simulate a bookmarked tab / hard refresh directly on /admin, without
-  // passing back through the root route that currently hydrates the CSRF
-  // token into memory.
+  // Simulate a bookmarked tab / hard refresh directly on /admin. The
+  // in-memory CSRF token is wiped by the reload; AuthProvider must
+  // re-hydrate it via GET /api/v1/auth/session before any admin route
+  // under it renders.
   await page.reload();
   await page.waitForLoadState('networkidle');
 
@@ -25,11 +26,10 @@ test('une mutation admin fonctionne après un rechargement direct de /admin', as
   await page.getByRole('button', { name: /Valider et Lancer/i }).click();
   await page.waitForTimeout(500);
 
-  // Today this mutation fails with a 403 INVALID_CSRF: the CSRF token
-  // lives only in an in-memory JS variable, wiped by the reload and never
-  // re-fetched outside of the `/` bootstrap route (no global AuthProvider).
-  // The wizard surfaces the server's exact detail message in that case
-  // ("Le token CSRF est manquant ou invalide."), not the generic fallback.
+  // Without a working AuthProvider, this mutation fails with a 403
+  // INVALID_CSRF ("Le token CSRF est manquant ou invalide.") because the
+  // reload wipes the in-memory CSRF token and nothing re-fetches it
+  // outside of the `/` bootstrap route.
   await expect(page.getByText(/token CSRF|Erreur lors de la création/i)).not.toBeVisible();
   await expect(page).toHaveURL(/\/admin$/);
 });

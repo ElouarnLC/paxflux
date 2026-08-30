@@ -274,14 +274,10 @@ export async function registerAuthRoutes(app: FastifyInstance, db: AppDb, env: E
         );
     }
 
-    const sessionRecord = await db
-      .select({ csrfHash: staffSessions.csrfHash })
-      .from(staffSessions)
-      .where(eq(staffSessions.id, sessionData.sessionId))
-      .get();
-
-    // Re-issue a fresh CSRF token if session valid
-    const { token: newCsrfToken, hash: newCsrfHash } = hashToken(sessionData.sessionId) ? { token: crypto.randomBytes(32).toString('base64url'), hash: '' } : { token: '', hash: '' };
+    // Re-issue a fresh CSRF token on every call: this endpoint is what lets
+    // an admin page hydrate CSRF after a direct reload, so it must always
+    // hand back a token valid for the current session.
+    const newCsrfToken = crypto.randomBytes(32).toString('base64url');
     const csrfHash = hashToken(newCsrfToken);
     await db.update(staffSessions).set({ csrfHash }).where(eq(staffSessions.id, sessionData.sessionId));
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { apiFetch, setCsrfToken } from '../api/client.js';
+import { apiFetch } from '../api/client.js';
+import { AuthProvider } from '../auth/AuthProvider.js';
 import { PairingPage } from '../counter/PairingPage.js';
 import { CounterView } from '../counter/CounterView.js';
 import { SetupPage } from '../admin/SetupPage.js';
@@ -10,7 +11,7 @@ import { EventWizard } from '../admin/EventWizard.js';
 import { DevicesManagement } from '../admin/DevicesManagement.js';
 import { AnalyticsView } from '../admin/AnalyticsView.js';
 import { SystemPanel } from '../admin/SystemPanel.js';
-import { MetaResponse, AuthSessionResponse } from '@paxflux/shared';
+import { MetaResponse } from '@paxflux/shared';
 import { RefreshCw } from 'lucide-react';
 
 const RootRedirect: React.FC = () => {
@@ -22,16 +23,6 @@ const RootRedirect: React.FC = () => {
       try {
         const metaRes = await apiFetch<MetaResponse>('/api/v1/meta');
         setMeta(metaRes);
-
-        // Check if staff session exists
-        try {
-          const authRes = await apiFetch<AuthSessionResponse>('/api/v1/auth/session');
-          if (authRes.csrfToken) {
-            setCsrfToken(authRes.csrfToken);
-          }
-        } catch {
-          // ignore
-        }
       } catch {
         // ignore
       } finally {
@@ -65,11 +56,13 @@ export const App: React.FC = () => {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/pair" element={<PairingPage />} />
         <Route path="/counter" element={<CounterView />} />
-        <Route path="/admin" element={<Dashboard />} />
-        <Route path="/admin/events/new" element={<EventWizard />} />
-        <Route path="/admin/events/:id/devices" element={<DevicesManagement />} />
-        <Route path="/admin/events/:id/analytics" element={<AnalyticsView />} />
-        <Route path="/admin/system" element={<SystemPanel />} />
+        <Route element={<AuthProvider />}>
+          <Route path="/admin" element={<Dashboard />} />
+          <Route path="/admin/events/new" element={<EventWizard />} />
+          <Route path="/admin/events/:id/devices" element={<DevicesManagement />} />
+          <Route path="/admin/events/:id/analytics" element={<AnalyticsView />} />
+          <Route path="/admin/system" element={<SystemPanel />} />
+        </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

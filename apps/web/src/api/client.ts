@@ -10,13 +10,25 @@ export function getCsrfToken(): string | null {
   return csrfTokenInMemory;
 }
 
+let unauthorizedHandler: (() => void) | null = null;
+
+/**
+ * Opt-in hook for a mounted auth guard (see AuthProvider) to be notified of
+ * any 401 response, so it can send the user back to /login. Not set on
+ * public routes (login/setup/pairing/counter), where a 401 is handled
+ * locally instead.
+ */
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  unauthorizedHandler = handler;
+}
+
 export async function apiFetch<T>(
   url: string,
   options: RequestInit = {}
 ): Promise<T> {
   const headers = new Headers(options.headers || {});
 
-  if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
+  if (options.body !== undefined && !headers.has('Content-Type') && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -45,6 +57,9 @@ export async function apiFetch<T>(
         code: 'INTERNAL_ERROR',
         detail: `Le serveur a renvoyé le statut HTTP ${response.status}`,
       };
+    }
+    if (response.status === 401) {
+      unauthorizedHandler?.();
     }
     throw problem;
   }
