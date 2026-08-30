@@ -3,8 +3,8 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { AppDb } from '../db/index.js';
 import { Env } from '../config/env.js';
-import { events, spaces, spaceState, checkpoints, auditLog } from '../db/schema.js';
-import { eq, desc } from 'drizzle-orm';
+import { events, spaces, spaceState, checkpoints, auditLog, deviceSessions } from '../db/schema.js';
+import { eq, desc, and, isNull } from 'drizzle-orm';
 import {
   CreateEventRequestSchema,
   UpdateEventRequestSchema,
@@ -514,6 +514,12 @@ export async function registerEventRoutes(app: FastifyInstance, sqlite: Database
         updatedAtMs: now,
       })
       .where(eq(events.id, id));
+
+    // SPEC §5.1 (`archived`): "les sessions appareils sont révoquées."
+    await db
+      .update(deviceSessions)
+      .set({ revokedAtMs: now })
+      .where(and(eq(deviceSessions.eventId, id), isNull(deviceSessions.revokedAtMs)));
 
     broadcaster.closeAllForEvent(id);
 

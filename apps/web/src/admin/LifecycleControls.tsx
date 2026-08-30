@@ -40,6 +40,8 @@ type DevicesState =
   | { kind: 'ready'; devices: DeviceRow[] }
   | { kind: 'error'; detail: string };
 
+const DEVICES_POLL_INTERVAL_MS = 3_000;
+
 /**
  * Lifecycle surface for Phase 3: draft -> live -> closing -> closed ->
  * archived, plus the admin-only closed -> live reopen. Each transition
@@ -56,6 +58,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
 
   const [preflight, setPreflight] = useState<PreflightState>({ kind: 'loading' });
   const [devicesState, setDevicesState] = useState<DevicesState>({ kind: 'loading' });
+  const [devicesRefreshing, setDevicesRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -70,24 +73,62 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
     }
   }, [event.id, event.status]);
 
-  const refreshDevices = useCallback(async () => {
-    if (event.status !== 'closing') return;
-    setDevicesState({ kind: 'loading' });
-    try {
-      const res = await apiFetch<DeviceRow[]>(`/api/v1/events/${event.id}/devices`);
-      setDevicesState({ kind: 'ready', devices: res });
-    } catch (err) {
-      setDevicesState({ kind: 'error', detail: errorDetail(err, 'Impossible de charger la liste des appareils.') });
-    }
-  }, [event.id, event.status]);
-
   useEffect(() => {
     refreshPreflight();
   }, [refreshPreflight]);
 
+  // Refreshes the device list. `silent` (background polling, or a manual
+  // "Actualiser" click while a list is already showing) keeps the current
+  // list on screen instead of flashing back to a loading skeleton, and
+  // never clobbers good data with a transient fetch error.
+  const refreshDevices = useCallback(
+    async (opts: { silent?: boolean } = {}) => {
+      if (event.status !== 'closing') return;
+      if (!opts.silent) {
+        setDevicesState({ kind: 'loading' });
+      }
+      setDevicesRefreshing(true);
+      try {
+        const res = await apiFetch<DeviceRow[]>(`/api/v1/events/${event.id}/devices`);
+        setDevicesState({ kind: 'ready', devices: res });
+      } catch (err) {
+        setDevicesState((prev) =>
+          opts.silent && prev.kind === 'ready' ? prev : { kind: 'error', detail: errorDetail(err, 'Impossible de charger la liste des appareils.') }
+        );
+      } finally {
+        setDevicesRefreshing(false);
+      }
+    },
+    [event.id, event.status]
+  );
+
+  // While closing, an appareil can go from offline/pending to fully
+  // synced entirely on its own (it reconnects and drains its outbox) —
+  // nothing the admin does triggers a re-render. Poll every few seconds
+  // so the device list and the normal-close button's enabled state stay
+  // current without a manual reload. A single in-flight request at a
+  // time: each tick waits for the previous fetch to resolve before
+  // scheduling the next, so a slow response never queues up parallel
+  // requests. Cleaned up on status change or unmount.
   useEffect(() => {
-    refreshDevices();
-  }, [refreshDevices]);
+    if (event.status !== 'closing') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async (silent: boolean) => {
+      await refreshDevices({ silent });
+      if (!cancelled) {
+        timer = setTimeout(() => tick(true), DEVICES_POLL_INTERVAL_MS);
+      }
+    };
+
+    tick(false);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [event.status, refreshDevices]);
 
   const runTransition = useCallback(
     async (path: string, confirmMessage: string, body?: Record<string, unknown>) => {
@@ -214,47 +255,63 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
               <p>{devicesState.detail}</p>
               <button
                 type="button"
-                onClick={refreshDevices}
+                onClick={() => refreshDevices()}
                 className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
               >
                 <RefreshCw className="w-3 h-3" /> Réessayer
               </button>
             </div>
           </div>
-        ) : devicesState.devices.length === 0 ? (
-          <p className="text-xs text-slate-500">Aucun appareil actif pour cet événement.</p>
         ) : (
           <div className="space-y-1.5">
-            {devicesState.devices.map((d) => (
-              <div
-                key={d.id}
-                className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800"
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
+                Appareils actifs — mise à jour automatique
+              </span>
+              <button
+                type="button"
+                disabled={devicesRefreshing}
+                onClick={() => refreshDevices({ silent: true })}
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-50 text-[11px] font-semibold"
               >
-                <span className="font-semibold text-slate-200">
-                  {d.checkpointName} — {d.label}
-                </span>
-                <span className="flex items-center gap-2.5">
-                  {d.isOnline ? (
-                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
-                      <Wifi className="w-3.5 h-3.5" /> En ligne
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1 text-rose-400 font-semibold">
-                      <WifiOff className="w-3.5 h-3.5" /> Hors ligne
-                    </span>
-                  )}
-                  {d.lastPendingCount > 0 ? (
-                    <span className="text-amber-400 font-semibold">{d.lastPendingCount} en attente</span>
-                  ) : null}
-                </span>
-              </div>
-            ))}
+                <RefreshCw className={`w-3 h-3 ${devicesRefreshing ? 'animate-spin' : ''}`} /> Actualiser
+              </button>
+            </div>
+
+            {devicesState.devices.length === 0 ? (
+              <p className="text-xs text-slate-500">Aucun appareil actif pour cet événement.</p>
+            ) : (
+              devicesState.devices.map((d) => (
+                <div
+                  key={d.id}
+                  className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800"
+                >
+                  <span className="font-semibold text-slate-200">
+                    {d.checkpointName} — {d.label}
+                  </span>
+                  <span className="flex items-center gap-2.5">
+                    {d.isOnline ? (
+                      <span className="flex items-center gap-1 text-emerald-400 font-semibold">
+                        <Wifi className="w-3.5 h-3.5" /> En ligne
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-rose-400 font-semibold">
+                        <WifiOff className="w-3.5 h-3.5" /> Hors ligne
+                      </span>
+                    )}
+                    {d.lastPendingCount > 0 ? (
+                      <span className="text-amber-400 font-semibold">{d.lastPendingCount} en attente</span>
+                    ) : null}
+                  </span>
+                </div>
+              ))
+            )}
           </div>
         )}
 
         {devicesState.kind === 'ready' && !allSynced ? (
           <p className="text-[11px] text-amber-300/90">
-            La fermeture normale nécessite que tous les appareils actifs soient hors ligne et synchronisés (0 en attente).
+            La fermeture normale nécessite que tous les appareils actifs soient en ligne et synchronisés (0 en attente).
           </p>
         ) : null}
 

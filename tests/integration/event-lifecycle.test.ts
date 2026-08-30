@@ -451,6 +451,46 @@ describe('Event lifecycle transitions & preflight', () => {
       expect(res.json().status).toBe('archived');
     });
 
+    it('archiving revokes all of the event\'s device sessions (SPEC §5.1)', async () => {
+      const { event, checkpoint } = await startLiveEvent();
+
+      const inviteRes = await app.inject({
+        method: 'POST',
+        url: `/api/v1/events/${event.id}/device-invites`,
+        headers: authHeaders(),
+        payload: { checkpointId: checkpoint.id, expiresInMinutes: 30 },
+      });
+      const { token } = inviteRes.json();
+      const pairRes = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token, appVersion: '1.0.0' } });
+      const deviceSessionId = pairRes.json().deviceSession.id as string;
+      const deviceCookie = pairRes.cookies[0];
+
+      // The device authenticates fine before archiving.
+      const bootstrapBefore = await app.inject({
+        method: 'GET',
+        url: '/api/v1/device/bootstrap',
+        headers: { cookie: `${deviceCookie.name}=${deviceCookie.value}` },
+      });
+      expect(bootstrapBefore.statusCode).toBe(200);
+
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+      await setDeviceSyncState(deviceSessionId, { online: true, pendingCount: 0 });
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+
+      const archiveRes = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/archive`, headers: authHeaders() });
+      expect(archiveRes.statusCode).toBe(200);
+
+      const deviceRow = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
+      expect(deviceRow?.revokedAtMs).not.toBeNull();
+
+      const bootstrapAfter = await app.inject({
+        method: 'GET',
+        url: '/api/v1/device/bootstrap',
+        headers: { cookie: `${deviceCookie.name}=${deviceCookie.value}` },
+      });
+      expect(bootstrapAfter.statusCode).toBe(401);
+    });
+
     it('an archived event accepts no further lifecycle transitions', async () => {
       const event = await closeEvent();
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/archive`, headers: authHeaders() });
