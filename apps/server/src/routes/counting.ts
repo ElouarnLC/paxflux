@@ -9,7 +9,7 @@ import {
   movements,
   deviceSessions,
 } from '../db/schema.js';
-import { eq, and, desc, count } from 'drizzle-orm';
+import { eq, and, desc, count, isNull } from 'drizzle-orm';
 import {
   BatchSyncRequestSchema,
   CreateAdjustmentRequestSchema,
@@ -107,12 +107,24 @@ export async function registerCountingRoutes(
       }
     }
 
+    // The client's own `pendingCount` only accounts for the actions it
+    // deletes locally, i.e. `applied`/`duplicate` — it never subtracts
+    // `rejected` ones, since the client intentionally keeps those in its
+    // outbox (their retry/UX handling is Phase 6). A rejected action is
+    // still genuinely unsynced from the admin's point of view, so it must
+    // still count towards `lastPendingCount`, or a device with only
+    // rejected actions left could be reported as fully synced (0 pending)
+    // and let a normal `/close` through despite having a movement it never
+    // reconciled.
+    const rejectedCount = acknowledgments.filter((a) => a.status === 'rejected').length;
+    const effectivePendingCount = pendingCount + rejectedCount;
+
     // Update device session status
     await db
       .update(deviceSessions)
       .set({
         lastSeenAtMs: now,
-        lastPendingCount: pendingCount,
+        lastPendingCount: effectivePendingCount,
         appVersion: appVersion || deviceSession.appVersion,
       })
       .where(eq(deviceSessions.id, deviceSession.id));
@@ -262,7 +274,7 @@ export async function registerCountingRoutes(
       })
       .from(deviceSessions)
       .innerJoin(checkpoints, eq(deviceSessions.checkpointId, checkpoints.id))
-      .where(and(eq(deviceSessions.eventId, eventId), eq(deviceSessions.revokedAtMs, null as any)))
+      .where(and(eq(deviceSessions.eventId, eventId), isNull(deviceSessions.revokedAtMs)))
       .all();
 
     const now = Date.now();

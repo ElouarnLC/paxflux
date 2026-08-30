@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { useSSE } from '../sse/useSSE.js';
+import { LifecycleControls } from './LifecycleControls.js';
 import {
   EventDetailResponse,
   EventModel,
@@ -29,6 +30,7 @@ import {
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [eventsList, setEventsList] = useState<EventModel[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [eventDetail, setEventDetail] = useState<EventDetailResponse | null>(null);
@@ -41,8 +43,11 @@ export const Dashboard: React.FC = () => {
         const list = await apiFetch<EventModel[]>('/api/v1/events');
         setEventsList(list);
         if (list.length > 0 && !selectedEventId) {
-          // Select first live event or first event
-          const live = list.find((e) => e.status === 'live' || e.status === 'closing') || list[0];
+          // An explicit ?event= (e.g. the wizard just created a draft)
+          // always wins — otherwise a live event elsewhere would hide it.
+          const requestedId = searchParams.get('event');
+          const requested = requestedId ? list.find((e) => e.id === requestedId) : undefined;
+          const live = requested || list.find((e) => e.status === 'live' || e.status === 'closing') || list[0];
           setSelectedEventId(live.id);
         }
       } catch {
@@ -52,7 +57,7 @@ export const Dashboard: React.FC = () => {
       }
     }
     fetchEvents();
-  }, [navigate, selectedEventId]);
+  }, [navigate, selectedEventId, searchParams]);
 
   // Load selected event details
   const refreshDetails = async () => {
@@ -298,6 +303,14 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* 1b. Lifecycle Controls */}
+        {currentEvent ? (
+          <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">Cycle de vie de l'événement</h3>
+            <LifecycleControls event={currentEvent} onChanged={refreshDetails} />
+          </section>
+        ) : null}
 
         {/* 2. Space Breakdown */}
         <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">

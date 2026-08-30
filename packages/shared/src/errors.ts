@@ -31,7 +31,9 @@ export type ErrorCode =
   | 'PAYLOAD_TOO_LARGE'
   | 'INTERNAL_ERROR'
   | 'BACKUP_FAILED'
-  | 'RESTORE_FAILED';
+  | 'RESTORE_FAILED'
+  | 'DATABASE_INTEGRITY_CHECK_FAILED'
+  | 'DEVICES_NOT_SYNCED';
 
 export interface ProblemDetails {
   type: string;

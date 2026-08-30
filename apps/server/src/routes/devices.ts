@@ -9,7 +9,7 @@ import {
   spaces,
   spaceState,
 } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import {
   PairDeviceRequestSchema,
   CreateDeviceInviteRequestSchema,
@@ -214,7 +214,7 @@ export async function registerDeviceRoutes(app: FastifyInstance, db: AppDb, env:
       })
       .from(deviceSessions)
       .innerJoin(checkpoints, eq(deviceSessions.checkpointId, checkpoints.id))
-      .where(and(eq(deviceSessions.eventId, eventId), eq(deviceSessions.revokedAtMs, null as any)))
+      .where(and(eq(deviceSessions.eventId, eventId), isNull(deviceSessions.revokedAtMs)))
       .all();
 
     const now = Date.now();

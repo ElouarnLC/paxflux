@@ -160,6 +160,11 @@ export const CreateAdjustmentRequestSchema = z.object({
 });
 export type CreateAdjustmentRequest = z.infer<typeof CreateAdjustmentRequestSchema>;
 
+export interface PreflightResponse {
+  ready: boolean;
+  error: { code: string; message: string } | null;
+}
+
 export interface EventDetailResponse {
   event: EventModel;
   spaces: SpaceModel[];

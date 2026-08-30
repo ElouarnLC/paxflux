@@ -27,7 +27,31 @@ test('le compteur indique clairement qu\'un événement en brouillon n\'est pas 
   ).toBeVisible();
 });
 
-test('un événement en `closing` désactive réellement les boutons de comptage', async ({ page }) => {
+test('draft -> live active le compteur immédiatement, sans reload (SSE event-status)', async ({ page }) => {
+  const session = await getAdminSession();
+  const topo = await createDraftEventWithMainCheckpoint(session, {
+    name: 'Repro Draft To Live SSE',
+    capacity: 30,
+  });
+  const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
+
+  await page.goto(`/pair#${token}`);
+  await page.waitForURL('**/counter');
+
+  const entryButton = page.getByRole('button', { name: /ENTRÉE/i });
+  await expect(entryButton).toBeDisabled();
+  await expect(page.getByText(/événement n'a pas encore démarré/i)).toBeVisible();
+
+  // No reload: the counter must react to the event-status SSE message
+  // pushed by POST /start, exactly like a device already sitting on the
+  // pairing screen when the admin flips the switch.
+  await startEvent(session, topo.eventId);
+
+  await expect(entryButton).toBeEnabled();
+  await expect(page.getByText(/événement n'a pas encore démarré/i)).not.toBeVisible();
+});
+
+test('un événement en `closing` désactive réellement les boutons de comptage, sans reload (SSE event-status)', async ({ page }) => {
   const session = await getAdminSession();
   const topo = await createDraftEventWithMainCheckpoint(session, {
     name: 'Repro Closing Gate',
@@ -39,10 +63,12 @@ test('un événement en `closing` désactive réellement les boutons de comptage
   await page.goto(`/pair#${token}`);
   await page.waitForURL('**/counter');
 
+  const entryButton = page.getByRole('button', { name: /ENTRÉE/i });
+  await expect(entryButton).toBeEnabled();
+
+  // No reload: begin-closing broadcasts event-status over the same SSE
+  // stream the counter already listens to for occupancy updates.
   await beginClosingEvent(session, topo.eventId);
-  // Force a fresh bootstrap fetch to pick up the new `closing` status
-  // (the counter does not react live to the event-status SSE message).
-  await page.reload();
 
   await expect(page.getByText(/nouveaux comptages désactivés/i)).toBeVisible();
 
@@ -50,7 +76,6 @@ test('un événement en `closing` désactive réellement les boutons de comptage
   // occupancy: once this is fixed, .click() on a genuinely disabled button
   // would just hang until Playwright's actionability timeout instead of
   // failing meaningfully.
-  const entryButton = page.getByRole('button', { name: /ENTRÉE/i });
   await expect(entryButton).toBeDisabled();
 });
 

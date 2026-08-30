@@ -181,7 +181,14 @@ export async function flushOutbox(): Promise<BatchSyncResponse | null> {
       };
     });
 
-    const pendingTotal = await localDb.outbox_actions.count();
+    // `pendingCount` tells the server how many actions this device still has
+    // queued, for admin-visible sync tracking (SPEC: "appareils actifs
+    // ... synchronisés"). It must reflect the state *after* this batch is
+    // applied, not the count still including it — otherwise a fully-synced
+    // device (0 pending) can never report 0, since flushOutbox() only calls
+    // the server when there is at least one pending action to send.
+    const totalBeforeBatch = await localDb.outbox_actions.count();
+    const pendingAfterThisBatch = Math.max(totalBeforeBatch - pendingActions.length, 0);
 
     const response = await fetch('/api/v1/device/actions/batch', {
       method: 'POST',
@@ -191,7 +198,7 @@ export async function flushOutbox(): Promise<BatchSyncResponse | null> {
       credentials: 'include',
       body: JSON.stringify({
         actions: payloadActions,
-        pendingCount: pendingTotal,
+        pendingCount: pendingAfterThisBatch,
         appVersion: '1.0.0',
       }),
     });

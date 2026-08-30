@@ -17,6 +17,7 @@ describe('Fastify REST API & Security Flow', () => {
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
       DATA_DIR: './tests/scratch-api-data',
+      BACKUP_DIR: './tests/scratch-api-backups',
     });
     const dbConn = createDatabase(':memory:');
     sqlite = dbConn.sqlite;
