@@ -78,7 +78,28 @@ export async function registerCountingRoutes(
         );
     }
 
-    const { actions, pendingCount = 0, appVersion } = parseResult.data;
+    const { actions, expectedDeviceSessionId, pendingCount = 0, appVersion } = parseResult.data;
+
+    // The cookie alone is not proof that this batch belongs to the session
+    // now authenticated. During a re-pairing the browser can already hold
+    // the new session's cookie while the client still believes it is the
+    // previous device — and an unasserted batch would then be applied under
+    // the wrong session, checkpoint and event. Refuse the whole batch
+    // before applying anything, and touch nothing on the session either:
+    // this request says nothing truthful about the current device's state.
+    if (expectedDeviceSessionId !== deviceSession.id) {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'DEVICE_SESSION_MISMATCH',
+            'Session appareil différente',
+            'Ces actions ont été enregistrées sous un autre appairage de cet appareil. Elles ne peuvent pas être envoyées sous la session courante.'
+          )
+        );
+    }
+
     const now = Date.now();
     const eventId = deviceSession.eventId;
     const checkpointId = deviceSession.checkpointId;

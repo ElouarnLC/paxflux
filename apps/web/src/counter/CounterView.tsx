@@ -6,8 +6,20 @@ import {
   enqueueReversalAction,
   getLastCountAction,
   retryRejectedAction,
+  UndoCandidate,
 } from '../offline/outbox.js';
-import { loadSnapshot, persistAuthoritativeState, persistBootstrap } from '../offline/snapshot.js';
+import {
+  LifecycleMarker,
+  loadSnapshot,
+  persistAuthoritativeState,
+  persistBootstrap,
+  persistLifecycleStatus,
+  resolveEffectiveStatus,
+} from '../offline/snapshot.js';
+import {
+  forgetConfirmedActionsOfOtherOwners,
+  getConfirmedActions,
+} from '../offline/confirmed-actions.js';
 import { projectPendingActions, projectedSpaceOccupancy } from '../offline/projection.js';
 import { describeOutboxError, isRetryable, needsReconciliation } from '../offline/outbox-state.js';
 import { useSSE } from '../sse/useSSE.js';
@@ -15,11 +27,10 @@ import { useDeviceHeartbeat } from './useDeviceHeartbeat.js';
 import { apiFetch } from '../api/client.js';
 import {
   DeviceBootstrapResponse,
-  CompactEventState,
   Direction,
   EventStatus,
+  ConfirmedActionRecord,
   OutboxActionOwner,
-  OutboxActionRecord,
 } from '@paxflux/shared';
 import {
   WifiOff,
@@ -68,12 +79,17 @@ function vibrate(pattern: number | number[]): void {
 
 export const CounterView: React.FC = () => {
   const [bootstrap, setBootstrap] = useState<DeviceBootstrapResponse | null>(null);
-  const [serverState, setServerState] = useState<CompactEventState | null>(null);
-  // Most recent lifecycle status pushed over SSE (event-status), so
-  // draft -> live, live -> closing and closing -> closed take effect
-  // immediately without requiring a reload.
-  const [liveStatus, setLiveStatus] = useState<EventStatus | null>(null);
-  const [lastAction, setLastAction] = useState<OutboxActionRecord | null>(null);
+  // The authoritative state and the lifecycle marker are read live from
+  // storage rather than mirrored into React state.
+  //
+  // Every writer — bootstrap, batch response, SSE frame — goes through the
+  // same persistence funnel, so reading the result back is the only way the
+  // screen cannot disagree with what the device actually holds. Mirroring
+  // it into component state is how a stale `live`, restored at startup,
+  // came to shadow a `closing` learnt later from a batch response.
+  const storedSnapshot = useLiveQuery(() => localDb.event_state.get('current'), []);
+  const [lastAction, setLastAction] = useState<UndoCandidate | null>(null);
+  const [confirmedActions, setConfirmedActions] = useState<ConfirmedActionRecord[]>([]);
   const [isUndoing, setIsUndoing] = useState(false);
   const [undoNotice, setUndoNotice] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -139,10 +155,7 @@ export const CounterView: React.FC = () => {
   useEffect(() => {
     async function init() {
       const snapshot = await loadSnapshot();
-      if (snapshot.bootstrap) {
-        setBootstrap(snapshot.bootstrap);
-        setServerState(snapshot.state);
-      }
+      if (snapshot.bootstrap) setBootstrap(snapshot.bootstrap);
 
       // Always attempt the refresh: `navigator.onLine` says the interface is
       // up, not that this server is reachable, so gating on it would skip a
@@ -152,10 +165,16 @@ export const CounterView: React.FC = () => {
         const fresh = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
         setBootstrap(fresh);
         await persistBootstrap(fresh);
-        // Re-read through the funnel so an in-flight SSE frame newer than
-        // this bootstrap is not overwritten by it.
-        const refreshed = await loadSnapshot();
-        setServerState(refreshed.state ?? fresh.state);
+        // A pairing change makes the previous session's remembered counts
+        // none of this device's business: offering to undo one would build
+        // a reversal under the wrong identity.
+        await forgetConfirmedActionsOfOtherOwners({
+          deviceSessionId: fresh.deviceSession.id,
+          eventId: fresh.event.id,
+          checkpointId: fresh.checkpoint.id,
+        });
+        // Nothing to mirror: the live query above picks the refreshed
+        // snapshot up as soon as `persistBootstrap` has written it.
       } catch (err) {
         console.debug('Bootstrap refresh failed; running on the local snapshot:', err);
       }
@@ -177,9 +196,9 @@ export const CounterView: React.FC = () => {
     // is no longer entitled to.
     enabled: isOnline && !isSessionRevoked,
     onState: (state) => {
-      setServerState(state);
       // Same persistence funnel as bootstrap and batch responses, so the
-      // stored snapshot is always the newest state whatever delivered it.
+      // stored snapshot is always the newest state whatever delivered it —
+      // and the live query re-renders from it.
       if (bootstrap) {
         void persistAuthoritativeState(bootstrap.event.id, state, 'sse').catch((err) => {
           console.debug('Could not persist the SSE state locally:', err);
@@ -188,7 +207,14 @@ export const CounterView: React.FC = () => {
     },
     onMessage: (message) => {
       if (message.type === 'event-status') {
-        setLiveStatus(message.data.status);
+        // Persisted, so the transition outlives this tab. Carrying its own
+        // server timestamp is what lets it win over a state frame minted
+        // before it but delivered after — they share the same version.
+        void persistLifecycleStatus(
+          message.data.eventId,
+          message.data.status,
+          message.data.timestampMs
+        ).catch((err) => console.debug('Could not persist the lifecycle transition:', err));
       }
     },
   });
@@ -209,23 +235,48 @@ export const CounterView: React.FC = () => {
   // assumption about it: the endpoints' `kind` comes from the authoritative
   // state, so a boundary crossing moves the global gauge and an internal
   // transfer does not.
-  const authoritativeState = serverState ?? bootstrap?.state ?? null;
+  // A stored state belonging to another event describes spaces this
+  // pairing does not have, so it is never read back under it.
+  const snapshotMatchesPairing =
+    storedSnapshot !== undefined &&
+    storedSnapshot !== null &&
+    bootstrap !== null &&
+    storedSnapshot.eventId === bootstrap.event.id;
+  const authoritativeState = snapshotMatchesPairing
+    ? storedSnapshot.state
+    : (bootstrap?.state ?? null);
+  const lifecycle: LifecycleMarker | null =
+    snapshotMatchesPairing &&
+    storedSnapshot.lifecycleStatus !== undefined &&
+    storedSnapshot.lifecycleAtMs !== undefined
+      ? { status: storedSnapshot.lifecycleStatus, atMs: storedSnapshot.lifecycleAtMs }
+      : null;
   const projection = useMemo(() => {
     if (!authoritativeState || !bootstrap) return null;
-    // Only this pairing's own actions may be projected. A quarantined one
-    // belongs to a previous identity and will never be applied under this
-    // checkpoint, so showing it in this gauge would be a lie.
+    // Only actions that can still become server truth are projected.
+    //
+    // A quarantined one belongs to a previous identity and will never be
+    // applied under this checkpoint. A *rejected* one is a refusal the
+    // server has already pronounced: adding it to the gauge would show an
+    // occupancy the server has explicitly declined to record, and it would
+    // stay there indefinitely since nothing retries it. Both are surfaced
+    // in the reconciliation panel instead, where the operator sees the
+    // counting intent without it being mixed into the main figure.
     const projectable = outboxActions.filter(
-      (a) => a.sendState !== 'quarantined' && a.owner?.deviceSessionId === bootstrap.deviceSession.id
+      (a) =>
+        a.sendState !== 'quarantined' &&
+        a.sendState !== 'rejected' &&
+        a.owner?.deviceSessionId === bootstrap.deviceSession.id
     );
     return projectPendingActions(
       authoritativeState,
       { spaceAId: bootstrap.checkpoint.spaceAId, spaceBId: bootstrap.checkpoint.spaceBId },
-      projectable
+      projectable,
+      confirmedActions
     );
     // `outboxActions` is a fresh array on every live-query emission, so the
     // projection recomputes whenever the outbox actually changes.
-  }, [authoritativeState, bootstrap, outboxActions]);
+  }, [authoritativeState, bootstrap, outboxActions, confirmedActions]);
 
   const displayedOccupancy = projection?.projectedEventOccupancy ?? authoritativeState?.eventOccupancy ?? 0;
   const capacity = authoritativeState?.eventCapacity ?? bootstrap?.event.capacity ?? 0;
@@ -240,7 +291,13 @@ export const CounterView: React.FC = () => {
       ? projectedSpaceOccupancy(authoritativeState, bootstrap.checkpoint.spaceBId, projection)
       : null;
 
-  const eventStatus = liveStatus ?? authoritativeState?.eventStatus ?? bootstrap?.event.status ?? 'draft';
+  // The marker wins only while it is more recent than the state frame in
+  // hand. A device that was offline through `begin-closing` never saw the
+  // transition, and learns of it from the very next state frame instead —
+  // which must not be overridden by the stale `live` marker it restored.
+  const eventStatus: EventStatus = authoritativeState
+    ? resolveEffectiveStatus(authoritativeState, lifecycle)
+    : ((bootstrap?.event.status as EventStatus | undefined) ?? 'draft');
   // Only a `live` event accepts new taps. `closing` still lets a device
   // drain actions already queued in its outbox from before the closing
   // transition (see offline/outbox.ts flushOutbox) — this gate only
@@ -257,7 +314,12 @@ export const CounterView: React.FC = () => {
 
       vibrate(25);
       const action = await enqueueCountAction(direction, owner);
-      setLastAction(action);
+      setLastAction({
+        source: 'outbox',
+        clientActionId: action.clientActionId,
+        direction,
+        clientCreatedAtMs: action.clientCreatedAtMs,
+      });
     },
     [isCountingAllowed, owner]
   );
@@ -272,6 +334,9 @@ export const CounterView: React.FC = () => {
       vibrate([15, 30, 15]);
 
       const outcome = await enqueueReversalAction(lastAction.clientActionId, owner);
+      if (outcome.kind !== 'refused') {
+        setConfirmedActions(await getConfirmedActions(owner));
+      }
       if (outcome.kind === 'refused') {
         // The target is parked for reconciliation: its original will not be
         // sent under this identity, so a reversal would have nothing valid
@@ -293,9 +358,11 @@ export const CounterView: React.FC = () => {
   // so the button never offers an action that is gone or no longer ours.
   useEffect(() => {
     let cancelled = false;
-    getLastCountAction(owner)
-      .then((last) => {
-        if (!cancelled) setLastAction(last);
+    Promise.all([getLastCountAction(owner), getConfirmedActions(owner)])
+      .then(([last, confirmed]) => {
+        if (cancelled) return;
+        setLastAction(last);
+        setConfirmedActions(confirmed);
       })
       .catch((err) => console.debug('Could not read the last undoable action:', err));
     return () => {
@@ -595,12 +662,13 @@ export const CounterView: React.FC = () => {
               <span>
                 Dernière saisie :{' '}
                 <strong className="text-white">
-                  {lastAction.type === 'count'
-                    ? lastAction.direction === 'a_to_b'
-                      ? bootstrap.checkpoint.labelAToB
-                      : bootstrap.checkpoint.labelBToA
-                    : 'Annulation'}
+                  {lastAction.direction === 'a_to_b'
+                    ? bootstrap.checkpoint.labelAToB
+                    : bootstrap.checkpoint.labelBToA}
                 </strong>
+                {lastAction.source === 'confirmed' ? (
+                  <span className="text-slate-400"> (synchronisée)</span>
+                ) : null}
               </span>
             </>
           ) : (

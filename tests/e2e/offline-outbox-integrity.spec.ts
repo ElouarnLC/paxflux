@@ -4,6 +4,8 @@ import {
   createDraftEventWithMainCheckpoint,
   addInternalTransferCheckpoint,
   startEvent,
+  beginClosingEvent,
+  forceCloseEvent,
   createDeviceInviteToken,
   adjustSpaceOccupancy,
   getEventState,
@@ -26,11 +28,6 @@ async function spaceOccupancy(session: AdminSession, eventId: string, spaceId: s
   const state = await getEventState(session, eventId);
   const occupancies: Record<string, number> = state.occupancy.spaces;
   return occupancies[spaceId] ?? 0;
-}
-
-async function globalOccupancy(session: AdminSession, eventId: string): Promise<number> {
-  const state = await getEventState(session, eventId);
-  return state.occupancy.global;
 }
 
 /** Waits until the outbox settles on a predicate, so specs never race the flush loop. */
@@ -72,11 +69,11 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     await adjustSpaceOccupancy(session, topo.eventId, topo.siteSpaceId, 5);
     await expect(page.locator('span.text-5xl.font-black')).toHaveText('5', { timeout: 10_000 });
 
-    // Restart with the server unreachable. The app shell still loads (the
-    // generated service worker is never registered, so a fully offline
-    // reload cannot boot the SPA at all); every API call fails, which is
-    // exactly the condition this assertion is about: which local snapshot
-    // does the counter restart from?
+    // Restart with the API unreachable. Cutting the API rather than the
+    // whole network keeps this test on its subject — which local snapshot
+    // does the counter restart from — instead of also exercising the
+    // service worker's precache, which `offline-round2.spec.ts` covers
+    // separately against a genuinely offline reload.
     await page.route('**/api/v1/**', (route) => route.abort('failed'));
     await page.reload();
 
@@ -88,6 +85,8 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
   });
 
   test('une action rejetée n’est pas renvoyée en boucle au serveur', async ({ page }) => {
+    test.setTimeout(120_000);
+
     const session = await getAdminSession();
     const topo = await createDraftEventWithMainCheckpoint(session, {
       name: 'Repro Rejected Loop',
@@ -99,36 +98,44 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     await page.goto(`/pair#${token}`);
     await page.waitForURL('**/counter');
 
-    let batchRequests = 0;
-    // Let the real request through and rewrite only the acknowledgment
-    // status, so the response keeps a genuine `state` payload and the test
-    // exercises the client's handling of a deterministic refusal.
-    const rejectAll = async (route: import('@playwright/test').Route) => {
-      batchRequests += 1;
-      const response = await route.fetch();
-      const body = await response.json();
-      body.acknowledged = body.acknowledged.map((ack: { clientActionId: string }) => ({
-        clientActionId: ack.clientActionId,
-        status: 'rejected',
-        errorCode: 'DIRECTION_NOT_ALLOWED',
-      }));
-      await route.fulfill({ response, body: JSON.stringify(body) });
-    };
-    await page.route(BATCH_URL, rejectAll);
-
+    // A genuine refusal, produced by the server rather than injected into
+    // the response: the tap is made offline while the event is live, and
+    // the event is closed for good before the device reconnects. Rewriting
+    // the acknowledgment instead would have applied the movement first and
+    // then lied about it.
+    await page.context().setOffline(true);
     await page.getByRole('button', { name: /ENTRÉE/ }).click();
-    await page.waitForTimeout(5_000);
+    await waitForOutbox(page, (rows) => rows.length === 1);
 
-    // Today the flush deletes only applied/duplicate acks, sees a non-empty
-    // outbox and immediately re-arms `setTimeout(triggerFlush, 100)` — a
-    // 100 ms hot loop against a refusal that will never change on its own.
-    expect(batchRequests).toBeLessThanOrEqual(2);
+    await beginClosingEvent(session, topo.eventId);
+    await forceCloseEvent(session, topo.eventId, 'Appareil hors ligne au moment de la fermeture');
 
-    // And the action must still be there: a refusal is never silent data loss.
+    let batchRequests = 0;
+    await page.route(BATCH_URL, async (route) => {
+      batchRequests += 1;
+      await route.continue();
+    });
+    await page.context().setOffline(false);
+
+    await expect
+      .poll(async () => (await readOutbox(page))[0]?.sendState, { timeout: 30_000 })
+      .toBe('rejected');
+
+    // Before Phase 6 the flush deleted only applied/duplicate acks, saw a
+    // non-empty outbox and immediately re-armed `setTimeout(triggerFlush,
+    // 100)` — a 100 ms hot loop against a refusal that will never change on
+    // its own. Measured at 73 requests in 5 seconds.
+    const afterRefusal = batchRequests;
+    await page.waitForTimeout(8_000);
+    expect(batchRequests - afterRefusal).toBe(0);
+
+    // And the action is still there, carrying the server's own code: a
+    // refusal is never silent data loss.
     const rows = await readOutbox(page);
     expect(rows).toHaveLength(1);
-    expect(rows[0].sendState).not.toBe('pending');
-    expect(rows[0].lastErrorCode).toBe('DIRECTION_NOT_ALLOWED');
+    expect(rows[0].sendState).toBe('rejected');
+    expect(rows[0].lastErrorCode).toBe('EVENT_NOT_LIVE');
+    expect(await spaceOccupancy(session, topo.eventId, topo.siteSpaceId)).toBe(0);
   });
 
   test('une outbox d’une session précédente n’est jamais rejouée sous un nouvel appairage', async ({

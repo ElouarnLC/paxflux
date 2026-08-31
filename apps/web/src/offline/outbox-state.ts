@@ -119,6 +119,24 @@ export function networkFailureTransition(
 }
 
 /**
+ * A refusal that is about the *identity*, not the action: the device session
+ * is gone, or the server refused the batch because the cookie names another
+ * session. Retrying under the credentials this device currently holds cannot
+ * succeed, so the action leaves auto-retry — but it is kept, because it is a
+ * real count nobody has reconciled.
+ */
+export function terminalSessionTransition(
+  action: OutboxActionRecord,
+  errorCode: string
+): OutboxTransition {
+  return {
+    kind: 'update',
+    clientActionId: action.clientActionId,
+    changes: { sendState: 'quarantined', lastErrorCode: errorCode },
+  };
+}
+
+/**
  * A `sending` row found at startup: the app died mid-flush, so whether the
  * server applied it is unknown. Treat it as an uncertain acknowledgment and
  * make it retryable rather than leaving it stranded forever.
@@ -168,6 +186,11 @@ export function describeOutboxError(errorCode: string | undefined): string {
       return 'Comptage effectué sous un appairage précédent de cet appareil.';
     case OUTBOX_LOCAL_ERROR_CODES.OWNER_UNKNOWN:
       return 'Comptage enregistré par une version antérieure, sans identité d’appareil.';
+    case OUTBOX_LOCAL_ERROR_CODES.DEVICE_SESSION_INVALID:
+      return 'La session de cet appareil n’est plus valide. Un nouvel appairage est nécessaire.';
+    case 'DEVICE_SESSION_MISMATCH':
+    case OUTBOX_LOCAL_ERROR_CODES.SESSION_MISMATCH_REFUSED:
+      return 'Le serveur a refusé ce comptage : il appartient à un autre appairage de cet appareil.';
     default:
       return errorCode
         ? `Refusé par le serveur (${errorCode}).`

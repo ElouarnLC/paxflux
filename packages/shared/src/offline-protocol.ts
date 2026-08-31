@@ -32,6 +32,17 @@ export type ClientAction = z.infer<typeof ClientActionSchema>;
 
 export const BatchSyncRequestSchema = z.object({
   actions: z.array(ClientActionSchema).max(100),
+  /**
+   * The device session the client believes it is sending under.
+   *
+   * Required, because the endpoint otherwise derives event, checkpoint and
+   * session purely from the cookie. During a re-pairing there is a window
+   * where the cookie already belongs to the new session while the client's
+   * own stored configuration still describes the old one — and in that
+   * window an unasserted batch is applied under the wrong identity. Sending
+   * the expectation lets the server refuse the whole batch instead.
+   */
+  expectedDeviceSessionId: z.string().uuid(),
   lastSeenEventVersion: z.number().int().optional(),
   pendingCount: z.number().int().nonnegative().optional(),
   appVersion: z.string().max(50).optional(),
@@ -126,4 +137,34 @@ export const OUTBOX_LOCAL_ERROR_CODES = {
   OWNER_UNKNOWN: 'OWNER_UNKNOWN',
   /** The flush died mid-flight; the acknowledgment was never seen. */
   UNCERTAIN_ACK: 'UNCERTAIN_ACK',
+  /** The device session is gone (revoked, expired). Terminal until re-pairing. */
+  DEVICE_SESSION_INVALID: 'DEVICE_SESSION_INVALID',
+  /** The server refused the batch: the cookie names a different session. */
+  SESSION_MISMATCH_REFUSED: 'SESSION_MISMATCH_REFUSED',
+  /** A 200 whose body could not be read as a batch response. */
+  INVALID_BATCH_RESPONSE: 'INVALID_BATCH_RESPONSE',
 } as const;
+
+/**
+ * The minimum kept about an action the server confirmed, so its undo stays
+ * possible after it has left the outbox.
+ *
+ * SPEC §11.2 expects the last count to remain undoable once it is safely
+ * synced; the acknowledgment lifecycle requires it to leave the outbox. This
+ * record reconciles the two: enough to build the compensating reversal and
+ * to project it locally, and nothing more.
+ */
+export interface ConfirmedActionRecord {
+  clientActionId: string;
+  type: 'count';
+  direction: Direction;
+  owner: OutboxActionOwner;
+  /** Checkpoint endpoints as they stood, so a reversal projects correctly. */
+  spaceAId: string;
+  spaceBId: string;
+  /** When the operator made the tap — the ordering key for "the last count". */
+  clientCreatedAtMs: number;
+  confirmedAtMs: number;
+  /** Set once a reversal has been queued for it, so it is not offered twice. */
+  reversedAtMs?: number;
+}

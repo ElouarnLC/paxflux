@@ -83,12 +83,21 @@ export async function seedOutboxRows(page: Page, rows: StoredOutboxRow[]): Promi
  * Must run before the app first opens the database in this browser context,
  * so that Dexie sees an existing v1 database and runs its upgrade path.
  */
+/** A row of the v1 `device_cache` table, as an older build wrote it. */
+export interface LegacyCacheRow {
+  key: string;
+  bootstrap?: unknown;
+  lastState?: unknown;
+  updatedAtMs: number;
+}
+
 export async function seedLegacyV1Database(
   page: Page,
-  rows: Array<Omit<StoredOutboxRow, 'owner'>>
+  rows: Array<Omit<StoredOutboxRow, 'owner'>>,
+  cacheRows: LegacyCacheRow[] = []
 ): Promise<void> {
   await page.evaluate(
-    async ({ dbName, rows }) => {
+    async ({ dbName, rows, cacheRows }) => {
       // Dexie multiplies its declared version by ten for the underlying
       // IndexedDB version, so its schema v1 is IDB version 10. Seeding at
       // exactly that number reproduces a device that ran the v1 build, and
@@ -119,17 +128,66 @@ export async function seedLegacyV1Database(
       });
 
       await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(['outbox_actions', 'meta'], 'readwrite');
+        const tx = db.transaction(['outbox_actions', 'device_cache', 'meta'], 'readwrite');
         const store = tx.objectStore('outbox_actions');
         for (const row of rows) store.put(row);
+        const cache = tx.objectStore('device_cache');
+        for (const row of cacheRows) cache.put(row);
         tx.objectStore('meta').put({ key: 'next_sequence', value: rows.length });
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
       });
       db.close();
     },
-    { dbName: DB_NAME, rows }
+    { dbName: DB_NAME, rows, cacheRows }
   );
+}
+
+/**
+ * Waits for the service worker to be registered and controlling the page.
+ *
+ * `vite-plugin-pwa` injects its registration script into the built
+ * `index.html` (default `injectRegister: 'auto'`), and the E2E server serves
+ * that build — so the shell genuinely is available offline, but only once
+ * the worker has activated and taken control.
+ */
+export async function waitForServiceWorkerControl(page: Page, timeoutMs = 20_000): Promise<boolean> {
+  return page.evaluate(async (timeout) => {
+    if (!('serviceWorker' in navigator)) return false;
+    const deadline = Date.now() + timeout;
+    try {
+      await navigator.serviceWorker.ready;
+    } catch {
+      return false;
+    }
+    while (Date.now() < deadline) {
+      if (navigator.serviceWorker.controller) return true;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return navigator.serviceWorker.controller !== null;
+  }, timeoutMs);
+}
+
+/** The stored snapshot record, for asserting on migration outcomes. */
+export async function readEventStateRecord(page: Page): Promise<Record<string, unknown> | null> {
+  return page.evaluate(async (dbName) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(dbName);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    if (!db.objectStoreNames.contains('event_state')) {
+      db.close();
+      return null;
+    }
+    const record = await new Promise<unknown>((resolve, reject) => {
+      const req = db.transaction('event_state', 'readonly').objectStore('event_state').get('current');
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return record as Record<string, unknown> | null;
+  }, DB_NAME);
 }
 
 /** The occupancy figure the counter displays, as a number. */

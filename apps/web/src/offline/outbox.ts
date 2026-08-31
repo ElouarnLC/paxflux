@@ -6,9 +6,16 @@ import {
   Direction,
   BatchSyncResponse,
   ActionAcknowledgment,
+  OUTBOX_LOCAL_ERROR_CODES,
 } from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
-import { currentOwner, persistAuthoritativeState } from './snapshot.js';
+import { currentPairing, persistAuthoritativeState } from './snapshot.js';
+import {
+  getConfirmedAction,
+  getConfirmedActions,
+  markConfirmedReversed,
+  recordConfirmedAction,
+} from './confirmed-actions.js';
 import {
   OutboxTransition,
   acknowledgmentTransition,
@@ -17,6 +24,8 @@ import {
   networkFailureTransition,
   ownershipTransition,
   recoveryTransition,
+  sameOwner,
+  terminalSessionTransition,
 } from './outbox-state.js';
 
 /** Outcome of one flush attempt, so the retry engine can pace itself. */
@@ -157,6 +166,19 @@ export async function enqueueReversalAction(
     return { kind: 'deleted_locally' };
   }
 
+  // The target may have left the outbox already, acknowledged and deleted.
+  // That is the ordinary online case, and it must stay undoable (SPEC
+  // §11.2): the server holds the movement, so a compensating reversal is
+  // exactly the right instrument. A confirmed count made under a different
+  // identity is refused, since its reversal would be sent as ours.
+  if (!target) {
+    const confirmed = await getConfirmedAction(targetClientActionId);
+    if (confirmed && (!sameOwner(confirmed.owner, owner) || confirmed.reversedAtMs !== undefined)) {
+      return { kind: 'refused', reason: 'target_not_reconcilable' };
+    }
+    if (confirmed) await markConfirmedReversed(targetClientActionId);
+  }
+
   const clientActionId = generateActionId();
   const sequence = await getNextSequence();
   const now = Date.now();
@@ -183,6 +205,18 @@ export async function enqueueReversalAction(
 // ---------------------------------------------------------------------------
 
 /**
+ * What the "annuler" button should act on, if anything.
+ *
+ * The candidate may be sitting in the outbox or already acknowledged and
+ * remembered in the confirmed ring — the operator does not experience those
+ * as different situations, and a count that synced quickly must not become
+ * un-undoable for it.
+ */
+export type UndoCandidate =
+  | { source: 'outbox'; clientActionId: string; direction: Direction; clientCreatedAtMs: number }
+  | { source: 'confirmed'; clientActionId: string; direction: Direction; clientCreatedAtMs: number };
+
+/**
  * The most recent count this pairing made that has not been undone and is
  * still actionable.
  *
@@ -190,10 +224,10 @@ export async function enqueueReversalAction(
  * count that belongs to a previous pairing, or that the server already
  * refused, would produce a reversal nobody can apply.
  */
-export async function getLastCountAction(owner: OutboxActionOwner | null): Promise<OutboxActionRecord | null> {
+export async function getLastCountAction(owner: OutboxActionOwner | null): Promise<UndoCandidate | null> {
   if (!owner) return null;
 
-  const actions = await localDb.outbox_actions.orderBy('createdAtMs').reverse().toArray();
+  const actions = await localDb.outbox_actions.toArray();
 
   const reversedTargets = new Set(
     actions
@@ -201,25 +235,62 @@ export async function getLastCountAction(owner: OutboxActionOwner | null): Promi
       .map((a) => a.targetClientActionId)
   );
 
+  const candidates: UndoCandidate[] = [];
+
   for (const action of actions) {
     if (action.type !== 'count') continue;
     if (action.sendState === 'quarantined' || action.sendState === 'rejected') continue;
-    if (action.owner?.deviceSessionId !== owner.deviceSessionId) continue;
+    if (!sameOwner(action.owner, owner)) continue;
     if (reversedTargets.has(action.clientActionId)) continue;
-    return action;
+    candidates.push({
+      source: 'outbox',
+      clientActionId: action.clientActionId,
+      direction: action.direction,
+      clientCreatedAtMs: action.clientCreatedAtMs,
+    });
   }
-  return null;
+
+  for (const confirmed of await getConfirmedActions(owner)) {
+    if (confirmed.reversedAtMs !== undefined) continue;
+    if (reversedTargets.has(confirmed.clientActionId)) continue;
+    candidates.push({
+      source: 'confirmed',
+      clientActionId: confirmed.clientActionId,
+      direction: confirmed.direction,
+      clientCreatedAtMs: confirmed.clientCreatedAtMs,
+    });
+  }
+
+  // Ordered by when the operator made the tap, so a queued action and an
+  // acknowledged one compare on the same axis.
+  candidates.sort((a, b) => b.clientCreatedAtMs - a.clientCreatedAtMs);
+  return candidates[0] ?? null;
 }
 
 /**
  * Everything still standing between this device and "fully synced",
- * including actions the engine will never send on its own.
+ * counting only what belongs to the identity currently paired.
  *
- * This is the number the heartbeat and the batch report, because it is the
- * one that must gate a normal `/close`: a device holding a rejected count is
- * not drained.
+ * This is the number the heartbeat and the batch report. Quarantined actions
+ * from a *previous* pairing are deliberately excluded: they are a real
+ * reconciliation problem, but they are not this session's, and counting them
+ * would let one device's abandoned queue block the closing of an event the
+ * current session has fully drained.
  */
-export async function getUnresolvedActionsCount(): Promise<number> {
+export async function getOwnerUnresolvedActionsCount(owner: OutboxActionOwner | null): Promise<number> {
+  if (!owner) return 0;
+  const actions = await localDb.outbox_actions.toArray();
+  return actions.filter((action) => sameOwner(action.owner, owner)).length;
+}
+
+/**
+ * Everything unresolved on this device, whoever made it.
+ *
+ * What the operator sees, as opposed to what the supervisor is told: a
+ * previous pairing's stranded counts still need a human, and hiding them
+ * locally would be how they get lost.
+ */
+export async function getLocalUnresolvedActionsCount(): Promise<number> {
   return localDb.outbox_actions.count();
 }
 
@@ -286,7 +357,8 @@ export async function flushOutbox(): Promise<FlushOutcome> {
   isFlushing = true;
 
   try {
-    const owner = await currentOwner();
+    const pairing = await currentPairing();
+    const owner = pairing?.owner ?? null;
 
     const candidates = await localDb.outbox_actions.orderBy('sequence').toArray();
     const retryable = candidates.filter(isRetryable);
@@ -304,7 +376,7 @@ export async function flushOutbox(): Promise<FlushOutcome> {
     await applyTransitions(quarantines);
 
     const batch = sendable.slice(0, 100);
-    if (batch.length === 0) return { kind: 'idle' };
+    if (batch.length === 0 || !pairing) return { kind: 'idle' };
 
     for (const action of batch) {
       await localDb.outbox_actions.update(action.clientActionId, {
@@ -332,10 +404,12 @@ export async function flushOutbox(): Promise<FlushOutcome> {
     );
 
     // What this device will still hold once this batch is acknowledged,
-    // assuming every action in it succeeds. Actions already parked as
-    // rejected or quarantined are *not* in the batch, so they stay counted
-    // here — and the server adds back whatever it refuses in this round.
-    const unresolvedBefore = await getUnresolvedActionsCount();
+    // assuming every action in it succeeds — counting only actions owned by
+    // the identity we are sending as. Actions already parked as rejected are
+    // in that number; a previous pairing's stranded queue is not, since it
+    // is not this session's to report. The server adds back whatever it
+    // refuses in this round.
+    const unresolvedBefore = await getOwnerUnresolvedActionsCount(owner);
     const unresolvedAfterBatch = Math.max(unresolvedBefore - batch.length, 0);
 
     let response: Response;
@@ -346,6 +420,11 @@ export async function flushOutbox(): Promise<FlushOutcome> {
         credentials: 'include',
         body: JSON.stringify({
           actions: payloadActions,
+          // The cookie says which session is authenticated; this says which
+          // session the actions were queued under. During a re-pairing the
+          // two can disagree, and the server refuses the batch rather than
+          // applying one device's counts as another's.
+          expectedDeviceSessionId: pairing.owner.deviceSessionId,
           pendingCount: unresolvedAfterBatch,
           appVersion: CLIENT_APP_VERSION,
         }),
@@ -360,17 +439,69 @@ export async function flushOutbox(): Promise<FlushOutcome> {
       return { kind: 'failed', errorCode };
     }
 
+    if (response.status === 401) {
+      // The device session is gone — revoked, or expired. No amount of
+      // retrying under these credentials will change that, and hammering
+      // the server every few seconds until someone re-pairs is exactly the
+      // loop this phase exists to remove. The actions are kept, out of
+      // auto-retry, for reconciliation.
+      await applyTransitions(
+        batch.map((a) => terminalSessionTransition(a, OUTBOX_LOCAL_ERROR_CODES.DEVICE_SESSION_INVALID))
+      );
+      notifyOutboxChanged();
+      return { kind: 'failed', errorCode: OUTBOX_LOCAL_ERROR_CODES.DEVICE_SESSION_INVALID };
+    }
+
+    if (response.status === 409 && (await isSessionMismatch(response))) {
+      // The server refused the whole batch: the authenticated cookie names
+      // a different session than the one these actions were queued under.
+      // That is the re-pairing window, and the right outcome is a
+      // quarantine — never a retry that would eventually land under the
+      // wrong identity.
+      await applyTransitions(
+        batch.map((a) => terminalSessionTransition(a, OUTBOX_LOCAL_ERROR_CODES.SESSION_MISMATCH_REFUSED))
+      );
+      notifyOutboxChanged();
+      return { kind: 'failed', errorCode: OUTBOX_LOCAL_ERROR_CODES.SESSION_MISMATCH_REFUSED };
+    }
+
     if (!response.ok) {
-      // An HTTP-level failure says nothing about individual actions: the
-      // server never reported per-action outcomes, so none of them may be
-      // treated as refused. They return to pending and the engine backs off.
+      // Anything else — 5xx, 429, a proxy error — says nothing about
+      // individual actions: the server never reported per-action outcomes,
+      // so none may be treated as refused. They return to pending and the
+      // engine backs off.
       const errorCode = `HTTP_${response.status}`;
       await applyTransitions(batch.map((a) => networkFailureTransition(a, errorCode)));
       return { kind: 'failed', errorCode };
     }
 
-    const data: BatchSyncResponse = await response.json();
-    const acknowledged: ActionAcknowledgment[] = data.acknowledged ?? [];
+    // A 200 whose body cannot be read as a batch response is an *uncertain*
+    // acknowledgment, not a success and not a refusal: the server may well
+    // have applied everything before the connection was cut mid-JSON. The
+    // actions go back to pending and idempotence covers the re-send.
+    let data: BatchSyncResponse;
+    try {
+      const parsed: unknown = await response.json();
+      if (!isBatchSyncResponse(parsed)) throw new Error('Batch response did not match the expected shape');
+      data = parsed;
+    } catch (err) {
+      const errorCode = OUTBOX_LOCAL_ERROR_CODES.INVALID_BATCH_RESPONSE;
+      await applyTransitions(batch.map((a) => networkFailureTransition(a, errorCode)));
+      console.debug('Batch response could not be read; treating it as an uncertain ACK:', err);
+      return { kind: 'failed', errorCode };
+    }
+
+    const acknowledged = data.acknowledged;
+    const byId = new Map(batch.map((a) => [a.clientActionId, a]));
+
+    // Remember the counts the server confirmed *before* deleting them, so
+    // undo survives the acknowledgment that removes them (SPEC §11.2).
+    for (const ack of acknowledged) {
+      if (ack.status !== 'applied' && ack.status !== 'duplicate') continue;
+      const action = byId.get(ack.clientActionId);
+      if (!action) continue;
+      await recordConfirmedAction(action, { spaceAId: pairing.spaceAId, spaceBId: pairing.spaceBId });
+    }
 
     await applyTransitions(acknowledged.map(acknowledgmentTransition));
 
@@ -381,11 +512,12 @@ export async function flushOutbox(): Promise<FlushOutcome> {
     await applyTransitions(unanswered.map((a) => networkFailureTransition(a, 'NO_ACKNOWLEDGMENT')));
 
     // A batch response carries the authoritative state too, and it goes
-    // through the same funnel as bootstrap and SSE. `owner` is non-null
-    // here: an action only becomes sendable once its owner matched.
-    if (data.state && owner) {
-      await persistAuthoritativeState(owner.eventId, data.state, 'batch');
+    // through the same funnel as bootstrap and SSE.
+    if (data.state) {
+      await persistAuthoritativeState(pairing.owner.eventId, data.state, 'batch');
     }
+
+    notifyOutboxChanged();
 
     const applied = acknowledged.filter((a) => a.status === 'applied' || a.status === 'duplicate').length;
     const rejected = acknowledged.filter((a) => a.status === 'rejected').length;
@@ -393,4 +525,34 @@ export async function flushOutbox(): Promise<FlushOutcome> {
   } finally {
     isFlushing = false;
   }
+}
+
+/** Whether a 409 is the server refusing the batch on session identity. */
+async function isSessionMismatch(response: Response): Promise<boolean> {
+  try {
+    const problem: unknown = await response.clone().json();
+    return (
+      typeof problem === 'object' &&
+      problem !== null &&
+      (problem as { code?: unknown }).code === 'DEVICE_SESSION_MISMATCH'
+    );
+  } catch (err) {
+    console.debug('Could not read the 409 problem details:', err);
+    return false;
+  }
+}
+
+/**
+ * Structural check on a batch response.
+ *
+ * A truncated or proxy-mangled 200 can parse as JSON and still be missing
+ * the acknowledgments; treating that as "nothing was acknowledged" would
+ * quietly bounce every action back through NO_ACKNOWLEDGMENT instead of
+ * naming it as the uncertain ACK it is.
+ */
+function isBatchSyncResponse(value: unknown): value is BatchSyncResponse {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { acknowledged?: unknown; state?: unknown };
+  if (!Array.isArray(candidate.acknowledged)) return false;
+  return typeof candidate.state === 'object' && candidate.state !== null;
 }

@@ -1,10 +1,12 @@
-import { test, expect, Browser, Page, Route } from '@playwright/test';
+import { test, expect, Browser, Page } from '@playwright/test';
 import {
   getAdminSession,
   createDraftEventWithMainCheckpoint,
   addInternalTransferCheckpoint,
   startEvent,
   beginClosingEvent,
+  forceCloseEvent,
+  reopenEvent,
   createDeviceInviteToken,
   getEventState,
   getEventDevices,
@@ -160,38 +162,41 @@ test.describe('Phase 6 — acceptation', () => {
       await createDeviceInviteToken(session, festival.eventId, festival.mainCheckpointId)
     );
 
-    // The topology is locked outside `draft` (a Phase 4 invariant), so no
-    // genuinely fixable per-action refusal can be provoked against a live
-    // event. The refusal is injected into the response instead: what is
-    // under test here is the client's handling of a `rejected`
-    // acknowledgment, and that part is exercised for real.
+    // The refusal below is the server's own. No acknowledgment is rewritten
+    // anywhere in this test: a tap is made while the event is live and with
+    // no network, the event is then closed for good, and the device
+    // reconnects to a server that will not accept it.
     let batchRequests = 0;
-    const rejectAll = async (route: Route) => {
+    await page.route(BATCH_URL, async (route) => {
       batchRequests += 1;
-      const response = await route.fetch();
-      const body = await response.json();
-      body.acknowledged = body.acknowledged.map((ack: { clientActionId: string }) => ({
-        clientActionId: ack.clientActionId,
-        status: 'rejected',
-        errorCode: 'EVENT_NOT_LIVE',
-      }));
-      await route.fulfill({ response, body: JSON.stringify(body) });
-    };
-    await page.route(BATCH_URL, rejectAll);
+      await route.continue();
+    });
 
+    await page.context().setOffline(true);
     await page.getByRole('button', { name: /ENTRÉE/ }).click();
+    await expect(page.locator('span.text-5xl.font-black')).toHaveText('1');
+
+    await beginClosingEvent(session, festival.eventId);
+    await forceCloseEvent(session, festival.eventId, 'Appareil hors ligne, fermeture forcée');
+    await page.context().setOffline(false);
 
     // It surfaces as an explicit operational state, translated for the
     // operator, with no destructive "forget" affordance.
-    await expect(page.getByText(/À RÉGULARISER \(1\)/)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/À RÉGULARISER \(1\)/)).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/n’a pas été accepté par le serveur/)).toBeVisible();
     await expect(page.getByText(/n’acceptait plus de comptage/)).toBeVisible();
     await expect(page.getByRole('button', { name: /Oublier|Supprimer/i })).toHaveCount(0);
 
+    expect((await readOutbox(page))[0].lastErrorCode).toBe('EVENT_NOT_LIVE');
+
+    // A refusal the server pronounced is not occupancy: the gauge drops
+    // back to the authoritative 0 rather than keeping the optimistic +1.
+    await expect(page.locator('span.text-5xl.font-black')).toHaveText('0');
+
     // And it is not hammered at the server while it waits for a human.
     const afterFirstRound = batchRequests;
-    await page.waitForTimeout(6_000);
-    expect(batchRequests - afterFirstRound).toBeLessThanOrEqual(1);
+    await page.waitForTimeout(8_000);
+    expect(batchRequests - afterFirstRound).toBe(0);
 
     // It still counts as unresolved for the supervisor, so this device is
     // not drained and a normal `/close` must not pass.
@@ -201,17 +206,27 @@ test.describe('Phase 6 — acceptation', () => {
           const devices = await getEventDevices(session, festival.eventId);
           return devices[0]?.lastPendingCount;
         },
-        { timeout: 25_000 }
+        { timeout: 30_000 }
       )
       .toBeGreaterThanOrEqual(1);
 
-    // The cause is addressed, then the operator retries explicitly.
-    await page.unroute(BATCH_URL, rejectAll);
+    // The cause is genuinely addressed — the event is reopened — and only
+    // then does the operator's explicit retry resolve it.
+    await reopenEvent(session, festival.eventId, 'Régularisation d’un comptage terrain');
     await page.getByRole('button', { name: /Réessayer/ }).click();
 
     await waitForDrained(page);
-    await expect(page.getByText(/EN LIGNE/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/EN LIGNE/)).toBeVisible({ timeout: 20_000 });
     expect((await occupancies(session, festival.eventId))[festival.siteSpaceId]).toBe(1);
+    await expect
+      .poll(
+        async () => {
+          const devices = await getEventDevices(session, festival.eventId);
+          return devices[0]?.lastPendingCount;
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(0);
 
     await page.context().close();
   });

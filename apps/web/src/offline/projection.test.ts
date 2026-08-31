@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CompactEventState, OutboxActionRecord, OutboxActionOwner } from '@paxflux/shared';
+import {
+  CompactEventState,
+  ConfirmedActionRecord,
+  OutboxActionRecord,
+  OutboxActionOwner,
+} from '@paxflux/shared';
 import { projectPendingActions, projectedSpaceOccupancy } from './projection.js';
 
 const EXTERNAL = 'space-exterieur';
@@ -199,5 +204,86 @@ describe('projectedSpaceOccupancy', () => {
     const projection = projectPendingActions(state, BOUNDARY, []);
 
     expect(projectedSpaceOccupancy(state, 'space-unknown', projection)).toBeNull();
+  });
+});
+
+describe('projectPendingActions — reversals of confirmed counts', () => {
+  function confirmedCount(
+    id: string,
+    direction: 'a_to_b' | 'b_to_a',
+    endpoints: { spaceAId: string; spaceBId: string }
+  ): ConfirmedActionRecord {
+    return {
+      clientActionId: id,
+      type: 'count',
+      direction,
+      owner: OWNER,
+      spaceAId: endpoints.spaceAId,
+      spaceBId: endpoints.spaceBId,
+      clientCreatedAtMs: 1_700_000_000_000,
+      confirmedAtMs: 1_700_000_000_500,
+    };
+  }
+
+  function reversalTargeting(targetId: string): OutboxActionRecord {
+    const sequence = nextSequence++;
+    return {
+      clientActionId: `reversal-of-${targetId}`,
+      sequence,
+      type: 'reversal',
+      targetClientActionId: targetId,
+      clientCreatedAtMs: 1_700_000_000_000 + sequence,
+      attempts: 0,
+      sendState: 'pending',
+      createdAtMs: 1_700_000_000_000 + sequence,
+      owner: OWNER,
+    };
+  }
+
+  it('projects the undo of a count the server already confirmed', () => {
+    // The entry is inside the authoritative occupancy already, so the
+    // reversal's own −1 is a real delta on top of it, not a double count.
+    const state = stateWith({ [SITE]: 1 });
+    const confirmed = [confirmedCount('confirmed-entry', 'a_to_b', BOUNDARY)];
+
+    const result = projectPendingActions(state, BOUNDARY, [reversalTargeting('confirmed-entry')], confirmed);
+
+    expect(result.globalDelta).toBe(-1);
+    expect(result.projectedEventOccupancy).toBe(0);
+    expect(result.unprojectableActionIds).toEqual([]);
+  });
+
+  it('projects the undo of a confirmed internal transfer on both leaves', () => {
+    const state = stateWith({ [SITE]: 7, [VIP]: 1 });
+    const confirmed = [confirmedCount('confirmed-transfer', 'a_to_b', INTERNAL)];
+
+    const result = projectPendingActions(state, INTERNAL, [reversalTargeting('confirmed-transfer')], confirmed);
+
+    expect(result.globalDelta).toBe(0);
+    expect(result.spaceDeltas.get(VIP)).toBe(-1);
+    expect(result.spaceDeltas.get(SITE)).toBe(1);
+  });
+
+  it('uses the endpoints the confirmed count was made across, not the current ones', () => {
+    // The device has since been re-paired onto the internal checkpoint, but
+    // the count it is undoing was made at the boundary. Projecting it with
+    // today's endpoints would move the wrong leaf.
+    const state = stateWith({ [SITE]: 1 });
+    const confirmed = [confirmedCount('confirmed-entry', 'a_to_b', BOUNDARY)];
+
+    const result = projectPendingActions(state, INTERNAL, [reversalTargeting('confirmed-entry')], confirmed);
+
+    expect(result.spaceDeltas.get(SITE)).toBe(-1);
+    expect(result.spaceDeltas.has(VIP)).toBe(false);
+    expect(result.globalDelta).toBe(-1);
+  });
+
+  it('still reports a reversal whose target is neither queued nor confirmed', () => {
+    const orphan = reversalTargeting('never-heard-of-it');
+
+    const result = projectPendingActions(stateWith({ [SITE]: 1 }), BOUNDARY, [orphan], []);
+
+    expect(result.globalDelta).toBe(0);
+    expect(result.unprojectableActionIds).toEqual([orphan.clientActionId]);
   });
 });

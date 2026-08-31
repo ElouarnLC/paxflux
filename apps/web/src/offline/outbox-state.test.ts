@@ -10,6 +10,7 @@ import {
   networkFailureTransition,
   ownershipTransition,
   recoveryTransition,
+  terminalSessionTransition,
   sameOwner,
 } from './outbox-state.js';
 
@@ -205,5 +206,45 @@ describe('describeOutboxError', () => {
 
   it('keeps an unknown code visible instead of hiding it behind a generic message', () => {
     expect(describeOutboxError('SOME_NEW_CODE')).toContain('SOME_NEW_CODE');
+  });
+});
+
+describe('terminalSessionTransition', () => {
+  it('parks an action whose device session is gone, out of auto-retry', () => {
+    const transition = terminalSessionTransition(
+      action({ sendState: 'sending' }),
+      'DEVICE_SESSION_INVALID'
+    );
+
+    expect(transition).toMatchObject({
+      kind: 'update',
+      changes: { sendState: 'quarantined', lastErrorCode: 'DEVICE_SESSION_INVALID' },
+    });
+    if (transition.kind === 'update') {
+      // The whole point: the engine must stop asking a dead session.
+      expect(isRetryable({ sendState: transition.changes.sendState as OutboxSendState })).toBe(false);
+      // But it is still unresolved, and still needs a human.
+      expect(needsReconciliation({ sendState: transition.changes.sendState as OutboxSendState })).toBe(true);
+    }
+  });
+
+  it('parks an action the server refused on session identity', () => {
+    expect(
+      terminalSessionTransition(action({ sendState: 'sending' }), 'SESSION_MISMATCH_REFUSED')
+    ).toMatchObject({
+      changes: { sendState: 'quarantined', lastErrorCode: 'SESSION_MISMATCH_REFUSED' },
+    });
+  });
+
+  it('never deletes: a refused count is not garbage', () => {
+    expect(terminalSessionTransition(action(), 'DEVICE_SESSION_INVALID').kind).toBe('update');
+  });
+});
+
+describe('describeOutboxError — identity refusals', () => {
+  it('explains a dead device session and a mismatched one distinctly', () => {
+    expect(describeOutboxError('DEVICE_SESSION_INVALID')).toMatch(/nouvel appairage/i);
+    expect(describeOutboxError('SESSION_MISMATCH_REFUSED')).toMatch(/autre appairage/i);
+    expect(describeOutboxError('DEVICE_SESSION_MISMATCH')).toMatch(/autre appairage/i);
   });
 });

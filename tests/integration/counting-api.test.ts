@@ -9,6 +9,7 @@ import {
   checkpoints,
   deviceSessions,
   spaceState,
+  movements,
 } from '../../apps/server/src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import crypto from 'node:crypto';
@@ -149,6 +150,7 @@ describe('Counting API & Offline Batch Synchronization', () => {
       },
       payload: {
         actions,
+        expectedDeviceSessionId: deviceSessionId,
         pendingCount: 0,
         appVersion: '1.0.0',
       },
@@ -190,6 +192,7 @@ describe('Counting API & Offline Batch Synchronization', () => {
       },
       payload: {
         actions: batch,
+        expectedDeviceSessionId: deviceSessionId,
         pendingCount: 0,
       },
     });
@@ -200,6 +203,59 @@ describe('Counting API & Offline Batch Synchronization', () => {
     expect(body.acknowledged[0].status).toBe('applied');
     expect(body.acknowledged[1].status).toBe('applied');
     expect(body.state.eventOccupancy).toBe(0);
+  });
+
+  it('Refuses the whole batch when the asserted device session is not the authenticated one', async () => {
+    // The cookie authenticates session A. The client believes it is still
+    // sending under some other session — exactly the window a re-pairing
+    // opens, where the browser already holds the new cookie while the
+    // client's stored configuration still describes the previous device.
+    const action = {
+      clientActionId: crypto.randomUUID(),
+      sequence: 1,
+      type: 'count' as const,
+      direction: 'a_to_b' as const,
+      clientCreatedAtMs: Date.now(),
+    };
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/device/actions/batch',
+      headers: { cookie: `paxflux_device_session=${rawDeviceToken}` },
+      payload: {
+        actions: [action],
+        expectedDeviceSessionId: crypto.randomUUID(),
+        pendingCount: 3,
+        appVersion: '9.9.9',
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('DEVICE_SESSION_MISMATCH');
+
+    // Nothing was applied: no movement, no occupancy change.
+    const allMovements = await db.select().from(movements).where(eq(movements.eventId, eventId)).all();
+    expect(allMovements).toHaveLength(0);
+    const siteState = await db.select().from(spaceState).where(eq(spaceState.spaceId, siteSpaceId)).get();
+    expect(siteState?.occupancy ?? 0).toBe(0);
+
+    // And the session itself was not touched: a batch that does not belong
+    // to this device says nothing truthful about its state.
+    const deviceRow = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
+    expect(deviceRow?.lastPendingCount).toBe(0);
+    expect(deviceRow?.appVersion ?? null).not.toBe('9.9.9');
+  });
+
+  it('Rejects a batch that asserts no device session at all', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/device/actions/batch',
+      headers: { cookie: `paxflux_device_session=${rawDeviceToken}` },
+      payload: { actions: [], pendingCount: 0 },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('VALIDATION_ERROR');
   });
 
   it('Batch is idempotent on repeat submissions', async () => {
@@ -216,7 +272,7 @@ describe('Counting API & Offline Batch Synchronization', () => {
       method: 'POST',
       url: '/api/v1/device/actions/batch',
       headers: { cookie: `paxflux_device_session=${rawDeviceToken}` },
-      payload: { actions: [action1] },
+      payload: { actions: [action1], expectedDeviceSessionId: deviceSessionId },
     });
     expect(res1.json().acknowledged[0].status).toBe('applied');
     expect(res1.json().state.eventOccupancy).toBe(1);
@@ -227,7 +283,7 @@ describe('Counting API & Offline Batch Synchronization', () => {
         method: 'POST',
         url: '/api/v1/device/actions/batch',
         headers: { cookie: `paxflux_device_session=${rawDeviceToken}` },
-        payload: { actions: [action1] },
+        payload: { actions: [action1], expectedDeviceSessionId: deviceSessionId },
       });
       // A replay is acknowledged as `duplicate`, not `applied`. Both are
       // successes and a client deletes the action on either, but the

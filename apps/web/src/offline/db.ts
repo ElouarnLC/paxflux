@@ -2,7 +2,9 @@ import Dexie, { Table } from 'dexie';
 import {
   OutboxActionRecord,
   CompactEventState,
+  ConfirmedActionRecord,
   DeviceBootstrapResponse,
+  EventStatus,
   OUTBOX_LOCAL_ERROR_CODES,
 } from '@paxflux/shared';
 
@@ -29,6 +31,19 @@ export interface EventStateRecord {
   eventId: string;
   state: CompactEventState;
   updatedAtMs: number;
+  /**
+   * Latest lifecycle status seen for this event, and the server timestamp
+   * that carried it.
+   *
+   * Kept apart from `state.eventStatus` because a lifecycle transition does
+   * **not** bump `event.version`: a `state` frame minted before the
+   * transition carries the same version and would otherwise look equally
+   * fresh. Comparing server timestamps is what makes `live → closing`
+   * survive a reload, and what stops a late in-flight response from
+   * resurrecting `live`.
+   */
+  lifecycleStatus?: EventStatus;
+  lifecycleAtMs?: number;
 }
 
 export interface MetaRecord {
@@ -46,6 +61,7 @@ interface LegacyDeviceCacheRecord {
 
 export class PaxFluxIndexedDB extends Dexie {
   outbox_actions!: Table<OutboxActionRecord, string>;
+  confirmed_actions!: Table<ConfirmedActionRecord, string>;
   device_config!: Table<DeviceConfigRecord, string>;
   event_state!: Table<EventStateRecord, string>;
   meta!: Table<MetaRecord, string>;
@@ -99,7 +115,6 @@ export class PaxFluxIndexedDB extends Dexie {
 
         const legacyRows = await tx.table<LegacyDeviceCacheRecord>('device_cache').toArray();
         const bootstrapRow = legacyRows.find((row) => row.key === 'bootstrap_config');
-        const eventId = bootstrapRow?.bootstrap?.event.id ?? null;
 
         if (bootstrapRow?.bootstrap) {
           await tx.table<DeviceConfigRecord>('device_config').put({
@@ -109,37 +124,55 @@ export class PaxFluxIndexedDB extends Dexie {
           });
         }
 
-        // Pick the newest of the two competing sources by the authoritative
-        // `version` counter, not by the local write time.
-        if (eventId) {
-          const candidates = legacyRows
-            .map((row) => ({ state: row.lastState, updatedAtMs: row.updatedAtMs }))
-            .filter((c): c is { state: CompactEventState; updatedAtMs: number } => Boolean(c.state));
-          candidates.push(
-            ...(bootstrapRow?.bootstrap
-              ? [{ state: bootstrapRow.bootstrap.state, updatedAtMs: bootstrapRow.updatedAtMs }]
-              : [])
-          );
+        // The v1 cache stored a state under its own key with no event id
+        // attached, so a device that had been paired to an earlier event
+        // could be carrying that event's state — with a *higher* version,
+        // since version counters are per-event and mean nothing across
+        // them. Taking the highest version and stamping the current
+        // event's id on it would show one event's occupancy under another.
+        //
+        // Provenance is checked instead, and it is provable: space ids are
+        // UUIDs, so a state that contains both of this pairing's checkpoint
+        // endpoints belongs to this pairing's event. Anything unproven is
+        // discarded in favour of the bootstrap's own state, which is known
+        // to belong to it.
+        if (bootstrapRow?.bootstrap) {
+          const bootstrap = bootstrapRow.bootstrap;
+          const belongsToThisEvent = (state: CompactEventState): boolean => {
+            const ids = new Set(state.spaces.map((space) => space.id));
+            return ids.has(bootstrap.checkpoint.spaceAId) && ids.has(bootstrap.checkpoint.spaceBId);
+          };
 
-          let newest: { state: CompactEventState; updatedAtMs: number } | null = null;
+          const candidates: Array<{ state: CompactEventState; updatedAtMs: number }> = [
+            { state: bootstrap.state, updatedAtMs: bootstrapRow.updatedAtMs },
+          ];
+          for (const row of legacyRows) {
+            if (row.lastState && belongsToThisEvent(row.lastState)) {
+              candidates.push({ state: row.lastState, updatedAtMs: row.updatedAtMs });
+            } else if (row.lastState) {
+              console.debug(
+                `Discarding a legacy cached state whose provenance could not be proven (key: ${row.key})`
+              );
+            }
+          }
+
+          let newest = candidates[0];
           for (const candidate of candidates) {
             if (
-              !newest ||
               candidate.state.version > newest.state.version ||
-              (candidate.state.version === newest.state.version && candidate.updatedAtMs > newest.updatedAtMs)
+              (candidate.state.version === newest.state.version &&
+                candidate.state.serverTimeMs > newest.state.serverTimeMs)
             ) {
               newest = candidate;
             }
           }
 
-          if (newest) {
-            await tx.table<EventStateRecord>('event_state').put({
-              key: 'current',
-              eventId,
-              state: newest.state,
-              updatedAtMs: newest.updatedAtMs,
-            });
-          }
+          await tx.table<EventStateRecord>('event_state').put({
+            key: 'current',
+            eventId: bootstrap.event.id,
+            state: newest.state,
+            updatedAtMs: newest.updatedAtMs,
+          });
         }
       });
 
@@ -147,6 +180,12 @@ export class PaxFluxIndexedDB extends Dexie {
     // first and dropped second, never the other way round.
     this.version(3).stores({
       device_cache: null,
+    });
+
+    // v4: a small ring of acknowledged counts, so undo survives the
+    // acknowledgment that removes the action from the outbox (SPEC §11.2).
+    this.version(4).stores({
+      confirmed_actions: 'clientActionId, confirmedAtMs, owner.deviceSessionId',
     });
   }
 }

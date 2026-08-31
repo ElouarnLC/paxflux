@@ -362,6 +362,7 @@ describe('Event lifecycle transitions & preflight', () => {
               clientCreatedAtMs: Date.now(),
             },
           ],
+          expectedDeviceSessionId: deviceSessionId,
           pendingCount: 0,
           appVersion: '1.0.0',
         },

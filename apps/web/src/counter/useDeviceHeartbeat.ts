@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEVICE_HEARTBEAT_INTERVAL_MS } from '@paxflux/shared';
 import { apiFetch } from '../api/client.js';
-import { getUnresolvedActionsCount } from '../offline/outbox.js';
+import { getOwnerUnresolvedActionsCount } from '../offline/outbox.js';
+import { currentOwner } from '../offline/snapshot.js';
 import { CLIENT_APP_VERSION } from '../version.js';
 
 export type HeartbeatState = 'idle' | 'running' | 'session-invalid';
@@ -41,11 +42,13 @@ export function useDeviceHeartbeat(enabled: boolean): HeartbeatState {
 
     const beat = async () => {
       try {
-        // Unresolved, not retryable: a device still holding a refused or
-        // quarantined count is not drained, and reporting only what the
-        // engine can still send would tell the supervisor otherwise — and
-        // let a normal `/close` through.
-        const pendingCount = await getUnresolvedActionsCount();
+        // Unresolved, not retryable: a device still holding a refused count
+        // is not drained, and reporting only what the engine can still send
+        // would tell the supervisor otherwise — and let a normal `/close`
+        // through. Scoped to the identity currently paired, so a previous
+        // pairing's stranded queue (visible locally, and a real problem)
+        // cannot block the closing of an event this session has drained.
+        const pendingCount = await getOwnerUnresolvedActionsCount(await currentOwner());
         // `lastClientSequence` is intentionally omitted: the local model
         // tracks the next sequence to assign, not the last one the server
         // acknowledged, and reporting the former as the latter would tell

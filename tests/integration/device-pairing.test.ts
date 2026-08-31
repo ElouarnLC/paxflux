@@ -394,7 +394,7 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
         method: 'POST',
         url: '/api/v1/device/actions/batch',
         headers: { cookie: deviceCookie },
-        payload: { actions: [], pendingCount: 0 },
+        payload: { actions: [], expectedDeviceSessionId: crypto.randomUUID(), pendingCount: 0 },
       });
       expect(batch.statusCode).toBe(401);
     });

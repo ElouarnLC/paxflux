@@ -1,4 +1,4 @@
-import { CompactEventState, OutboxActionRecord } from '@paxflux/shared';
+import { CompactEventState, ConfirmedActionRecord, OutboxActionRecord } from '@paxflux/shared';
 
 /**
  * Optimistic projection of unacknowledged local actions onto the last
@@ -58,6 +58,16 @@ interface Movement {
   toSpaceId: string;
 }
 
+/** The movement the server records for a count in this direction. */
+function movementForCount(
+  direction: 'a_to_b' | 'b_to_a',
+  endpoints: ProjectionCheckpoint
+): Movement {
+  return direction === 'a_to_b'
+    ? { fromSpaceId: endpoints.spaceAId, toSpaceId: endpoints.spaceBId }
+    : { fromSpaceId: endpoints.spaceBId, toSpaceId: endpoints.spaceAId };
+}
+
 /**
  * Resolves an action to the movement the server would record for it, or
  * `null` when it cannot be resolved locally.
@@ -65,33 +75,50 @@ interface Movement {
 function resolveMovement(
   action: OutboxActionRecord,
   checkpoint: ProjectionCheckpoint,
-  byId: Map<string, OutboxActionRecord>
+  byId: Map<string, OutboxActionRecord>,
+  confirmedById: Map<string, ConfirmedActionRecord>
 ): Movement | null {
   if (action.type === 'count') {
-    return action.direction === 'a_to_b'
-      ? { fromSpaceId: checkpoint.spaceAId, toSpaceId: checkpoint.spaceBId }
-      : { fromSpaceId: checkpoint.spaceBId, toSpaceId: checkpoint.spaceAId };
+    return movementForCount(action.direction, checkpoint);
   }
 
-  // A reversal inverts the movement it targets. The target must still be in
-  // the local set: once the original has been acknowledged and deleted, its
-  // effect is already inside the authoritative state, and the reversal's own
-  // effect only becomes visible when the server applies it.
-  const target = byId.get(action.targetClientActionId);
-  if (!target || target.type !== 'count') return null;
+  // A reversal inverts the movement it targets.
+  //
+  // The target is usually still queued locally. When it is not, it may have
+  // been acknowledged and deleted — in which case its effect is already
+  // inside the authoritative state, and the reversal's own −1/+1 is a real,
+  // projectable delta on top of it. A target that is neither queued nor
+  // remembered as confirmed cannot be resolved at all, and saying so is
+  // better than guessing a direction.
+  const queued = byId.get(action.targetClientActionId);
+  if (queued && queued.type === 'count') {
+    const original = movementForCount(queued.direction, checkpoint);
+    return { fromSpaceId: original.toSpaceId, toSpaceId: original.fromSpaceId };
+  }
 
-  const original = resolveMovement(target, checkpoint, byId);
-  if (!original) return null;
-  return { fromSpaceId: original.toSpaceId, toSpaceId: original.fromSpaceId };
+  const confirmed = confirmedById.get(action.targetClientActionId);
+  if (confirmed) {
+    // Projected across the endpoints as they stood when the count was made,
+    // not today's — a re-pairing could have moved this device elsewhere.
+    const original = movementForCount(confirmed.direction, {
+      spaceAId: confirmed.spaceAId,
+      spaceBId: confirmed.spaceBId,
+    });
+    return { fromSpaceId: original.toSpaceId, toSpaceId: original.fromSpaceId };
+  }
+
+  return null;
 }
 
 export function projectPendingActions(
   state: CompactEventState,
   checkpoint: ProjectionCheckpoint,
-  actions: OutboxActionRecord[]
+  actions: OutboxActionRecord[],
+  confirmed: ConfirmedActionRecord[] = []
 ): ProjectionResult {
   const kindById = new Map(state.spaces.map((s) => [s.id, s.kind]));
   const byId = new Map(actions.map((a) => [a.clientActionId, a]));
+  const confirmedById = new Map(confirmed.map((c) => [c.clientActionId, c]));
 
   const spaceDeltas = new Map<string, number>();
   const unprojectableActionIds: string[] = [];
@@ -103,7 +130,7 @@ export function projectPendingActions(
   };
 
   for (const action of actions) {
-    const movement = resolveMovement(action, checkpoint, byId);
+    const movement = resolveMovement(action, checkpoint, byId, confirmedById);
     if (!movement) {
       unprojectableActionIds.push(action.clientActionId);
       continue;

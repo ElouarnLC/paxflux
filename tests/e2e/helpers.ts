@@ -245,3 +245,11 @@ export async function adjustSpaceOccupancy(
 export async function closeEvent(session: AdminSession, eventId: string) {
   return adminApi(session, 'POST', `/api/v1/events/${eventId}/close`);
 }
+
+export async function forceCloseEvent(session: AdminSession, eventId: string, reason = 'Fermeture forcée E2E') {
+  return adminApi(session, 'POST', `/api/v1/events/${eventId}/force-close`, { reason });
+}
+
+export async function reopenEvent(session: AdminSession, eventId: string, reason = 'Réouverture E2E') {
+  return adminApi(session, 'POST', `/api/v1/events/${eventId}/reopen`, { reason });
+}
