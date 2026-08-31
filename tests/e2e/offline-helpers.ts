@@ -199,3 +199,35 @@ export async function displayedOccupancy(page: Page): Promise<number> {
 export function uuid(): string {
   return crypto.randomUUID();
 }
+
+/** The device session id this page is currently paired as, per the server. */
+export async function readDeviceSessionId(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const res = await fetch('/api/v1/device/bootstrap', { credentials: 'include' });
+    if (!res.ok) throw new Error(`bootstrap failed: ${res.status}`);
+    const bootstrap = await res.json();
+    return bootstrap.deviceSession.id as string;
+  });
+}
+
+/** The stored pairing configuration, for asserting on a pairing handoff. */
+export async function readDeviceConfigRecord(page: Page): Promise<Record<string, unknown> | null> {
+  return page.evaluate(async (dbName) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(dbName);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    if (!db.objectStoreNames.contains('device_config')) {
+      db.close();
+      return null;
+    }
+    const record = await new Promise<unknown>((resolve, reject) => {
+      const req = db.transaction('device_config', 'readonly').objectStore('device_config').get('current');
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return record as Record<string, unknown> | null;
+  }, DB_NAME);
+}

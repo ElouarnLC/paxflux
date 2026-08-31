@@ -48,14 +48,32 @@ export function useDeviceHeartbeat(enabled: boolean): HeartbeatState {
         // through. Scoped to the identity currently paired, so a previous
         // pairing's stranded queue (visible locally, and a real problem)
         // cannot block the closing of an event this session has drained.
-        const pendingCount = await getOwnerUnresolvedActionsCount(await currentOwner());
+        const owner = await currentOwner();
+        if (!owner) {
+          // Nothing is paired — or a pairing is in flight and its
+          // configuration has not arrived. There is no identity to report
+          // as, and reporting as the previous one is exactly the mistake
+          // this guards against.
+          if (!cancelled) timer = setTimeout(beat, DEVICE_HEARTBEAT_INTERVAL_MS);
+          return;
+        }
+
+        const pendingCount = await getOwnerUnresolvedActionsCount(owner);
         // `lastClientSequence` is intentionally omitted: the local model
         // tracks the next sequence to assign, not the last one the server
         // acknowledged, and reporting the former as the latter would tell
         // the supervisor something the client cannot actually vouch for.
         await apiFetch('/api/v1/device/heartbeat', {
           method: 'POST',
-          body: JSON.stringify({ pendingCount, appVersion: CLIENT_APP_VERSION }),
+          body: JSON.stringify({
+            pendingCount,
+            // The cookie authenticates a session; this names the one this
+            // report is about. In a re-pairing window they disagree, and
+            // the server refuses rather than writing one device's pending
+            // count onto another's session.
+            expectedDeviceSessionId: owner.deviceSessionId,
+            appVersion: CLIENT_APP_VERSION,
+          }),
         });
       } catch (err) {
         const status = typeof err === 'object' && err !== null && 'status' in err ? (err as { status: number }).status : 0;

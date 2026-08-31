@@ -49,34 +49,57 @@ export const BatchSyncRequestSchema = z.object({
 });
 export type BatchSyncRequest = z.infer<typeof BatchSyncRequestSchema>;
 
-export interface ActionAcknowledgment {
-  clientActionId: string;
-  status: 'applied' | 'duplicate' | 'rejected';
-  movementId?: number;
-  errorCode?: string;
-}
+/**
+ * Runtime schemas for everything a device reads back from the server.
+ *
+ * These are not documentation: a batch response is the only thing that
+ * decides whether a queued count is deleted, and a body that merely *parses*
+ * as JSON is not evidence that it says what it appears to say. A truncated
+ * or proxy-mangled 200 can easily yield `{ acknowledged: [{}], state: {} }`,
+ * which a shape check based on `typeof` accepts and which would then delete
+ * nothing, acknowledge nothing, and quietly persist an empty snapshot.
+ *
+ * The types below are inferred from the schemas so the two cannot drift.
+ */
 
-export interface CompactSpaceState {
-  id: string;
-  name: string;
-  kind: 'leaf' | 'aggregate' | 'external';
-  occupancy: number;
-  capacity: number | null;
-}
+export const AcknowledgmentStatusSchema = z.enum(['applied', 'duplicate', 'rejected']);
 
-export interface CompactEventState {
-  version: number;
-  eventStatus: 'draft' | 'live' | 'closing' | 'closed' | 'archived';
-  eventOccupancy: number;
-  eventCapacity: number;
-  spaces: CompactSpaceState[];
-  serverTimeMs: number;
-}
+export const ActionAcknowledgmentSchema = z.object({
+  clientActionId: z.string().uuid(),
+  status: AcknowledgmentStatusSchema,
+  movementId: z.number().int().positive().optional(),
+  errorCode: z.string().min(1).max(120).optional(),
+});
+export type ActionAcknowledgment = z.infer<typeof ActionAcknowledgmentSchema>;
 
-export interface BatchSyncResponse {
-  acknowledged: ActionAcknowledgment[];
-  state: CompactEventState;
-}
+export const SpaceKindSchema = z.enum(['leaf', 'aggregate', 'external']);
+
+export const CompactSpaceStateSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  kind: SpaceKindSchema,
+  occupancy: z.number().int(),
+  capacity: z.number().int().nullable(),
+});
+export type CompactSpaceState = z.infer<typeof CompactSpaceStateSchema>;
+
+export const EventStatusSchema = z.enum(['draft', 'live', 'closing', 'closed', 'archived']);
+
+export const CompactEventStateSchema = z.object({
+  version: z.number().int().nonnegative(),
+  eventStatus: EventStatusSchema,
+  eventOccupancy: z.number().int(),
+  eventCapacity: z.number().int(),
+  spaces: z.array(CompactSpaceStateSchema),
+  serverTimeMs: z.number().int().positive(),
+});
+export type CompactEventState = z.infer<typeof CompactEventStateSchema>;
+
+export const BatchSyncResponseSchema = z.object({
+  acknowledged: z.array(ActionAcknowledgmentSchema),
+  state: CompactEventStateSchema,
+});
+export type BatchSyncResponse = z.infer<typeof BatchSyncResponseSchema>;
 
 /**
  * Where a queued action stands in its journey to the server.

@@ -68,15 +68,10 @@ export async function getConfirmedAction(clientActionId: string): Promise<Confir
   return localDb.confirmed_actions.get(clientActionId);
 }
 
-/**
- * Marks a confirmed count as having had its reversal queued, so undo does
- * not offer the same count twice.
- */
-export async function markConfirmedReversed(clientActionId: string): Promise<void> {
-  const record = await localDb.confirmed_actions.get(clientActionId);
-  if (!record || record.reversedAtMs !== undefined) return;
-  await localDb.confirmed_actions.put({ ...record, reversedAtMs: Date.now() });
-}
+// Marking a confirmed count as reversed is deliberately *not* exposed here:
+// it may only happen inside the same Dexie transaction that queues the
+// reversal (see `enqueueReversalAction`). Stamping it separately would open
+// a window where the count is neither undone nor undoable.
 
 /**
  * Drops everything this identity did not produce.

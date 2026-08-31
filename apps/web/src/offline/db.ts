@@ -14,7 +14,23 @@ import {
  */
 export interface DeviceConfigRecord {
   key: 'current';
-  bootstrap: DeviceBootstrapResponse;
+  /**
+   * Absent while a pairing is in flight.
+   *
+   * The moment `/device/pair` succeeds the browser holds a new session
+   * cookie, and the previous configuration stops describing this device.
+   * Keeping it until the new bootstrap arrives would let a failed bootstrap
+   * leave the *old* identity as the active counter — still tapping, still
+   * heartbeating — under a cookie that names someone else.
+   */
+  bootstrap?: DeviceBootstrapResponse;
+  /**
+   * The session the cookie now names, recorded at pairing time.
+   *
+   * Present with no `bootstrap` means "paired, not yet configured": the
+   * counter is deliberately non-operational, and says so.
+   */
+  pendingSessionId?: string;
   updatedAtMs: number;
 }
 

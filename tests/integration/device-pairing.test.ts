@@ -386,7 +386,7 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
         method: 'POST',
         url: '/api/v1/device/heartbeat',
         headers: { cookie: deviceCookie },
-        payload: { pendingCount: 0 },
+        payload: { pendingCount: 0, expectedDeviceSessionId: crypto.randomUUID() },
       });
       expect(heartbeat.statusCode).toBe(401);
 
@@ -406,6 +406,7 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
       const pairRes = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token } });
       const cookie = pairRes.cookies[0];
       const deviceCookie = `${cookie.name}=${cookie.value}`;
+      const deviceSessionId = pairRes.json().deviceSession.id as string;
 
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/start`, headers: authHeaders() });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
@@ -423,7 +424,7 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
         method: 'POST',
         url: '/api/v1/device/heartbeat',
         headers: { cookie: deviceCookie },
-        payload: { pendingCount: 3 },
+        payload: { pendingCount: 3, expectedDeviceSessionId: deviceSessionId },
       });
       expect(heartbeat.statusCode).toBe(200);
     });
@@ -513,12 +514,44 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
         method: 'POST',
         url: '/api/v1/device/heartbeat',
         headers: { cookie: deviceCookie },
-        payload: { pendingCount: 4, appVersion: '1.0.0' },
+        payload: { pendingCount: 4, expectedDeviceSessionId: deviceSessionId, appVersion: '1.0.0' },
       });
 
       expect(res.statusCode).toBe(200);
       const row = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
       expect(row?.lastPendingCount).toBe(4);
+    });
+
+    it('refuses a heartbeat asserting another device session, without touching any state', async () => {
+      const { deviceSessionId, deviceCookie } = await pairDevice();
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: { pendingCount: 5, expectedDeviceSessionId: deviceSessionId, appVersion: '1.0.0' },
+      });
+      const before = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
+      expect(before?.lastPendingCount).toBe(5);
+
+      // The window a re-pairing opens: the cookie already authenticates the
+      // new session while the client still believes it is the old device.
+      // Writing this device's pending count onto the other session would
+      // tell the supervisor it is holding counts it never made.
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: { pendingCount: 99, expectedDeviceSessionId: crypto.randomUUID(), appVersion: '9.9.9' },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('DEVICE_SESSION_MISMATCH');
+
+      const after = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
+      expect(after?.lastPendingCount).toBe(5);
+      expect(after?.lastSeenAtMs).toBe(before?.lastSeenAtMs);
+      expect(after?.appVersion).not.toBe('9.9.9');
     });
 
     it('rejects a malformed heartbeat with 400 and never rewrites the device sync state', async () => {
@@ -529,7 +562,12 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
         method: 'POST',
         url: '/api/v1/device/heartbeat',
         headers: { cookie: deviceCookie },
-        payload: { pendingCount: 7, lastClientSequence: 12, appVersion: '1.0.0' },
+        payload: {
+          pendingCount: 7,
+          expectedDeviceSessionId: deviceSessionId,
+          lastClientSequence: 12,
+          appVersion: '1.0.0',
+        },
       });
       const before = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
       expect(before?.lastPendingCount).toBe(7);
@@ -538,7 +576,7 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
         method: 'POST',
         url: '/api/v1/device/heartbeat',
         headers: { cookie: deviceCookie },
-        payload: { pendingCount: 'beaucoup' },
+        payload: { pendingCount: 'beaucoup', expectedDeviceSessionId: deviceSessionId },
       });
 
       // A malformed payload must never be silently coerced into
@@ -561,7 +599,12 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
         method: 'POST',
         url: '/api/v1/device/heartbeat',
         headers: { cookie: deviceCookie },
-        payload: { pendingCount: 7, lastClientSequence: 12, appVersion: '1.0.0' },
+        payload: {
+          pendingCount: 7,
+          expectedDeviceSessionId: deviceSessionId,
+          lastClientSequence: 12,
+          appVersion: '1.0.0',
+        },
       });
       const before = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
       expect(before?.lastPendingCount).toBe(7);
@@ -570,7 +613,7 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
       // body — or one that only carries an appVersion — states nothing
       // about what this device still holds, and must never be read as
       // "zero pending" by omission.
-      for (const payload of [{}, { appVersion: '1.0.1' }]) {
+      for (const payload of [{}, { appVersion: '1.0.1' }, { pendingCount: 3 }]) {
         const res = await app.inject({
           method: 'POST',
           url: '/api/v1/device/heartbeat',
@@ -603,7 +646,7 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
         method: 'POST',
         url: '/api/v1/device/heartbeat',
         headers: { cookie: deviceCookie },
-        payload: { pendingCount: 0 },
+        payload: { pendingCount: 0, expectedDeviceSessionId: deviceSessionId },
       });
 
       expect(res.statusCode).toBe(401);

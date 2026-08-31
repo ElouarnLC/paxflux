@@ -5,17 +5,12 @@ import {
   OutboxActionOwner,
   Direction,
   BatchSyncResponse,
-  ActionAcknowledgment,
+  BatchSyncResponseSchema,
   OUTBOX_LOCAL_ERROR_CODES,
 } from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
 import { currentPairing, persistAuthoritativeState } from './snapshot.js';
-import {
-  getConfirmedAction,
-  getConfirmedActions,
-  markConfirmedReversed,
-  recordConfirmedAction,
-} from './confirmed-actions.js';
+import { getConfirmedActions, recordConfirmedAction } from './confirmed-actions.js';
 import {
   OutboxTransition,
   acknowledgmentTransition,
@@ -26,6 +21,8 @@ import {
   recoveryTransition,
   sameOwner,
   terminalSessionTransition,
+  classifyBatchHttpStatus,
+  deterministicFailureTransition,
 } from './outbox-state.js';
 
 /** Outcome of one flush attempt, so the retry engine can pace itself. */
@@ -63,14 +60,26 @@ function notifyOutboxChanged() {
   }
 }
 
+/**
+ * Allocates the next device sequence.
+ *
+ * Must be called from inside a transaction that also covers whatever the
+ * sequence is being allocated *for*: a sequence consumed by a write that
+ * then fails leaves a permanent gap, and worse, an allocation that succeeds
+ * while its insert does not means the action the operator saw acknowledged
+ * on screen was never queued at all.
+ */
+async function allocateSequence(): Promise<number> {
+  const record = await localDb.meta.get('next_sequence');
+  const current = typeof record?.value === 'number' ? record.value : 0;
+  const next = current + 1;
+  await localDb.meta.put({ key: 'next_sequence', value: next });
+  return next;
+}
+
+/** Standalone allocation, for callers with nothing else to commit. */
 export async function getNextSequence(): Promise<number> {
-  return await localDb.transaction('rw', localDb.meta, async () => {
-    const record = await localDb.meta.get('next_sequence');
-    const current = typeof record?.value === 'number' ? record.value : 0;
-    const next = current + 1;
-    await localDb.meta.put({ key: 'next_sequence', value: next });
-    return next;
-  });
+  return localDb.transaction('rw', localDb.meta, allocateSequence);
 }
 
 function generateActionId(): string {
@@ -110,22 +119,28 @@ export async function enqueueCountAction(
   owner: OutboxActionOwner
 ): Promise<OutboxActionRecord> {
   const clientActionId = generateActionId();
-  const sequence = await getNextSequence();
   const now = Date.now();
 
-  const record: OutboxActionRecord = {
-    clientActionId,
-    sequence,
-    type: 'count',
-    direction,
-    clientCreatedAtMs: now,
-    attempts: 0,
-    sendState: 'pending',
-    createdAtMs: now,
-    owner,
-  };
+  // Sequence allocation and the insert commit together. Split apart, a
+  // failure between them consumes a sequence for an action that was never
+  // queued — the operator sees a tap counted on screen that no longer
+  // exists anywhere.
+  const record = await localDb.transaction('rw', localDb.meta, localDb.outbox_actions, async () => {
+    const row: OutboxActionRecord = {
+      clientActionId,
+      sequence: await allocateSequence(),
+      type: 'count',
+      direction,
+      clientCreatedAtMs: now,
+      attempts: 0,
+      sendState: 'pending',
+      createdAtMs: now,
+      owner,
+    };
+    await localDb.outbox_actions.add(row);
+    return row;
+  });
 
-  await localDb.outbox_actions.add(record);
   notifyOutboxChanged();
   return record;
 }
@@ -154,50 +169,79 @@ export async function enqueueReversalAction(
   targetClientActionId: string,
   owner: OutboxActionOwner
 ): Promise<ReversalOutcome> {
-  const target = await localDb.outbox_actions.get(targetClientActionId);
-
-  if (target && (target.sendState === 'quarantined' || target.sendState === 'rejected')) {
-    return { kind: 'refused', reason: 'target_not_reconcilable' };
-  }
-
-  if (target && target.attempts === 0 && target.sendState === 'pending') {
-    await localDb.outbox_actions.delete(targetClientActionId);
-    notifyOutboxChanged();
-    return { kind: 'deleted_locally' };
-  }
-
-  // The target may have left the outbox already, acknowledged and deleted.
-  // That is the ordinary online case, and it must stay undoable (SPEC
-  // §11.2): the server holds the movement, so a compensating reversal is
-  // exactly the right instrument. A confirmed count made under a different
-  // identity is refused, since its reversal would be sent as ours.
-  if (!target) {
-    const confirmed = await getConfirmedAction(targetClientActionId);
-    if (confirmed && (!sameOwner(confirmed.owner, owner) || confirmed.reversedAtMs !== undefined)) {
-      return { kind: 'refused', reason: 'target_not_reconcilable' };
-    }
-    if (confirmed) await markConfirmedReversed(targetClientActionId);
-  }
-
   const clientActionId = generateActionId();
-  const sequence = await getNextSequence();
   const now = Date.now();
 
-  const record: OutboxActionRecord = {
-    clientActionId,
-    sequence,
-    type: 'reversal',
-    targetClientActionId,
-    clientCreatedAtMs: now,
-    attempts: 0,
-    sendState: 'pending',
-    createdAtMs: now,
-    owner,
-  };
+  // One transaction over all three tables.
+  //
+  // The confirmed check, the sequence allocation, the reversal insert and
+  // the `reversedAtMs` stamp are a single decision: marking a confirmed
+  // count as reversed before its reversal is durably queued would leave the
+  // operator with a count that is neither undone nor undoable — the undo
+  // button gone and no compensating movement anywhere. Anything that
+  // aborts leaves the confirmed count still undoable and no partial
+  // reversal behind.
+  const outcome = await localDb.transaction(
+    'rw',
+    localDb.confirmed_actions,
+    localDb.meta,
+    localDb.outbox_actions,
+    async (): Promise<ReversalOutcome> => {
+      const target = await localDb.outbox_actions.get(targetClientActionId);
 
-  await localDb.outbox_actions.add(record);
-  notifyOutboxChanged();
-  return { kind: 'queued', record };
+      if (target && (target.sendState === 'quarantined' || target.sendState === 'rejected')) {
+        return { kind: 'refused', reason: 'target_not_reconcilable' };
+      }
+
+      // A tap that never left the device: nothing on the server to
+      // compensate for, so it is simply removed.
+      if (target && target.attempts === 0 && target.sendState === 'pending') {
+        await localDb.outbox_actions.delete(targetClientActionId);
+        return { kind: 'deleted_locally' };
+      }
+
+      // The target may have been acknowledged and deleted already — the
+      // ordinary online case, which must stay undoable (SPEC §11.2). A
+      // confirmed count made under a different identity is refused: its
+      // reversal would be sent as ours.
+      let confirmedToMark: string | null = null;
+      if (!target) {
+        const confirmed = await localDb.confirmed_actions.get(targetClientActionId);
+        if (confirmed) {
+          if (!sameOwner(confirmed.owner, owner) || confirmed.reversedAtMs !== undefined) {
+            return { kind: 'refused', reason: 'target_not_reconcilable' };
+          }
+          confirmedToMark = targetClientActionId;
+        }
+      }
+
+      const record: OutboxActionRecord = {
+        clientActionId,
+        sequence: await allocateSequence(),
+        type: 'reversal',
+        targetClientActionId,
+        clientCreatedAtMs: now,
+        attempts: 0,
+        sendState: 'pending',
+        createdAtMs: now,
+        owner,
+      };
+      await localDb.outbox_actions.add(record);
+
+      // Stamped last, and only inside the same commit as the insert above.
+      if (confirmedToMark) {
+        const confirmed = await localDb.confirmed_actions.get(confirmedToMark);
+        if (confirmed) {
+          await localDb.confirmed_actions.put({ ...confirmed, reversedAtMs: now });
+        }
+      }
+
+      return { kind: 'queued', record };
+    }
+  );
+
+  if (outcome.kind !== 'refused') notifyOutboxChanged();
+  return outcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -439,55 +483,68 @@ export async function flushOutbox(): Promise<FlushOutcome> {
       return { kind: 'failed', errorCode };
     }
 
-    if (response.status === 401) {
-      // The device session is gone — revoked, or expired. No amount of
-      // retrying under these credentials will change that, and hammering
-      // the server every few seconds until someone re-pairs is exactly the
-      // loop this phase exists to remove. The actions are kept, out of
-      // auto-retry, for reconciliation.
-      await applyTransitions(
-        batch.map((a) => terminalSessionTransition(a, OUTBOX_LOCAL_ERROR_CODES.DEVICE_SESSION_INVALID))
-      );
-      notifyOutboxChanged();
-      return { kind: 'failed', errorCode: OUTBOX_LOCAL_ERROR_CODES.DEVICE_SESSION_INVALID };
-    }
-
-    if (response.status === 409 && (await isSessionMismatch(response))) {
-      // The server refused the whole batch: the authenticated cookie names
-      // a different session than the one these actions were queued under.
-      // That is the re-pairing window, and the right outcome is a
-      // quarantine — never a retry that would eventually land under the
-      // wrong identity.
-      await applyTransitions(
-        batch.map((a) => terminalSessionTransition(a, OUTBOX_LOCAL_ERROR_CODES.SESSION_MISMATCH_REFUSED))
-      );
-      notifyOutboxChanged();
-      return { kind: 'failed', errorCode: OUTBOX_LOCAL_ERROR_CODES.SESSION_MISMATCH_REFUSED };
-    }
-
     if (!response.ok) {
-      // Anything else — 5xx, 429, a proxy error — says nothing about
-      // individual actions: the server never reported per-action outcomes,
-      // so none may be treated as refused. They return to pending and the
-      // engine backs off.
-      const errorCode = `HTTP_${response.status}`;
-      await applyTransitions(batch.map((a) => networkFailureTransition(a, errorCode)));
+      const kind = classifyBatchHttpStatus(response.status, await isSessionMismatch(response));
+      const errorCode =
+        kind === 'terminal-session'
+          ? OUTBOX_LOCAL_ERROR_CODES.DEVICE_SESSION_INVALID
+          : kind === 'session-mismatch'
+            ? OUTBOX_LOCAL_ERROR_CODES.SESSION_MISMATCH_REFUSED
+            : `HTTP_${response.status}`;
+
+      switch (kind) {
+        case 'terminal-session':
+        case 'session-mismatch':
+          // These credentials, or this identity, cannot deliver the batch.
+          // Kept out of auto-retry until a re-pairing, never deleted.
+          await applyTransitions(batch.map((a) => terminalSessionTransition(a, errorCode)));
+          break;
+        case 'deterministic':
+          // Understood and refused on its merits. Re-sending the same bytes
+          // produces the same answer, so it waits for a human instead of
+          // looping.
+          await applyTransitions(batch.map((a) => deterministicFailureTransition(a, errorCode)));
+          break;
+        case 'retryable':
+          // No verdict was expressed about the individual actions, so none
+          // may be treated as refused. They return to pending and the
+          // engine backs off.
+          await applyTransitions(batch.map((a) => networkFailureTransition(a, errorCode)));
+          break;
+      }
+
+      if (kind !== 'retryable') notifyOutboxChanged();
       return { kind: 'failed', errorCode };
     }
 
-    // A 200 whose body cannot be read as a batch response is an *uncertain*
-    // acknowledgment, not a success and not a refusal: the server may well
-    // have applied everything before the connection was cut mid-JSON. The
-    // actions go back to pending and idempotence covers the re-send.
+    // A 200 is only an acknowledgment if it *says* something valid.
+    //
+    // Parsing as JSON is not evidence: a truncated or proxy-mangled body can
+    // yield `{ acknowledged: [{}], state: {} }`, which a `typeof` check
+    // accepts and which would then delete nothing, acknowledge nothing, and
+    // persist an empty snapshot over a good one. The shared schema is
+    // applied in full, and the batch is treated as an uncertain ACK — all of
+    // it, with no partial transitions — if anything does not hold.
     let data: BatchSyncResponse;
     try {
       const parsed: unknown = await response.json();
-      if (!isBatchSyncResponse(parsed)) throw new Error('Batch response did not match the expected shape');
-      data = parsed;
+      const validated = BatchSyncResponseSchema.safeParse(parsed);
+      if (!validated.success) {
+        throw new Error(`Batch response failed validation: ${validated.error.issues[0]?.message ?? 'unknown'}`);
+      }
+      // An acknowledgment for something this device did not just send is
+      // not an answer to this request. Acting on it would delete or refuse
+      // an action on the strength of a response that never addressed it.
+      const sentIds = new Set(batch.map((a) => a.clientActionId));
+      const stray = validated.data.acknowledged.find((ack) => !sentIds.has(ack.clientActionId));
+      if (stray) {
+        throw new Error(`Batch response acknowledged an action outside the batch: ${stray.clientActionId}`);
+      }
+      data = validated.data;
     } catch (err) {
       const errorCode = OUTBOX_LOCAL_ERROR_CODES.INVALID_BATCH_RESPONSE;
       await applyTransitions(batch.map((a) => networkFailureTransition(a, errorCode)));
-      console.debug('Batch response could not be read; treating it as an uncertain ACK:', err);
+      console.debug('Batch response could not be trusted; treating it as an uncertain ACK:', err);
       return { kind: 'failed', errorCode };
     }
 
@@ -540,19 +597,4 @@ async function isSessionMismatch(response: Response): Promise<boolean> {
     console.debug('Could not read the 409 problem details:', err);
     return false;
   }
-}
-
-/**
- * Structural check on a batch response.
- *
- * A truncated or proxy-mangled 200 can parse as JSON and still be missing
- * the acknowledgments; treating that as "nothing was acknowledged" would
- * quietly bounce every action back through NO_ACKNOWLEDGMENT instead of
- * naming it as the uncertain ACK it is.
- */
-function isBatchSyncResponse(value: unknown): value is BatchSyncResponse {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as { acknowledged?: unknown; state?: unknown };
-  if (!Array.isArray(candidate.acknowledged)) return false;
-  return typeof candidate.state === 'object' && candidate.state !== null;
 }

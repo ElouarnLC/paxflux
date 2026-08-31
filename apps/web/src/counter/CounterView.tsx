@@ -10,7 +10,6 @@ import {
 } from '../offline/outbox.js';
 import {
   LifecycleMarker,
-  loadSnapshot,
   persistAuthoritativeState,
   persistBootstrap,
   persistLifecycleStatus,
@@ -21,7 +20,12 @@ import {
   getConfirmedActions,
 } from '../offline/confirmed-actions.js';
 import { projectPendingActions, projectedSpaceOccupancy } from '../offline/projection.js';
-import { describeOutboxError, isRetryable, needsReconciliation } from '../offline/outbox-state.js';
+import {
+  describeOutboxError,
+  isRetryable,
+  needsReconciliation,
+  sameOwner,
+} from '../offline/outbox-state.js';
 import { useSSE } from '../sse/useSSE.js';
 import { useDeviceHeartbeat } from './useDeviceHeartbeat.js';
 import { apiFetch } from '../api/client.js';
@@ -31,6 +35,7 @@ import {
   EventStatus,
   ConfirmedActionRecord,
   OutboxActionOwner,
+  OutboxActionRecord,
 } from '@paxflux/shared';
 import {
   WifiOff,
@@ -64,6 +69,32 @@ function wakeLockApi(): { request(type: 'screen'): Promise<WakeLockSentinelLike>
 }
 
 /**
+ * Names a blocked action for the operator.
+ *
+ * A count made under a previous pairing must NOT be labelled with the
+ * current checkpoint's wording: "ENTRÉE +1" and "→ VIP" describe a specific
+ * door, and a direction only means something relative to the door it was
+ * made at. Showing this door's label on another door's count would misstate
+ * what is waiting to be reconciled.
+ */
+function describeBlockedAction(
+  action: OutboxActionRecord,
+  bootstrap: DeviceBootstrapResponse,
+  owner: OutboxActionOwner | null
+): string {
+  if (action.type === 'reversal') return 'Annulation';
+
+  const isThisPairing = owner !== null && sameOwner(action.owner, owner);
+  if (!isThisPairing) {
+    return action.owner?.checkpointId === bootstrap.checkpoint.id
+      ? 'Comptage d’un appairage précédent de cet appareil'
+      : 'Comptage effectué à une autre porte';
+  }
+
+  return action.direction === 'a_to_b' ? bootstrap.checkpoint.labelAToB : bootstrap.checkpoint.labelBToA;
+}
+
+/**
  * Haptic confirmation for a tap (SPEC §10.4). Failing is inconsequential —
  * the count is already recorded — and logging on every tap would be noise,
  * so the outcome is deliberately not surfaced.
@@ -78,7 +109,14 @@ function vibrate(pattern: number | number[]): void {
 }
 
 export const CounterView: React.FC = () => {
-  const [bootstrap, setBootstrap] = useState<DeviceBootstrapResponse | null>(null);
+  // The pairing configuration is read live from storage, not held in
+  // component state. Two reasons, both load-bearing: a re-pairing retires
+  // the previous configuration the instant the cookie changes, and every
+  // open tab must stop acting as the old device at that moment — including
+  // one the operator left open on another screen.
+  const storedConfig = useLiveQuery(() => localDb.device_config.get('current'), []);
+  const bootstrap: DeviceBootstrapResponse | null = storedConfig?.bootstrap ?? null;
+  const awaitingConfigurationFor = storedConfig?.bootstrap ? null : (storedConfig?.pendingSessionId ?? null);
   // The authoritative state and the lifecycle marker are read live from
   // storage rather than mirrored into React state.
   //
@@ -154,16 +192,12 @@ export const CounterView: React.FC = () => {
   // everything SSE had said since.
   useEffect(() => {
     async function init() {
-      const snapshot = await loadSnapshot();
-      if (snapshot.bootstrap) setBootstrap(snapshot.bootstrap);
-
       // Always attempt the refresh: `navigator.onLine` says the interface is
       // up, not that this server is reachable, so gating on it would skip a
       // refresh that would have worked. A failure just leaves the snapshot
       // in place, which is exactly the offline behaviour we want.
       try {
         const fresh = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
-        setBootstrap(fresh);
         await persistBootstrap(fresh);
         // A pairing change makes the previous session's remembered counts
         // none of this device's business: offering to undo one would build
@@ -402,11 +436,28 @@ export const CounterView: React.FC = () => {
   }, [displayedOccupancy, capacity, capacityPercentage]);
 
   if (!bootstrap) {
+    // Deliberately non-operational. When a pairing is in flight but its
+    // configuration has not arrived, the counter says so rather than
+    // falling back to the identity it had before — that identity no longer
+    // matches the cookie this browser holds, and any tap or heartbeat made
+    // under it would be attributed to the wrong device.
     return (
-      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400">
-        <div className="flex flex-col items-center gap-3">
+      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400 p-6">
+        <div className="flex flex-col items-center gap-3 text-center max-w-sm">
           <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
-          <span className="text-sm font-medium">Chargement du compteur...</span>
+          {awaitingConfigurationFor ? (
+            <>
+              <span className="text-sm font-semibold text-slate-200">
+                Appairage en cours — configuration en attente
+              </span>
+              <span className="text-xs text-slate-400 leading-snug">
+                Cet appareil vient d’être appairé mais n’a pas encore reçu sa configuration. Le comptage
+                reprendra dès qu’elle sera disponible. Les comptages déjà enregistrés sont conservés.
+              </span>
+            </>
+          ) : (
+            <span className="text-sm font-medium">Chargement du compteur...</span>
+          )}
         </div>
       </div>
     );
@@ -500,11 +551,7 @@ export const CounterView: React.FC = () => {
                     >
                       <span className="min-w-0">
                         <strong className="block text-orange-50">
-                          {action.type === 'count'
-                            ? action.direction === 'a_to_b'
-                              ? bootstrap.checkpoint.labelAToB
-                              : bootstrap.checkpoint.labelBToA
-                            : 'Annulation'}
+                          {describeBlockedAction(action, bootstrap, owner)}
                         </strong>
                         <span className="text-orange-200/90 text-[11px] leading-snug">
                           {describeOutboxError(action.lastErrorCode)}

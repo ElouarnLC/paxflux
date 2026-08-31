@@ -137,6 +137,56 @@ export function terminalSessionTransition(
 }
 
 /**
+ * How a non-2xx batch response should be treated.
+ *
+ * Aligned with what the endpoint can actually mean, rather than "everything
+ * except the two cases we named is worth retrying":
+ *
+ *  - `retryable`        the request did not get a verdict — a timeout, a
+ *                       rate limit, a server-side fault. Trying again later
+ *                       is exactly right;
+ *  - `terminal-session` 401: these credentials are dead. Retrying cannot
+ *                       help until someone re-pairs;
+ *  - `session-mismatch` 409 on device session identity: the batch belongs to
+ *                       another pairing and must never be sent as this one;
+ *  - `deterministic`    any other 4xx. The request was understood and
+ *                       refused on its merits — a malformed payload, a
+ *                       forbidden operation, a resource that is not there.
+ *                       Re-sending the identical bytes produces the
+ *                       identical refusal, so it is kept for a human rather
+ *                       than looped on.
+ */
+export type BatchFailureKind = 'retryable' | 'terminal-session' | 'session-mismatch' | 'deterministic';
+
+export function classifyBatchHttpStatus(status: number, isSessionMismatch: boolean): BatchFailureKind {
+  if (status === 401) return 'terminal-session';
+  if (status === 409 && isSessionMismatch) return 'session-mismatch';
+  if (status === 408 || status === 429) return 'retryable';
+  if (status >= 500) return 'retryable';
+  if (status >= 400) return 'deterministic';
+  // A 1xx/3xx here means something rewrote the response in transit; no
+  // verdict was expressed about the actions, so treat it as retryable.
+  return 'retryable';
+}
+
+/**
+ * A refusal the server expressed about the request itself rather than about
+ * any single action. Kept, out of auto-retry, awaiting a human — the same
+ * treatment a per-action `rejected` gets, because the operator's options are
+ * the same.
+ */
+export function deterministicFailureTransition(
+  action: OutboxActionRecord,
+  errorCode: string
+): OutboxTransition {
+  return {
+    kind: 'update',
+    clientActionId: action.clientActionId,
+    changes: { sendState: 'rejected', lastErrorCode: errorCode },
+  };
+}
+
+/**
  * A `sending` row found at startup: the app died mid-flush, so whether the
  * server applied it is unknown. Treat it as an uncertain acknowledgment and
  * make it retryable rather than leaving it stranded forever.
@@ -191,7 +241,12 @@ export function describeOutboxError(errorCode: string | undefined): string {
     case 'DEVICE_SESSION_MISMATCH':
     case OUTBOX_LOCAL_ERROR_CODES.SESSION_MISMATCH_REFUSED:
       return 'Le serveur a refusé ce comptage : il appartient à un autre appairage de cet appareil.';
+    case OUTBOX_LOCAL_ERROR_CODES.INVALID_BATCH_RESPONSE:
+      return 'Réponse du serveur illisible : l’envoi sera réessayé.';
     default:
+      if (errorCode?.startsWith('HTTP_')) {
+        return `Le serveur a refusé la requête (${errorCode.slice(5)}). Une intervention est nécessaire.`;
+      }
       return errorCode
         ? `Refusé par le serveur (${errorCode}).`
         : 'Refusé par le serveur, sans code d’erreur.';

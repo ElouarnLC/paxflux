@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
-import { persistBootstrap } from '../offline/snapshot.js';
+import { beginPairingHandoff, persistBootstrap } from '../offline/snapshot.js';
 import { Loader2, AlertCircle, CheckCircle, Smartphone } from 'lucide-react';
 import { DeviceBootstrapResponse, DeviceSessionModel, ProblemDetails } from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
@@ -48,6 +48,15 @@ export const PairingPage: React.FC = () => {
         });
 
         if (res.success) {
+          // The cookie now names a different device session, so the stored
+          // configuration no longer describes this browser. Retire it
+          // immediately — before the bootstrap that would replace it — so a
+          // bootstrap that never succeeds cannot leave the previous
+          // identity running the counter. The outbox is untouched: those
+          // are real counts, and ownership parks them rather than deleting
+          // them.
+          await beginPairingHandoff(res.deviceSession.id);
+
           // Pre-fill the offline cache so the counter opens instantly. This
           // is an optimisation, not part of pairing: /counter fetches its
           // own bootstrap anyway, so a failure here must not turn a

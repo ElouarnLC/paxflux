@@ -11,6 +11,8 @@ import {
   ownershipTransition,
   recoveryTransition,
   terminalSessionTransition,
+  classifyBatchHttpStatus,
+  deterministicFailureTransition,
   sameOwner,
 } from './outbox-state.js';
 
@@ -246,5 +248,58 @@ describe('describeOutboxError — identity refusals', () => {
     expect(describeOutboxError('DEVICE_SESSION_INVALID')).toMatch(/nouvel appairage/i);
     expect(describeOutboxError('SESSION_MISMATCH_REFUSED')).toMatch(/autre appairage/i);
     expect(describeOutboxError('DEVICE_SESSION_MISMATCH')).toMatch(/autre appairage/i);
+  });
+});
+
+describe('classifyBatchHttpStatus', () => {
+  it('treats a device 401 as terminal for the session', () => {
+    expect(classifyBatchHttpStatus(401, false)).toBe('terminal-session');
+  });
+
+  it('treats a 409 on session identity as a quarantine, and any other 409 as deterministic', () => {
+    expect(classifyBatchHttpStatus(409, true)).toBe('session-mismatch');
+    expect(classifyBatchHttpStatus(409, false)).toBe('deterministic');
+  });
+
+  it('retries what carried no verdict about the actions', () => {
+    for (const status of [408, 429, 500, 502, 503, 504]) {
+      expect(classifyBatchHttpStatus(status, false)).toBe('retryable');
+    }
+  });
+
+  it('does not retry a request the server understood and refused', () => {
+    // Re-sending identical bytes produces an identical refusal, so looping
+    // on it only burns battery and fills logs.
+    for (const status of [400, 403, 404, 413, 422]) {
+      expect(classifyBatchHttpStatus(status, false)).toBe('deterministic');
+    }
+  });
+
+  it('falls back to retryable for a status that expresses nothing about the batch', () => {
+    expect(classifyBatchHttpStatus(302, false)).toBe('retryable');
+  });
+});
+
+describe('deterministicFailureTransition', () => {
+  it('keeps the action, out of auto-retry, with the status that refused it', () => {
+    const transition = deterministicFailureTransition(action({ sendState: 'sending' }), 'HTTP_400');
+
+    expect(transition).toMatchObject({
+      kind: 'update',
+      changes: { sendState: 'rejected', lastErrorCode: 'HTTP_400' },
+    });
+    if (transition.kind === 'update') {
+      expect(isRetryable({ sendState: transition.changes.sendState as OutboxSendState })).toBe(false);
+      expect(needsReconciliation({ sendState: transition.changes.sendState as OutboxSendState })).toBe(true);
+    }
+  });
+
+  it('explains an HTTP-level refusal to the operator without hiding the status', () => {
+    expect(describeOutboxError('HTTP_400')).toContain('400');
+    expect(describeOutboxError('HTTP_400')).toMatch(/intervention/i);
+  });
+
+  it('describes an unreadable response as retryable rather than as a refusal', () => {
+    expect(describeOutboxError('INVALID_BATCH_RESPONSE')).toMatch(/réessayé/i);
   });
 });

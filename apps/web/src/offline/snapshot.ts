@@ -28,6 +28,12 @@ export interface LifecycleMarker {
 
 export interface LocalSnapshot {
   bootstrap: DeviceBootstrapResponse | null;
+  /**
+   * Set when this device has paired but has no configuration yet. The
+   * counter must stay non-operational rather than fall back to whatever it
+   * was before — that identity no longer matches the cookie.
+   */
+  awaitingConfigurationFor: string | null;
   state: CompactEventState | null;
   /**
    * The last `event-status` transition seen, with its timestamp.
@@ -150,6 +156,26 @@ export async function persistBootstrap(bootstrap: DeviceBootstrapResponse): Prom
 }
 
 /**
+ * Retires the previous pairing the instant `/device/pair` succeeds.
+ *
+ * From that moment the cookie names a different device session, so the
+ * stored configuration describes an identity this browser no longer has. It
+ * is dropped immediately rather than when the new bootstrap arrives —
+ * otherwise a bootstrap that never succeeds leaves the old identity running
+ * the counter, creating taps and heartbeats under someone else's cookie.
+ *
+ * The outbox is deliberately untouched: those are real counts, and they are
+ * quarantined by the ownership check rather than deleted.
+ */
+export async function beginPairingHandoff(deviceSessionId: string): Promise<void> {
+  await localDb.device_config.put({
+    key: 'current',
+    pendingSessionId: deviceSessionId,
+    updatedAtMs: Date.now(),
+  });
+}
+
+/**
  * Reads back what this device knows without the network: its configuration
  * and the newest state it ever received.
  *
@@ -158,15 +184,28 @@ export async function persistBootstrap(bootstrap: DeviceBootstrapResponse): Prom
  */
 export async function loadSnapshot(): Promise<LocalSnapshot> {
   const config = await localDb.device_config.get('current');
-  if (!config) return { bootstrap: null, state: null, lifecycle: null };
+  if (!config || !config.bootstrap) {
+    return {
+      bootstrap: null,
+      awaitingConfigurationFor: config?.pendingSessionId ?? null,
+      state: null,
+      lifecycle: null,
+    };
+  }
 
   const stored = await localDb.event_state.get('current');
   if (!stored || stored.eventId !== config.bootstrap.event.id) {
-    return { bootstrap: config.bootstrap, state: config.bootstrap.state, lifecycle: null };
+    return {
+      bootstrap: config.bootstrap,
+      awaitingConfigurationFor: null,
+      state: config.bootstrap.state,
+      lifecycle: null,
+    };
   }
 
   return {
     bootstrap: config.bootstrap,
+    awaitingConfigurationFor: null,
     state: stored.state,
     lifecycle:
       stored.lifecycleStatus && stored.lifecycleAtMs !== undefined
@@ -191,7 +230,9 @@ export interface CurrentPairing {
 
 export async function currentPairing(): Promise<CurrentPairing | null> {
   const config = await localDb.device_config.get('current');
-  if (!config) return null;
+  // No configuration means no identity to act as — including mid-handoff,
+  // where a `pendingSessionId` is recorded but nothing is known about it yet.
+  if (!config?.bootstrap) return null;
   const { bootstrap } = config;
   return {
     owner: {
@@ -207,7 +248,7 @@ export async function currentPairing(): Promise<CurrentPairing | null> {
 /** The identity currently paired on this device, or null if none is. */
 export async function currentOwner(): Promise<OutboxActionOwner | null> {
   const config = await localDb.device_config.get('current');
-  if (!config) return null;
+  if (!config?.bootstrap) return null;
   return {
     deviceSessionId: config.bootstrap.deviceSession.id,
     eventId: config.bootstrap.event.id,

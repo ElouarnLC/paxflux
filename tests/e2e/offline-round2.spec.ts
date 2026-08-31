@@ -13,6 +13,7 @@ import {
 } from './helpers.js';
 import {
   readOutbox,
+  readDeviceSessionId,
   readEventStateRecord,
   seedLegacyV1Database,
   waitForServiceWorkerControl,
@@ -170,12 +171,22 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     const remaining = await readOutbox(page);
     expect(remaining).toHaveLength(1);
     expect(remaining[0].clientActionId).toBe(orphanId);
+
+    // It is named for what it is, not with this pairing's wording: a
+    // direction only means something relative to the door it was made at,
+    // and "ENTRÉE +1" would misstate whose count is waiting.
+    await expect(page.getByText(/Comptage d’un appairage précédent de cet appareil/)).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByText(/À RÉGULARISER \(1\)/)).toBeVisible();
+    // Identify B by the session id the server actually paired, not by
+    // guessing which row in the list looks like it.
+    const sessionBId = await readDeviceSessionId(page);
     await expect
       .poll(
         async () => {
           const devices = await getEventDevices(session, topo.eventId);
-          const deviceB = devices.find((d) => d.id !== undefined && d.lastSeenAtMs !== null);
-          return deviceB?.lastPendingCount;
+          return devices.find((d) => d.id === sessionBId)?.lastPendingCount;
         },
         { timeout: 30_000 }
       )
@@ -529,15 +540,18 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
       .toBe(1);
     await waitForOutbox(page, (rows) => rows.length === 0);
 
-    // `vite-plugin-pwa` injects its registration script into the built
-    // index.html, which is what the E2E server serves — so this is the
-    // production registration path, not one added for the test. With the
-    // project's `registerType: 'prompt'` (and therefore no `clientsClaim`),
-    // the worker installs on the first visit but only takes control of a
-    // page from the *next* navigation onwards. So the first session of a
-    // freshly-installed device is not offline-capable; every one after it
-    // is. That is a real property of this configuration, worth stating
-    // rather than papering over.
+    // `vite-plugin-pwa` generates a registration script at build time and
+    // injects it into `dist/index.html` (default `injectRegister: 'auto'`),
+    // which is what the E2E server serves. `dist/` is gitignored, so none
+    // of this is visible in the repository — it exists only in a build.
+    //
+    // A reload happens here because the worker installs on the first visit
+    // but takes control from the next navigation onwards (this project uses
+    // `registerType: 'prompt'`, so no `clientsClaim`). What this test shows
+    // is that an offline reload works *once the worker controls the page*.
+    // It does not measure whether a very first visit could survive going
+    // offline immediately — that depends on install and precache timing and
+    // is not asserted here either way.
     await page.reload();
     const controlled = await waitForServiceWorkerControl(page);
     expect(controlled).toBe(true);

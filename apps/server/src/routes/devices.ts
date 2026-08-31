@@ -198,6 +198,27 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
     }
 
     const body = parseResult.data;
+
+    // Same rule as the batch endpoint, for the same reason: the cookie
+    // authenticates a session, it does not prove the client is reporting
+    // about that session. In the window a re-pairing opens — new cookie,
+    // client configuration not yet replaced — an unasserted heartbeat
+    // writes the previous device's pending count onto the new session, and
+    // the supervisor is told the new device is holding counts it never
+    // made. Refused before any mutation, `lastSeenAtMs` included.
+    if (body.expectedDeviceSessionId !== deviceSession.id) {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'DEVICE_SESSION_MISMATCH',
+            'Session appareil différente',
+            'Ce heartbeat concerne un autre appairage de cet appareil.'
+          )
+        );
+    }
+
     const now = Date.now();
 
     await db
