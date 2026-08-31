@@ -29,20 +29,12 @@ test('un compteur ouvert mais inactif reste signalé en ligne (heartbeat périod
 
   const devices = await getEventDevices(session, topo.eventId);
 
-  // This test is about the heartbeat only. Whether a paired device shows
-  // up in this list at all is a separate, already-covered concern (see
-  // device-visibility.spec.ts — a Drizzle `eq(col, null)` bug that makes
-  // this list unconditionally empty). Don't let that unrelated cause show
-  // up as a failure here: skip instead, so a red run of this test always
-  // means "heartbeat is missing", never "devices list is empty".
-  test.skip(
-    devices.length === 0,
-    'Bloqué par le bug de visibilité (voir device-visibility.spec.ts) — impossible d\'isoler le heartbeat tant que la liste est vide.'
-  );
+  // The device-visibility bug that once made this list unconditionally
+  // empty was fixed in Phase 3, so an empty list here is now a genuine
+  // failure rather than an unrelated blocker.
+  expect(devices).toHaveLength(1);
 
-  // Once the list itself is fixed: the web client never calls
-  // POST /api/v1/device/heartbeat, so lastSeenAtMs is only ever refreshed
-  // by bootstrap/batch calls — an idle device still flips to "Hors ligne"
-  // after 45s.
+  // Only the periodic heartbeat can keep this true: nothing else refreshes
+  // lastSeenAtMs for a counter that is open but idle.
   expect(devices[0].isOnline).toBe(true);
 });

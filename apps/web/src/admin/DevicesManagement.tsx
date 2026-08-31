@@ -1,56 +1,112 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   QrCode,
-  Plus,
-  Trash2,
-  Edit2,
-  Smartphone,
   CheckCircle,
   AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   RefreshCw,
 } from 'lucide-react';
-import { CreateDeviceInviteResponse } from '@paxflux/shared';
+import {
+  CreateDeviceInviteResponse,
+  CheckpointModel,
+  EventDeviceSummary,
+  ProblemDetails,
+} from '@paxflux/shared';
+
+const DEVICES_POLL_INTERVAL_MS = 5_000;
+
+type ListState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; devices: EventDeviceSummary[]; checkpoints: CheckpointModel[] }
+  | { kind: 'error'; detail: string };
+
+function errorDetail(err: unknown, fallback: string): string {
+  if (typeof err === 'object' && err !== null && 'detail' in err) {
+    return String((err as ProblemDetails).detail);
+  }
+  return fallback;
+}
+
+function formatLastSeen(lastSeenAtMs: number | null): string {
+  if (!lastSeenAtMs) return '—';
+  return new Date(lastSeenAtMs).toLocaleTimeString('fr-FR');
+}
 
 export const DevicesManagement: React.FC = () => {
   const { id: eventId } = useParams<{ id: string }>();
-  const [devices, setDevices] = useState<any[]>([]);
-  const [checkpoints, setCheckpoints] = useState<any[]>([]);
+  const [listState, setListState] = useState<ListState>({ kind: 'loading' });
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string>('');
   const [activeInvite, setActiveInvite] = useState<CreateDeviceInviteResponse | null>(null);
-  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const fetchDevices = async () => {
-    if (!eventId) return;
-    try {
-      const [devList, cpList] = await Promise.all([
-        apiFetch<any[]>(`/api/v1/events/${eventId}/devices`),
-        apiFetch<any[]>(`/api/v1/events/${eventId}/checkpoints`),
-      ]);
-      setDevices(devList);
-      setCheckpoints(cpList);
-      if (cpList.length > 0 && !selectedCheckpointId) {
-        setSelectedCheckpointId(cpList[0].id);
+  // `silent` (background polling, or a manual refresh with a list already
+  // on screen) keeps the current rows visible instead of flashing back to a
+  // skeleton, and never replaces good data with a transient fetch error.
+  const fetchDevices = useCallback(
+    async (opts: { silent?: boolean } = {}) => {
+      if (!eventId) return;
+      if (!opts.silent) setListState({ kind: 'loading' });
+      setRefreshing(true);
+      try {
+        const [devList, cpList] = await Promise.all([
+          apiFetch<EventDeviceSummary[]>(`/api/v1/events/${eventId}/devices`),
+          apiFetch<CheckpointModel[]>(`/api/v1/events/${eventId}/checkpoints`),
+        ]);
+        setListState({ kind: 'ready', devices: devList, checkpoints: cpList });
+        setSelectedCheckpointId((current) =>
+          current && cpList.some((cp) => cp.id === current) ? current : cpList[0]?.id || ''
+        );
+      } catch (err) {
+        setListState((prev) =>
+          opts.silent && prev.kind === 'ready'
+            ? prev
+            : { kind: 'error', detail: errorDetail(err, 'Impossible de charger les appareils de cet événement.') }
+        );
+      } finally {
+        setRefreshing(false);
       }
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [eventId]
+  );
 
+  // A device goes online or drains its outbox entirely on its own — nothing
+  // the admin does here triggers a re-render. Poll while this page is open
+  // so the list is current without a manual reload. One request at a time:
+  // each tick waits for the previous fetch before scheduling the next.
   useEffect(() => {
-    fetchDevices();
-  }, [eventId]);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async (silent: boolean) => {
+      await fetchDevices({ silent });
+      if (!cancelled) {
+        timer = setTimeout(() => tick(true), DEVICES_POLL_INTERVAL_MS);
+      }
+    };
+
+    tick(false);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [fetchDevices]);
 
   const handleCreateInvite = async () => {
     if (!eventId || !selectedCheckpointId) return;
     setCreating(true);
+    setActionError(null);
     try {
+      // The pairing URL comes from the server (PUBLIC_BASE_URL, or the
+      // request origin) and is used exactly as returned. Rebuilding it from
+      // window.location would encode whatever origin the admin happens to
+      // be browsing — typically localhost — into a QR meant for a phone.
       const invite = await apiFetch<CreateDeviceInviteResponse>(`/api/v1/events/${eventId}/device-invites`, {
         method: 'POST',
         body: JSON.stringify({
@@ -58,15 +114,10 @@ export const DevicesManagement: React.FC = () => {
           expiresInMinutes: 30,
         }),
       });
-
-      // Construct full pairing URL with current window location host
-      const fullUrl = `${window.location.origin}/pair#${invite.token}`;
-      setActiveInvite({
-        ...invite,
-        pairUrl: fullUrl,
-      });
-    } catch {
-      // ignore
+      setActiveInvite(invite);
+    } catch (err) {
+      setActiveInvite(null);
+      setActionError(errorDetail(err, 'Impossible de générer le QR code d’appairage.'));
     } finally {
       setCreating(false);
     }
@@ -74,13 +125,17 @@ export const DevicesManagement: React.FC = () => {
 
   const handleRevokeDevice = async (sessionId: string) => {
     if (!confirm('Voulez-vous vraiment révoquer cet appareil ? Il ne pourra plus envoyer de comptages.')) return;
+    setActionError(null);
     try {
       await apiFetch(`/api/v1/device-sessions/${sessionId}/revoke`, { method: 'POST' });
-      fetchDevices();
-    } catch {
-      // ignore
+      await fetchDevices({ silent: true });
+    } catch (err) {
+      setActionError(errorDetail(err, 'Impossible de révoquer cet appareil.'));
     }
   };
+
+  const devices = listState.kind === 'ready' ? listState.devices : [];
+  const checkpoints = listState.kind === 'ready' ? listState.checkpoints : [];
 
   return (
     <div className="min-h-full bg-slate-950 text-slate-100 p-6 max-w-5xl mx-auto space-y-6">
@@ -93,6 +148,13 @@ export const DevicesManagement: React.FC = () => {
         </Link>
         <h1 className="text-xl font-bold text-white">Gestion des Appareils et QR Codes</h1>
       </div>
+
+      {actionError ? (
+        <div className="p-3.5 rounded-2xl bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs flex gap-2.5 items-start">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-400" />
+          <span>{actionError}</span>
+        </div>
+      ) : null}
 
       {/* 1. Generate Invite Section */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
@@ -122,7 +184,7 @@ export const DevicesManagement: React.FC = () => {
             type="button"
             disabled={creating || !selectedCheckpointId}
             onClick={handleCreateInvite}
-            className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg transition-all"
+            className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-2 shadow-lg transition-all"
           >
             <QrCode className="w-4 h-4" />
             Générer le QR Code d'appairage
@@ -145,6 +207,18 @@ export const DevicesManagement: React.FC = () => {
               <p className="text-xs text-slate-400 leading-relaxed">
                 Le secret d'appairage est transmis dans le fragment URL et ne sera pas stocké dans les logs serveur. Valable 30 minutes, à usage unique.
               </p>
+
+              {activeInvite.unreachableFromPhone ? (
+                <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2 text-left">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+                  <span>
+                    Cette URL pointe vers une adresse locale à ce serveur : un téléphone ne pourra pas l'ouvrir.
+                    Configurez <span className="font-mono">PUBLIC_BASE_URL</span>, ou ouvrez PaxFlux via l'adresse
+                    réseau que les téléphones peuvent joindre.
+                  </span>
+                </div>
+              ) : null}
+
               <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-400 break-all select-all">
                 {activeInvite.pairUrl}
               </div>
@@ -155,57 +229,96 @@ export const DevicesManagement: React.FC = () => {
 
       {/* 2. Registered Devices List */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
-        <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">
-          Appareils Enregistrés ({devices.length})
-        </h2>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
-              <tr>
-                <th className="py-3 px-4">Porte</th>
-                <th className="py-3 px-4">Libellé</th>
-                <th className="py-3 px-4">Statut</th>
-                <th className="py-3 px-4">Dernier Contact</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800 font-mono">
-              {devices.map((dev) => (
-                <tr key={dev.id}>
-                  <td className="py-3 px-4 font-sans font-medium text-white">{dev.checkpointName}</td>
-                  <td className="py-3 px-4 font-sans text-slate-300">{dev.label}</td>
-                  <td className="py-3 px-4 font-sans">
-                    {dev.isOnline ? (
-                      <span className="text-emerald-400 font-semibold">● En ligne</span>
-                    ) : (
-                      <span className="text-rose-400 font-semibold">● Hors ligne</span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-slate-400">
-                    {dev.lastSeenAtMs ? new Date(dev.lastSeenAtMs).toLocaleTimeString('fr-FR') : '—'}
-                  </td>
-                  <td className="py-3 px-4 text-right font-sans">
-                    <button
-                      type="button"
-                      onClick={() => handleRevokeDevice(dev.id)}
-                      className="px-3 py-1 rounded-lg bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 text-xs font-semibold transition-colors"
-                    >
-                      Révoquer
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {devices.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-6 text-center text-slate-500 font-sans">
-                    Aucun appareil connecté.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">
+            Appareils Enregistrés ({devices.length})
+          </h2>
+          <button
+            type="button"
+            disabled={refreshing}
+            onClick={() => fetchDevices({ silent: true })}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-50 text-[11px] font-semibold transition-colors"
+          >
+            <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} /> Actualiser
+          </button>
         </div>
+
+        {listState.kind === 'loading' ? (
+          <p className="text-xs text-slate-400 flex items-center gap-2 py-4">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Chargement des appareils…
+          </p>
+        ) : listState.kind === 'error' ? (
+          <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p>{listState.detail}</p>
+              <button
+                type="button"
+                onClick={() => fetchDevices()}
+                className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
+              >
+                <RefreshCw className="w-3 h-3" /> Réessayer
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-300">
+              <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
+                <tr>
+                  <th className="py-3 px-4">Porte</th>
+                  <th className="py-3 px-4">Libellé</th>
+                  <th className="py-3 px-4">Statut</th>
+                  <th className="py-3 px-4">En attente</th>
+                  <th className="py-3 px-4">Dernier Contact</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800 font-mono">
+                {devices.map((dev) => (
+                  <tr key={dev.id}>
+                    <td className="py-3 px-4 font-sans font-medium text-white">{dev.checkpointName}</td>
+                    <td className="py-3 px-4 font-sans text-slate-300">{dev.label}</td>
+                    <td className="py-3 px-4 font-sans">
+                      {/* isOnline is computed server-side against the shared
+                          threshold, so this matches what the closing gate
+                          sees rather than a second frontend approximation. */}
+                      {dev.isOnline ? (
+                        <span className="text-emerald-400 font-semibold">● En ligne</span>
+                      ) : (
+                        <span className="text-rose-400 font-semibold">● Hors ligne</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4">
+                      {dev.lastPendingCount > 0 ? (
+                        <span className="text-amber-400 font-semibold">{dev.lastPendingCount}</span>
+                      ) : (
+                        <span className="text-slate-500">0</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4 text-slate-400">{formatLastSeen(dev.lastSeenAtMs)}</td>
+                    <td className="py-3 px-4 text-right font-sans">
+                      <button
+                        type="button"
+                        onClick={() => handleRevokeDevice(dev.id)}
+                        className="px-3 py-1 rounded-lg bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 text-xs font-semibold transition-colors"
+                      >
+                        Révoquer
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {devices.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-slate-500 font-sans">
+                      Aucun appareil connecté.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

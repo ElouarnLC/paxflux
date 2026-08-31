@@ -6,6 +6,7 @@ import {
   BatchSyncResponse,
   CompactEventState,
 } from '@paxflux/shared';
+import { CLIENT_APP_VERSION } from '../version.js';
 
 let isFlushing = false;
 
@@ -199,7 +200,7 @@ export async function flushOutbox(): Promise<BatchSyncResponse | null> {
       body: JSON.stringify({
         actions: payloadActions,
         pendingCount: pendingAfterThisBatch,
-        appVersion: '1.0.0',
+        appVersion: CLIENT_APP_VERSION,
       }),
     });
 

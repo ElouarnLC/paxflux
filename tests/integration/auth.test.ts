@@ -130,14 +130,14 @@ describe('Authentication, Security & Pairing Protocol', () => {
       checkpointId,
       createdBy: adminId,
       expiresInMinutes: 30,
-      publicBaseUrl: 'http://localhost:3000',
+      baseUrl: 'http://localhost:3000',
     });
 
     expect(invite.token).toBeDefined();
     expect(invite.pairUrl).toContain('/pair#');
 
     // 2. First Exchange -> Success
-    const exchange1 = await exchangeDeviceInvite(db, invite.token, '1.0.0');
+    const exchange1 = exchangeDeviceInvite(sqlite, invite.token, '1.0.0');
     expect('deviceSession' in exchange1).toBe(true);
     if ('deviceSession' in exchange1) {
       expect(exchange1.deviceSession.checkpointId).toBe(checkpointId);
@@ -145,7 +145,7 @@ describe('Authentication, Security & Pairing Protocol', () => {
     }
 
     // 3. Second Exchange with same token -> Rejected (INVITE_ALREADY_USED)
-    const exchange2 = await exchangeDeviceInvite(db, invite.token, '1.0.0');
+    const exchange2 = exchangeDeviceInvite(sqlite, invite.token, '1.0.0');
     expect('error' in exchange2).toBe(true);
     if ('error' in exchange2) {
       expect(exchange2.error).toBe('INVITE_ALREADY_USED');

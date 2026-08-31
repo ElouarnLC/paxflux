@@ -191,6 +191,21 @@ export async function getEventDevices(session: AdminSession, eventId: string): P
   return adminApi(session, 'GET', `/api/v1/events/${eventId}/devices`);
 }
 
+export async function revokeDeviceSession(session: AdminSession, deviceSessionId: string): Promise<void> {
+  await adminApi(session, 'POST', `/api/v1/device-sessions/${deviceSessionId}/revoke`);
+}
+
+export async function createDeviceInvite(
+  session: AdminSession,
+  eventId: string,
+  checkpointId: string
+): Promise<{ id: string; token: string; pairUrl: string; pairUrlSource: string; unreachableFromPhone: boolean }> {
+  return adminApi(session, 'POST', `/api/v1/events/${eventId}/device-invites`, {
+    checkpointId,
+    expiresInMinutes: 30,
+  });
+}
+
 export async function getEventState(session: AdminSession, eventId: string): Promise<any> {
   return adminApi(session, 'GET', `/api/v1/events/${eventId}/state`);
 }

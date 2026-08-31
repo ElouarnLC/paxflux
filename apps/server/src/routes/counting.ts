@@ -17,6 +17,7 @@ import {
   BatchSyncResponse,
   createProblemDetails,
   SyncQuality,
+  DEVICE_OFFLINE_THRESHOLD_MS,
 } from '@paxflux/shared';
 import { requireDeviceAuth } from '../auth/pairing.js';
 import { requireStaffAuth } from '../auth/staff-sessions.js';
@@ -282,7 +283,7 @@ export async function registerCountingRoutes(
     let totalPending = 0;
 
     const devicesPayload = devicesList.map(({ device, checkpoint }) => {
-      const isOnline = device.lastSeenAtMs !== null && now - device.lastSeenAtMs <= 45_000;
+      const isOnline = device.lastSeenAtMs !== null && now - device.lastSeenAtMs <= DEVICE_OFFLINE_THRESHOLD_MS;
       if (!isOnline) offlineCount++;
       totalPending += device.lastPendingCount;
 

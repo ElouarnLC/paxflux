@@ -1,4 +1,6 @@
 import { FastifyInstance } from 'fastify';
+import { DatabaseSync } from 'node:sqlite';
+import type { ZodIssue } from 'zod';
 import { AppDb } from '../db/index.js';
 import { Env } from '../config/env.js';
 import {
@@ -17,17 +19,23 @@ import {
   createProblemDetails,
   DeviceBootstrapResponse,
   CompactEventState,
+  CreateDeviceInviteResponse,
+  EventDeviceSummary,
+  ErrorCode,
+  DEVICE_OFFLINE_THRESHOLD_MS,
 } from '@paxflux/shared';
 import {
   createDeviceInvite,
   exchangeDeviceInvite,
+  resolvePairingBaseUrl,
   setDeviceSessionCookie,
   requireDeviceAuth,
   authenticateDeviceRequest,
+  ExchangeDeviceInviteError,
 } from '../auth/pairing.js';
 import { requireStaffAuth } from '../auth/staff-sessions.js';
 
-export async function registerDeviceRoutes(app: FastifyInstance, db: AppDb, env: Env) {
+export async function registerDeviceRoutes(app: FastifyInstance, sqlite: DatabaseSync, db: AppDb, env: Env) {
   // POST /api/v1/device/pair
   app.post('/api/v1/device/pair', async (req, reply) => {
     const parseResult = PairDeviceRequestSchema.safeParse(req.body);
@@ -38,18 +46,28 @@ export async function registerDeviceRoutes(app: FastifyInstance, db: AppDb, env:
     }
 
     const { token, appVersion } = parseResult.data;
-    const result = await exchangeDeviceInvite(db, token, appVersion, env.DEVICE_SESSION_GRACE_HOURS);
+    const result = exchangeDeviceInvite(sqlite, token, appVersion, env.DEVICE_SESSION_GRACE_HOURS);
 
     if ('error' in result) {
-      const codeMap: Record<string, { status: number; title: string; detail: string }> = {
-        INVITE_NOT_FOUND: { status: 404, title: 'Invitation introuvable', detail: 'Ce QR code ou lien d’invitation n’existe pas.' },
-        INVITE_EXPIRED: { status: 410, title: 'Invitation expirée', detail: 'Ce QR code a expiré.' },
-        INVITE_ALREADY_USED: { status: 409, title: 'Invitation déjà utilisée', detail: 'Ce QR code à usage unique a déjà été utilisé.' },
-        INVITE_REVOKED: { status: 403, title: 'Invitation révoquée', detail: 'Cette invitation a été révoquée par un responsable.' },
+      const codeMap: Record<ExchangeDeviceInviteError, { status: number; code: ErrorCode; title: string; detail: string }> = {
+        INVITE_NOT_FOUND: { status: 404, code: 'INVITE_NOT_FOUND', title: 'Invitation introuvable', detail: 'Ce QR code ou lien d’invitation n’existe pas.' },
+        INVITE_EXPIRED: { status: 410, code: 'INVITE_EXPIRED', title: 'Invitation expirée', detail: 'Ce QR code a expiré.' },
+        INVITE_ALREADY_USED: { status: 409, code: 'INVITE_ALREADY_USED', title: 'Invitation déjà utilisée', detail: 'Ce QR code à usage unique a déjà été utilisé.' },
+        INVITE_REVOKED: { status: 403, code: 'INVITE_REVOKED', title: 'Invitation révoquée', detail: 'Cette invitation a été révoquée par un responsable.' },
+        EVENT_NOT_PAIRABLE: {
+          status: 409,
+          code: 'EVENT_NOT_PAIRABLE',
+          title: 'Événement non appairable',
+          detail: 'Cet événement n’accepte plus de nouvel appareil (appairage possible en brouillon ou en direct uniquement).',
+        },
+        INTERNAL_ERROR: { status: 500, code: 'INTERNAL_ERROR', title: 'Erreur interne', detail: 'L’appairage a échoué. Réessayez avec un nouveau QR code.' },
       };
 
-      const info = codeMap[result.error] || { status: 400, title: 'Erreur', detail: 'Invitation invalide' };
-      return reply.status(info.status).send(createProblemDetails(info.status, result.error as any, info.title, info.detail));
+      const info = codeMap[result.error];
+      if (info.status === 500) {
+        app.log.error({ inviteError: result.error }, 'Device pairing failed unexpectedly');
+      }
+      return reply.status(info.status).send(createProblemDetails(info.status, info.code, info.title, info.detail));
     }
 
     setDeviceSessionCookie(reply, result.sessionToken, result.expiresAtMs, env);
@@ -146,7 +164,29 @@ export async function registerDeviceRoutes(app: FastifyInstance, db: AppDb, env:
     if (!deviceSession) return;
 
     const parseResult = DeviceHeartbeatRequestSchema.safeParse(req.body);
-    const body = parseResult.success ? parseResult.data : { pendingCount: 0 };
+    if (!parseResult.success) {
+      // A malformed heartbeat must never be coerced into a default
+      // `{ pendingCount: 0 }`: that would tell the supervisor this device
+      // has nothing left to synchronise while it may still be holding
+      // queued actions — and would let a normal `/close` through on a lie.
+      // Nothing is written at all, not even `lastSeenAtMs`: this request
+      // proves nothing about the device's state.
+      return reply.status(400).send(
+        createProblemDetails(
+          400,
+          'VALIDATION_ERROR',
+          'Heartbeat invalide',
+          'Payload de heartbeat invalide.',
+          undefined,
+          parseResult.error.errors.map((e: ZodIssue) => ({
+            name: e.path.join('.'),
+            reason: e.message,
+          }))
+        )
+      );
+    }
+
+    const body = parseResult.data;
     const now = Date.now();
 
     await db
@@ -178,15 +218,93 @@ export async function registerDeviceRoutes(app: FastifyInstance, db: AppDb, env:
 
     const { checkpointId, expiresInMinutes } = parseResult.data;
 
+    // The frontend picks a checkpoint from a dropdown, but that selection
+    // is never the invariant: verify server-side that this checkpoint
+    // really belongs to this event and is usable, so a crafted request can
+    // never mint an invitation pointing at another event's door.
+    const eventRecord = await db.select().from(events).where(eq(events.id, eventId)).get();
+    if (!eventRecord) {
+      return reply
+        .status(404)
+        .send(createProblemDetails(404, 'EVENT_NOT_FOUND', 'Événement introuvable', 'Événement introuvable.'));
+    }
+
+    // SPEC §5.1: devices are generated and paired in `draft`, and may still
+    // be added in `live`. `closing` only drains already-paired devices;
+    // `closed`/`archived` accept none.
+    if (eventRecord.status !== 'draft' && eventRecord.status !== 'live') {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'EVENT_NOT_PAIRABLE',
+            'Événement non appairable',
+            'Un appareil ne peut être ajouté qu’en brouillon ou en direct.'
+          )
+        );
+    }
+
+    const checkpoint = await db
+      .select()
+      .from(checkpoints)
+      .where(and(eq(checkpoints.id, checkpointId), eq(checkpoints.eventId, eventId)))
+      .get();
+    if (!checkpoint) {
+      return reply
+        .status(404)
+        .send(
+          createProblemDetails(
+            404,
+            'CHECKPOINT_NOT_FOUND',
+            'Checkpoint introuvable',
+            'Ce checkpoint n’existe pas pour cet événement.'
+          )
+        );
+    }
+    if (!checkpoint.isActive) {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'VALIDATION_ERROR',
+            'Checkpoint inactif',
+            'Ce checkpoint est désactivé : aucun appareil ne peut y être appairé.'
+          )
+        );
+    }
+
+    // The server owns the pairing URL — see resolvePairingBaseUrl.
+    const base = resolvePairingBaseUrl(env, { protocol: req.protocol, host: req.host });
+    if ('error' in base) {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'VALIDATION_ERROR',
+            'URL publique inconnue',
+            'Impossible de déterminer l’URL d’appairage. Configurez PUBLIC_BASE_URL pour que le QR code soit utilisable.'
+          )
+        );
+    }
+
     const invite = await createDeviceInvite(db, {
       eventId,
       checkpointId,
       createdBy: sessionData.user.id,
       expiresInMinutes,
-      publicBaseUrl: env.PUBLIC_BASE_URL,
+      baseUrl: base.baseUrl,
     });
 
-    return reply.status(201).send(invite);
+    const response: CreateDeviceInviteResponse = {
+      ...invite,
+      pairUrlSource: base.source,
+      unreachableFromPhone: base.unreachableFromPhone,
+    };
+
+    return reply.status(201).send(response);
   });
 
   // DELETE /api/v1/device-invites/:id
@@ -218,12 +336,12 @@ export async function registerDeviceRoutes(app: FastifyInstance, db: AppDb, env:
       .all();
 
     const now = Date.now();
-    const result = devicesList.map(({ device, checkpoint }) => ({
+    const result: EventDeviceSummary[] = devicesList.map(({ device, checkpoint }) => ({
       id: device.id,
       checkpointId: device.checkpointId,
       checkpointName: checkpoint.name,
       label: device.label,
-      isOnline: device.lastSeenAtMs !== null && now - device.lastSeenAtMs <= 45_000,
+      isOnline: device.lastSeenAtMs !== null && now - device.lastSeenAtMs <= DEVICE_OFFLINE_THRESHOLD_MS,
       lastSeenAtMs: device.lastSeenAtMs,
       lastPendingCount: device.lastPendingCount,
       appVersion: device.appVersion,

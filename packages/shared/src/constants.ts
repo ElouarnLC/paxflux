@@ -24,4 +24,15 @@ export const SSE_HEARTBEAT_INTERVAL_MS = 20_000;
 export const SSE_COALESCE_WINDOW_MS = 75;
 
 export const MAX_BATCH_ACTIONS = 100;
+/**
+ * A device that has not been heard from for this long counts as offline in
+ * every supervision surface. The single source of truth for that verdict —
+ * clients display what the server computed rather than approximating it.
+ */
 export const DEVICE_OFFLINE_THRESHOLD_MS = 45_000;
+/**
+ * How often an open counter announces itself. Comfortably under
+ * DEVICE_OFFLINE_THRESHOLD_MS so a device stays online across a missed
+ * beat, without turning idle handsets into a stream of traffic.
+ */
+export const DEVICE_HEARTBEAT_INTERVAL_MS = 15_000;

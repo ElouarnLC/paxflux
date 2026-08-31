@@ -9,6 +9,7 @@ import {
   triggerFlush,
 } from '../offline/outbox.js';
 import { useSSE } from '../sse/useSSE.js';
+import { useDeviceHeartbeat } from './useDeviceHeartbeat.js';
 import { apiFetch } from '../api/client.js';
 import {
   DeviceBootstrapResponse,
@@ -116,6 +117,12 @@ export const CounterView: React.FC = () => {
     init();
   }, []);
 
+  // Periodic heartbeat, started once this device is bootstrapped (i.e.
+  // authenticated). Independent of taps: an open counter at a quiet door
+  // must still read as online for the supervisor.
+  const heartbeatState = useDeviceHeartbeat(bootstrap !== null);
+  const isSessionRevoked = heartbeatState === 'session-invalid';
+
   // SSE Stream for real-time state updates
   const { isConnected } = useSSE({
     url: '/api/v1/device/stream',
@@ -158,7 +165,10 @@ export const CounterView: React.FC = () => {
   // drain actions already queued in its outbox from before the closing
   // transition (see offline/outbox.ts flushOutbox) — this gate only
   // blocks *new* ones from being created via the buttons below.
-  const isCountingAllowed = eventStatus === 'live';
+  // A revoked session also blocks new taps: the server would refuse them
+  // anyway, and letting the operator keep tapping into a dead session
+  // would quietly build up counts nobody will ever receive.
+  const isCountingAllowed = eventStatus === 'live' && !isSessionRevoked;
 
   // Handle Tap Count
   const handleTap = useCallback(
@@ -238,7 +248,12 @@ export const CounterView: React.FC = () => {
 
           {/* Connection / Sync Badge */}
           <div className="flex items-center gap-1.5">
-            {isOnline && isConnected && pendingCount === 0 ? (
+            {isSessionRevoked ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-950 border border-rose-500/40 text-rose-300">
+                <Lock className="w-3 h-3" />
+                RÉVOQUÉ
+              </span>
+            ) : isOnline && isConnected && pendingCount === 0 ? (
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
                 <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                 EN LIGNE
@@ -257,8 +272,26 @@ export const CounterView: React.FC = () => {
           </div>
         </div>
 
+        {/* Revoked / invalid device session: the supervisor pulled this
+            device, so counting stops here. The local outbox is deliberately
+            left untouched — deciding what happens to actions queued before
+            the revocation belongs to Phase 6, and silently dropping them
+            would destroy counts nobody has reconciled yet. */}
+        {isSessionRevoked ? (
+          <div className="mt-3 p-3 rounded-2xl bg-rose-950/80 border border-rose-500/50 text-rose-200 text-xs flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-rose-100">Appareil révoqué</p>
+              <p className="text-rose-200/90 text-[11px] mt-0.5 leading-snug">
+                Cette session appareil n'est plus valide. Le comptage est arrêté. Demandez un nouveau QR code
+                d'appairage à un responsable.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         {/* Explicit Offline Banner per SPEC §10.5 */}
-        {!isOnline ? (
+        {!isOnline && !isSessionRevoked ? (
           <div className="mt-3 p-3 rounded-2xl bg-amber-950/80 border border-amber-500/50 text-amber-200 text-xs flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
             <div>

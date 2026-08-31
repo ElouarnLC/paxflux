@@ -4,6 +4,7 @@ import { apiFetch } from '../api/client.js';
 import { localDb } from '../offline/db.js';
 import { Loader2, AlertCircle, CheckCircle, Smartphone } from 'lucide-react';
 import { DeviceBootstrapResponse } from '@paxflux/shared';
+import { CLIENT_APP_VERSION } from '../version.js';
 
 export const PairingPage: React.FC = () => {
   const navigate = useNavigate();
@@ -31,7 +32,7 @@ export const PairingPage: React.FC = () => {
         // Exchange fragment token for device session cookie
         const res = await apiFetch<{ success: boolean; deviceSession: any }>('/api/v1/device/pair', {
           method: 'POST',
-          body: JSON.stringify({ token: rawToken, appVersion: '1.0.0' }),
+          body: JSON.stringify({ token: rawToken, appVersion: CLIENT_APP_VERSION }),
         });
 
         if (res.success) {
