@@ -12,7 +12,7 @@ export function validateCheckpointRules(
     allowAToB?: boolean;
     allowBToA?: boolean;
   },
-  spacesMap: Map<string, SpaceModel>
+  spacesMap: Map<string, Pick<SpaceModel, 'kind'>>
 ): CheckpointValidationError | null {
   const { spaceAId, spaceBId, allowAToB = true, allowBToA = true } = checkpoint;
 

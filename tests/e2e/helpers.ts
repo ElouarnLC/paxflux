@@ -194,3 +194,15 @@ export async function getEventDevices(session: AdminSession, eventId: string): P
 export async function getEventState(session: AdminSession, eventId: string): Promise<any> {
   return adminApi(session, 'GET', `/api/v1/events/${eventId}/state`);
 }
+
+export async function getEventSpaces(session: AdminSession, eventId: string): Promise<any[]> {
+  return adminApi(session, 'GET', `/api/v1/events/${eventId}/spaces`);
+}
+
+export async function getEventCheckpoints(session: AdminSession, eventId: string): Promise<any[]> {
+  return adminApi(session, 'GET', `/api/v1/events/${eventId}/checkpoints`);
+}
+
+export async function getEventPreflight(session: AdminSession, eventId: string): Promise<any> {
+  return adminApi(session, 'GET', `/api/v1/events/${eventId}/preflight`);
+}

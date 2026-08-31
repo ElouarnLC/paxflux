@@ -76,6 +76,17 @@ export function validateEventForLive(
     return { code: 'INVALID_CAPACITY', message: 'Event capacity cannot be negative.' };
   }
 
+  // SPEC: boundary counting requires an external space at all times — a
+  // topology that had one at creation but had it deactivated afterwards
+  // (via PATCH) is no longer coherent, even if it was valid when created.
+  const activeExternalSpaces = spacesList.filter((s) => s.kind === 'external' && s.isActive);
+  if (activeExternalSpaces.length === 0) {
+    return {
+      code: 'NO_ACTIVE_EXTERNAL_SPACE',
+      message: 'The event must have at least one active external (boundary) space.',
+    };
+  }
+
   const internalLeaves = spacesList.filter((s) => s.kind === 'leaf' && s.isActive);
   if (internalLeaves.length === 0) {
     return {
@@ -92,9 +103,14 @@ export function validateEventForLive(
     };
   }
 
-  const spacesMap = new Map(spacesList.map((s) => [s.id, s]));
+  // Only active spaces count as valid checkpoint endpoints here: an active
+  // checkpoint whose endpoint was deactivated after creation must fail
+  // preflight/start, not silently pass because the space still exists.
+  // This reuses validateCheckpointRules' own SPACE_A_NOT_FOUND/
+  // SPACE_B_NOT_FOUND checks rather than duplicating the rule.
+  const activeSpacesMap = new Map(spacesList.filter((s) => s.isActive).map((s) => [s.id, s]));
   for (const cp of activeCheckpoints) {
-    const cpError = validateCheckpointRules(cp, spacesMap);
+    const cpError = validateCheckpointRules(cp, activeSpacesMap);
     if (cpError) {
       return { code: `INVALID_CHECKPOINT_${cpError.code}`, message: `Checkpoint "${cp.name}": ${cpError.message}` };
     }
