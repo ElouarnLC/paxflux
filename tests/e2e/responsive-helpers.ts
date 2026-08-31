@@ -628,3 +628,154 @@ export async function assertPortalSafeArea(page: Page, label: string): Promise<v
     `${label}: the dialog's height budget does not use dvh (${JSON.stringify(found!.matching)}), so it assumes a viewport the browser chrome does not leave it`
   ).toBe(true);
 }
+
+/** WCAG 2.1 SC 1.4.3: 18pt, or 14pt bold, counts as "large text". */
+export const LARGE_TEXT_PX = 24;
+export const LARGE_TEXT_BOLD_PX = 18.66;
+export const LARGE_TEXT_MIN_WEIGHT = 700;
+
+/**
+ * Measures the contrast of **every** piece of text under `root`, at the
+ * threshold its own size and weight earn it.
+ *
+ * This exists because of a specific mistake, and its shape is the fix for
+ * that mistake. The count buttons were audited as "large text, 3:1" and
+ * signed off at 4.30:1 — but each button carries *two* labels, and the
+ * second one ("Vers …") is 12px medium, i.e. small text at 4.5:1. Worse, it
+ * was drawn at 80% opacity, which is a contrast reduction that never
+ * appears in a token table: the token said 4.30:1, the pixels said 3.32:1.
+ *
+ * So this assertion cannot be satisfied by checking the headline. It
+ * enumerates every element with its own text, derives the threshold from
+ * the computed font-size and weight, and composites the alpha of both the
+ * foreground and every background layer above it — using the browser's own
+ * colour pipeline via a canvas, so `oklch()`, `color-mix()` and nested
+ * translucent surfaces all resolve exactly as they are painted.
+ */
+export async function assertTextContrast(
+  page: Page,
+  rootSelector: string,
+  label: string
+): Promise<void> {
+  const findings = await page.evaluate(
+    ({ rootSelector, largePx, largeBoldPx, largeWeight }) => {
+      const root = document.querySelector(rootSelector);
+      if (!root) return null;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 1;
+      canvas.height = 1;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+
+      /** Paints `css` over `backdrop` and reads back what the browser drew. */
+      function paint(css: string, backdrop: [number, number, number]): [number, number, number] {
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.fillStyle = `rgb(${backdrop.map((c) => Math.round(c * 255)).join(',')})`;
+        ctx.fillRect(0, 0, 1, 1);
+        ctx.fillStyle = css;
+        ctx.fillRect(0, 0, 1, 1);
+        const d = ctx.getImageData(0, 0, 1, 1).data;
+        return [d[0] / 255, d[1] / 255, d[2] / 255];
+      }
+
+      /** Every background layer from the canvas down to this element. */
+      function effectiveBackground(el: Element): [number, number, number] {
+        const layers: string[] = [];
+        let node: Element | null = el;
+        while (node) {
+          layers.unshift(getComputedStyle(node).backgroundColor);
+          node = node.parentElement;
+        }
+        let acc: [number, number, number] = [1, 1, 1]; // the UA canvas
+        for (const layer of layers) acc = paint(layer, acc);
+        return acc;
+      }
+
+      const decode = (u: number) => (u <= 0.04045 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4));
+      function relLum([r, g, b]: [number, number, number]) {
+        return 0.2126 * decode(r) + 0.7152 * decode(g) + 0.0722 * decode(b);
+      }
+      function contrastOf(a: [number, number, number], b: [number, number, number]) {
+        const la = relLum(a);
+        const lb = relLum(b);
+        const [hi, lo] = la > lb ? [la, lb] : [lb, la];
+        return (hi + 0.05) / (lo + 0.05);
+      }
+
+      const measured: Array<{
+        tag: string;
+        text: string;
+        fontPx: number;
+        weight: number;
+        large: boolean;
+        ratio: number;
+        threshold: number;
+      }> = [];
+
+      for (const el of Array.from(root.querySelectorAll('*'))) {
+        // Only elements holding their own text: a wrapper inherits its
+        // children's words and would be counted twice.
+        const ownText = Array.from(el.childNodes)
+          .filter((n) => n.nodeType === Node.TEXT_NODE)
+          .map((n) => (n.textContent || '').trim())
+          .join(' ')
+          .trim();
+        if (!ownText) continue;
+
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+
+        const style = getComputedStyle(el);
+        if (style.visibility === 'hidden' || style.opacity === '0') continue;
+
+        const fontPx = parseFloat(style.fontSize);
+        const weight = parseInt(style.fontWeight, 10) || 400;
+        const large = fontPx >= largePx || (fontPx >= largeBoldPx && weight >= largeWeight);
+
+        const bg = effectiveBackground(el.parentElement || el);
+        const fg = paint(style.color, bg);
+        const ratio = contrastOf(fg, bg);
+
+        measured.push({
+          tag: el.tagName.toLowerCase(),
+          text: ownText.slice(0, 44),
+          fontPx: Math.round(fontPx * 100) / 100,
+          weight,
+          large,
+          ratio: Math.round(ratio * 100) / 100,
+          threshold: large ? 3 : 4.5,
+        });
+      }
+
+      return measured;
+    },
+    {
+      rootSelector,
+      largePx: LARGE_TEXT_PX,
+      largeBoldPx: LARGE_TEXT_BOLD_PX,
+      largeWeight: LARGE_TEXT_MIN_WEIGHT,
+    }
+  );
+
+  expect(findings, `${label}: "${rootSelector}" matched nothing, so this would be vacuous`).not.toBeNull();
+  const measured = findings!;
+
+  expect(
+    measured.length,
+    `${label}: no text found under "${rootSelector}" — the assertion would prove nothing`
+  ).toBeGreaterThan(0);
+
+  // The hole this guard closes: an audit that only ever looked at headlines
+  // would pass while a small label failed. If nothing small is on screen,
+  // the run is not evidence.
+  expect(
+    measured.filter((m) => !m.large).length,
+    `${label}: only large text was measured, which is exactly the blind spot this assertion exists to remove`
+  ).toBeGreaterThan(0);
+
+  const failing = measured.filter((m) => m.ratio < m.threshold - 0.005);
+  expect(
+    failing,
+    `${label}: ${failing.length} text element(s) below their WCAG 1.4.3 threshold:\n${JSON.stringify(failing, null, 2)}`
+  ).toEqual([]);
+}

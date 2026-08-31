@@ -734,8 +734,19 @@ export const CounterView: React.FC = () => {
                 : 'bg-muted text-muted-foreground cursor-not-allowed border border-border'
             }`}
           >
+            {/* Two labels, two WCAG thresholds. The headline is 24–30px
+                black — large text at 3:1 — but the line under it is 12px
+                medium, which is small text at 4.5:1. Sizing the entry/exit
+                tokens for the headline alone left this one at 3.3:1, and
+                the 80% opacity it used to carry made that invisible in the
+                token table: alpha on a foreground is a contrast reduction
+                nothing but a rendered measurement shows.
+
+                It inherits its colour rather than pinning one, so a
+                disabled button greys the whole label instead of leaving
+                this line white on a grey fill. */}
             <span>{bootstrap.checkpoint.labelAToB || 'ENTRÉE +1'}</span>
-            <span className="text-xs font-medium text-entry-foreground/80 tracking-normal uppercase">
+            <span className="text-xs font-medium tracking-normal uppercase">
               Vers {bootstrap.checkpoint.spaceBName}
             </span>
           </button>
@@ -755,7 +766,7 @@ export const CounterView: React.FC = () => {
             }`}
           >
             <span>{bootstrap.checkpoint.labelBToA || 'SORTIE −1'}</span>
-            <span className="text-xs font-medium text-exit-foreground/80 tracking-normal uppercase">
+            <span className="text-xs font-medium tracking-normal uppercase">
               Vers {bootstrap.checkpoint.spaceAName}
             </span>
           </button>

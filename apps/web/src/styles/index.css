@@ -25,10 +25,14 @@
  *                                                           so "large text"
  *                                                           does not apply)
  *   dark label on success / warning / closing 8.6 – 10.9   (AA)
- *   white on entry / exit ................... 4.30 / 4.58  (the count buttons
- *                                                           are 24–30px bold,
- *                                                           i.e. large text,
- *                                                           target 3.0)
+ *   white on entry / exit ................... 5.11 / 5.08  (both labels on a
+ *                                                           count button, the
+ *                                                           12px sub-label
+ *                                                           included, so the
+ *                                                           target is 4.5 —
+ *                                                           not the 3.0 the
+ *                                                           large label alone
+ *                                                           would have allowed)
  *   input border, focus ring ................ 3.2 – 6.3    (WCAG 1.4.11)
  *
  * `--border` is deliberately *not* held to 3:1: it separates surfaces that
@@ -80,11 +84,19 @@
   --over-capacity: oklch(0.720 0.170 305);
 
   /* The two count directions. Only ever used on the field counter, where
-     the label is 24–30px bold and the fill has to stay unmistakable at a
-     glance, in the dark, from arm's length. */
-  --entry: oklch(0.560 0.134 156);
+     the fill has to stay unmistakable at a glance, in the dark, from arm's
+     length.
+     
+     These are darker than the fill a purely aesthetic choice would pick,
+     and deliberately so: the button carries *two* labels, not one. The
+     large ENTRÉE/SORTIE is 24–30px black, which WCAG counts as large text
+     at a 3:1 target — but the "Vers …" line under it is 12px medium, which
+     is small text at 4.5:1. Sizing these tokens for the large label alone
+     left the small one at 3.3:1. They are sized for the *small* label, and
+     the large one inherits the margin. */
+  --entry: oklch(0.520 0.126 156);
   --entry-foreground: oklch(0.995 0 0);
-  --exit: oklch(0.585 0.200 24);
+  --exit: oklch(0.560 0.200 24);
   --exit-foreground: oklch(0.995 0 0);
 
   /* Geometry. Surfaces get progressively less rounded as they nest, so the

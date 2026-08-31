@@ -11,6 +11,7 @@ import {
 } from './helpers.js';
 import {
   assertFullyVisible,
+  assertTextContrast,
   assertNoVerticalScrolling,
   assertScreenFitsViewport,
   isPhoneViewport,
@@ -152,6 +153,12 @@ test('un état exceptionnel n’enferme aucune action hors de l’écran', async
   await beginClosingEvent(session, topo.eventId);
   await expect(page.getByText('Événement en cours de fermeture')).toBeVisible({ timeout: 15_000 });
   await assertScreenFitsViewport(page, '/counter (fermeture en cours)');
+
+  // Disabled is a state with its own colours: the fill becomes `muted` and
+  // the labels `muted-foreground`. Measured here too, because a sub-label
+  // that pinned a colour instead of inheriting one would stay white on a
+  // grey button and only this state would show it.
+  await assertTextContrast(page, '#root', '/counter (fermeture en cours)');
 });
 
 test('le compteur reste exploitable au clavier et sur grand écran', async ({ page }) => {
@@ -167,5 +174,47 @@ test('le compteur reste exploitable au clavier et sur grand écran', async ({ pa
 
   if (!isPhoneViewport(page)) {
     await assertNoVerticalScrolling(page, '/counter (grand écran)');
+  }
+});
+
+test('chaque libellé des boutons de comptage atteint son seuil de contraste', async ({ page }) => {
+  const topo = await createLongNamedTopology(session, { suffix: `contrast-${test.info().project.name}` });
+  await startEvent(session, topo.eventId);
+  await pairCounter(page, topo);
+
+  // Measured on the whole counter, and per element: the two count buttons
+  // each carry a 24–30px black headline *and* a 12px medium "Vers …" line.
+  // Auditing the token pair once, at the headline's threshold, is what let
+  // the sub-label ship at 3.3:1 — so the assertion enumerates every piece
+  // of text and gives each the threshold its own size and weight earn.
+  await assertTextContrast(page, '#root', '/counter (état normal)');
+
+  // Named explicitly as well, so a future refactor that removes the
+  // sub-labels turns this into a failure rather than a silent pass.
+  const subLabels = await page.evaluate(() =>
+    ['count-a-to-b', 'count-b-to-a'].map((id) => {
+      const button = document.querySelector(`[data-testid="${id}"]`)!;
+      const sub = button.querySelector('span:last-of-type')!;
+      const style = getComputedStyle(sub);
+      return {
+        id,
+        text: (sub.textContent || '').trim().slice(0, 30),
+        fontPx: parseFloat(style.fontSize),
+        // The alpha that made the token table lie. It must be gone.
+        opaque: !/\/\s*0?\.\d+\s*\)/.test(style.color) && !style.color.includes('rgba'),
+      };
+    })
+  );
+
+  for (const sub of subLabels) {
+    expect(sub.text.length, `${sub.id}: the "Vers …" sub-label is missing`).toBeGreaterThan(0);
+    expect(
+      sub.fontPx,
+      `${sub.id}: the sub-label is ${sub.fontPx}px — if it ever reaches 24px it would become "large text" and quietly drop to a 3:1 target`
+    ).toBeLessThan(24);
+    expect(
+      sub.opaque,
+      `${sub.id}: the sub-label is drawn with a translucent colour (${JSON.stringify(sub)}); alpha on a foreground is a contrast reduction that no token table shows`
+    ).toBe(true);
   }
 });
