@@ -10,11 +10,14 @@ import {
   CheckCircle,
   Loader2,
   RefreshCw,
-  Wifi,
-  WifiOff,
   RotateCcw,
   Archive,
 } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { CardPanel } from '@/components/ui/card';
+import { ConfirmAction, ReasonAction } from '@/components/paxflux/confirm-action';
+import { StatusText } from '@/components/paxflux/status';
 
 type DeviceRow = EventDetailResponse['devices'][number];
 
@@ -43,14 +46,22 @@ type DevicesState =
 const DEVICES_POLL_INTERVAL_MS = 3_000;
 
 /**
- * Lifecycle surface for Phase 3: draft -> live -> closing -> closed ->
- * archived, plus the admin-only closed -> live reopen. Each transition
- * calls the corresponding server endpoint directly — the server is the
- * sole source of truth for whether a transition is valid (see
- * apps/server/src/domain/events.ts) — this component only decides which
- * actions make sense to offer for the current status and asks for
- * confirmation (a reason too, for the two audited actions) before calling
- * them.
+ * Lifecycle surface: draft -> live -> closing -> closed -> archived, plus
+ * the admin-only closed -> live reopen. Each transition calls the
+ * corresponding server endpoint directly — the server is the sole source of
+ * truth for whether a transition is valid (see
+ * apps/server/src/domain/events.ts). This component only decides which
+ * actions make sense for the current status and asks for confirmation (and,
+ * for the two audited actions, a reason) before calling them.
+ *
+ * Those confirmations used to be `window.confirm` and `window.prompt`. They
+ * are now real dialogs (`components/paxflux/confirm-action`), which changes
+ * three things and no more: force-close can be shown as dangerous rather
+ * than described as such in a system font; the reason is validated while it
+ * is being typed instead of after a second modal; and the two-step
+ * prompt-then-confirm for force-close and reopen becomes one step. The
+ * endpoints, the payloads, the reason's minimum length and the rule that a
+ * cancelled confirmation sends nothing are all unchanged.
  */
 export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onChanged }) => {
   const { user } = useAuth();
@@ -93,7 +104,9 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
         setDevicesState({ kind: 'ready', devices: res });
       } catch (err) {
         setDevicesState((prev) =>
-          opts.silent && prev.kind === 'ready' ? prev : { kind: 'error', detail: errorDetail(err, 'Impossible de charger la liste des appareils.') }
+          opts.silent && prev.kind === 'ready'
+            ? prev
+            : { kind: 'error', detail: errorDetail(err, 'Impossible de charger la liste des appareils.') }
         );
       } finally {
         setDevicesRefreshing(false);
@@ -102,14 +115,13 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
     [event.id, event.status]
   );
 
-  // While closing, an appareil can go from offline/pending to fully
-  // synced entirely on its own (it reconnects and drains its outbox) —
-  // nothing the admin does triggers a re-render. Poll every few seconds
-  // so the device list and the normal-close button's enabled state stay
-  // current without a manual reload. A single in-flight request at a
-  // time: each tick waits for the previous fetch to resolve before
-  // scheduling the next, so a slow response never queues up parallel
-  // requests. Cleaned up on status change or unmount.
+  // While closing, an appareil can go from offline/pending to fully synced
+  // entirely on its own (it reconnects and drains its outbox) — nothing the
+  // admin does triggers a re-render. Poll every few seconds so the device
+  // list and the normal-close button's enabled state stay current without a
+  // manual reload. A single in-flight request at a time: each tick waits for
+  // the previous fetch to resolve before scheduling the next, so a slow
+  // response never queues up parallel requests.
   useEffect(() => {
     if (event.status !== 'closing') return;
     let cancelled = false;
@@ -130,9 +142,12 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
     };
   }, [event.status, refreshDevices]);
 
+  /**
+   * The only path from a confirmation to a request. Reaching it means the
+   * operator confirmed; cancelling never gets here.
+   */
   const runTransition = useCallback(
-    async (path: string, confirmMessage: string, body?: Record<string, unknown>) => {
-      if (!window.confirm(confirmMessage)) return;
+    async (path: string, body?: Record<string, unknown>) => {
       setActionLoading(true);
       setActionError(null);
       try {
@@ -150,67 +165,64 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
     [event.id, onChanged]
   );
 
-  const promptForReason = (title: string): string | null => {
-    const reason = window.prompt(title);
-    if (reason === null) return null;
-    if (reason.trim().length < 3) {
-      setActionError("Un motif d'au moins 3 caractères est requis.");
-      return null;
-    }
-    return reason.trim();
-  };
-
   const errorBanner = actionError ? (
-    <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2">
-      <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-      <span>{actionError}</span>
-    </div>
+    <Alert tone="danger">
+      <AlertTriangle />
+      <AlertDescription className="mt-0 text-foreground/90">{actionError}</AlertDescription>
+    </Alert>
   ) : null;
 
   if (event.status === 'draft') {
+    const ready = preflight.kind === 'ready' && preflight.data.ready;
     return (
       <div className="space-y-3">
         {preflight.kind === 'loading' ? (
-          <p className="text-xs text-slate-400 flex items-center gap-2">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Vérification du préflight…
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" /> Vérification du préflight…
           </p>
         ) : preflight.kind === 'error' ? (
-          <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p>{preflight.detail}</p>
-              <button
-                type="button"
-                onClick={refreshPreflight}
-                className="mt-2 inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
-              >
-                <RefreshCw className="w-3 h-3" /> Réessayer
-              </button>
+          <Alert tone="danger">
+            <AlertTriangle />
+            <div className="min-w-0 flex-1">
+              <AlertDescription className="mt-0 text-foreground/90">{preflight.detail}</AlertDescription>
+              <Button variant="outline" size="sm" className="mt-2" onClick={refreshPreflight}>
+                <RefreshCw className="size-3" /> Réessayer
+              </Button>
             </div>
-          </div>
+          </Alert>
         ) : !preflight.data.ready ? (
-          <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <span>{preflight.data.error?.message || "Cet événement n'est pas prêt à démarrer."}</span>
-          </div>
+          <Alert tone="warning">
+            <AlertTriangle />
+            <AlertDescription className="mt-0 text-foreground/90">
+              {preflight.data.error?.message || "Cet événement n'est pas prêt à démarrer."}
+            </AlertDescription>
+          </Alert>
         ) : (
-          <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-200 text-xs flex items-start gap-2">
-            <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <span>Topologie valide. Prêt à démarrer.</span>
-          </div>
+          <Alert tone="success">
+            <CheckCircle />
+            <AlertDescription className="mt-0 text-foreground/90">
+              Topologie valide. Prêt à démarrer.
+            </AlertDescription>
+          </Alert>
         )}
 
         {errorBanner}
 
-        <button
-          type="button"
-          disabled={actionLoading || preflight.kind !== 'ready' || !preflight.data.ready}
-          onClick={() => runTransition('start', "Démarrer l'événement et le passer en direct ?")}
-          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
-        >
-          {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
-          Démarrer l'événement
-        </button>
+        <ConfirmAction
+          disabled={actionLoading || !ready}
+          busy={actionLoading}
+          title="Démarrer l'événement ?"
+          description="L'événement passe en direct et les compteurs sur le terrain commencent à accepter des comptages."
+          confirmLabel="Démarrer l'événement"
+          confirmVariant="success"
+          onConfirm={() => runTransition('start')}
+          trigger={
+            <Button variant="success" className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading || !ready}>
+              {actionLoading ? <Loader2 className="animate-spin" /> : <PlayCircle />}
+              Démarrer l'événement
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -219,132 +231,128 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
     return (
       <div className="space-y-3">
         {errorBanner}
-        <button
-          type="button"
+        <ConfirmAction
           disabled={actionLoading}
-          onClick={() =>
-            runTransition(
-              'begin-closing',
-              "Débuter la fermeture ? Les compteurs sur le terrain n'accepteront plus de nouveaux comptages."
-            )
+          busy={actionLoading}
+          title="Débuter la fermeture ?"
+          description="Les compteurs sur le terrain n'accepteront plus de nouveaux comptages. Ceux déjà enregistrés hors ligne continueront d'être drainés."
+          confirmLabel="Débuter la fermeture"
+          confirmVariant="closing"
+          onConfirm={() => runTransition('begin-closing')}
+          trigger={
+            <Button variant="closing" className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading}>
+              {actionLoading ? <Loader2 className="animate-spin" /> : <Lock />}
+              Débuter la fermeture
+            </Button>
           }
-          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
-        >
-          {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
-          Débuter la fermeture
-        </button>
+        />
       </div>
     );
   }
 
   if (event.status === 'closing') {
-    const allSynced = devicesState.kind === 'ready' && devicesState.devices.every((d) => d.isOnline && d.lastPendingCount === 0);
+    const allSynced =
+      devicesState.kind === 'ready' &&
+      devicesState.devices.every((d) => d.isOnline && d.lastPendingCount === 0);
 
     return (
       <div className="space-y-3">
         {errorBanner}
 
         {devicesState.kind === 'loading' ? (
-          <p className="text-xs text-slate-400 flex items-center gap-2">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Chargement des appareils…
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" /> Chargement des appareils…
           </p>
         ) : devicesState.kind === 'error' ? (
-          <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p>{devicesState.detail}</p>
-              <button
-                type="button"
-                onClick={() => refreshDevices()}
-                className="mt-2 inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
-              >
-                <RefreshCw className="w-3 h-3" /> Réessayer
-              </button>
+          <Alert tone="danger">
+            <AlertTriangle />
+            <div className="min-w-0 flex-1">
+              <AlertDescription className="mt-0 text-foreground/90">{devicesState.detail}</AlertDescription>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => refreshDevices()}>
+                <RefreshCw className="size-3" /> Réessayer
+              </Button>
             </div>
-          </div>
+          </Alert>
         ) : (
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="min-w-0 text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
+              <span className="min-w-0 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Appareils actifs — mise à jour automatique
               </span>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 disabled={devicesRefreshing}
                 onClick={() => refreshDevices({ silent: true })}
-                className="inline-flex items-center gap-1.5 min-h-11 px-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-50 text-[11px] font-semibold"
               >
-                <RefreshCw className={`w-3 h-3 ${devicesRefreshing ? 'animate-spin' : ''}`} /> Actualiser
-              </button>
+                <RefreshCw className={devicesRefreshing ? 'size-3 animate-spin' : 'size-3'} /> Actualiser
+              </Button>
             </div>
 
             {devicesState.devices.length === 0 ? (
-              <p className="text-xs text-slate-500">Aucun appareil actif pour cet événement.</p>
+              <p className="text-xs text-muted-foreground">Aucun appareil actif pour cet événement.</p>
             ) : (
               devicesState.devices.map((d) => (
-                <div
+                <CardPanel
                   key={d.id}
-                  className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800"
+                  className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs"
                 >
-                  <span className="min-w-0 font-semibold text-slate-200 break-words">
+                  <span className="min-w-0 break-words font-semibold text-foreground/90">
                     {d.checkpointName} — {d.label}
                   </span>
                   <span className="flex items-center gap-2.5">
-                    {d.isOnline ? (
-                      <span className="flex items-center gap-1 text-emerald-400 font-semibold">
-                        <Wifi className="w-3.5 h-3.5" /> En ligne
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1 text-rose-400 font-semibold">
-                        <WifiOff className="w-3.5 h-3.5" /> Hors ligne
-                      </span>
-                    )}
+                    <StatusText status={d.isOnline ? 'online' : 'offline'} />
                     {d.lastPendingCount > 0 ? (
-                      <span className="text-amber-400 font-semibold">{d.lastPendingCount} en attente</span>
+                      <span className="font-semibold text-warning">{d.lastPendingCount} en attente</span>
                     ) : null}
                   </span>
-                </div>
+                </CardPanel>
               ))
             )}
           </div>
         )}
 
         {devicesState.kind === 'ready' && !allSynced ? (
-          <p className="text-[11px] text-amber-300/90">
-            La fermeture normale nécessite que tous les appareils actifs soient en ligne et synchronisés (0 en attente).
+          <p className="text-[11px] text-warning">
+            La fermeture normale nécessite que tous les appareils actifs soient en ligne et synchronisés (0
+            en attente).
           </p>
         ) : null}
 
-        <button
-          type="button"
+        <ConfirmAction
           disabled={actionLoading || !allSynced}
-          onClick={() => runTransition('close', "Clôturer l'événement ? Tous les appareils actifs sont synchronisés.")}
-          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
-        >
-          {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
-          Clôturer l'événement
-        </button>
+          busy={actionLoading}
+          title="Clôturer l'événement ?"
+          description="Tous les appareils actifs sont synchronisés. La jauge finale sera figée et le comptage définitivement arrêté."
+          confirmLabel="Clôturer l'événement"
+          confirmVariant="destructive"
+          onConfirm={() => runTransition('close')}
+          trigger={
+            <Button variant="destructive" className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading || !allSynced}>
+              {actionLoading ? <Loader2 className="animate-spin" /> : <XCircle />}
+              Clôturer l'événement
+            </Button>
+          }
+        />
 
         {isAdmin ? (
-          <button
-            type="button"
+          <ReasonAction
             disabled={actionLoading}
-            onClick={() => {
-              const reason = promptForReason(
-                'Fermeture forcée : motif obligatoire (appareils non synchronisés seront ignorés).'
-              );
-              if (!reason) return;
-              runTransition(
-                'force-close',
-                `Confirmer la fermeture FORCÉE malgré des appareils potentiellement non synchronisés ?\n\nMotif : "${reason}"`,
-                { reason }
-              );
-            }}
-            className="w-full min-h-11 py-2 px-4 rounded-xl bg-transparent hover:bg-rose-950/40 border border-rose-500/40 disabled:opacity-50 disabled:cursor-not-allowed text-rose-300 font-bold text-[11px] flex items-center justify-center gap-2 transition-all"
-          >
-            <AlertTriangle className="w-3.5 h-3.5" />
-            Fermeture forcée (admin)
-          </button>
+            busy={actionLoading}
+            title="Fermeture forcée"
+            description="Cette clôture ignore des appareils potentiellement non synchronisés : les comptages qu'ils détiennent encore ne seront pas intégrés à la jauge finale. Le motif est obligatoire et conservé dans le journal d'audit."
+            confirmLabel="Confirmer la fermeture forcée"
+            confirmVariant="danger"
+            reasonLabel="Motif de la fermeture forcée *"
+            reasonPlaceholder="Ex : appareil perdu, porte 3"
+            onConfirm={(reason) => runTransition('force-close', { reason })}
+            trigger={
+              <Button variant="danger" size="sm" className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading}>
+                <AlertTriangle className="size-3.5" />
+                Fermeture forcée (admin)
+              </Button>
+            }
+          />
         ) : null}
       </div>
     );
@@ -352,41 +360,59 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
 
   if (event.status === 'closed') {
     if (!isAdmin) {
-      return <p className="text-xs text-slate-500">Événement clos. Seul un administrateur peut le réouvrir ou l'archiver.</p>;
+      return (
+        <p className="text-xs text-muted-foreground">
+          Événement clos. Seul un administrateur peut le réouvrir ou l'archiver.
+        </p>
+      );
     }
 
     return (
       <div className="space-y-3">
         {errorBanner}
-        <button
-          type="button"
+        <ReasonAction
           disabled={actionLoading}
-          onClick={() => {
-            const reason = promptForReason("Réouverture : motif obligatoire (tracé dans l'audit).");
-            if (!reason) return;
-            runTransition('reopen', `Réouvrir l'événement clos ?\n\nMotif : "${reason}"`, { reason });
-          }}
-          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
-        >
-          {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-          Réouvrir l'événement
-        </button>
-        <button
-          type="button"
+          busy={actionLoading}
+          title="Réouvrir l'événement clos ?"
+          description="L'événement repasse en direct et les compteurs recommencent à accepter des comptages. Le motif est obligatoire et conservé dans le journal d'audit."
+          confirmLabel="Réouvrir l'événement"
+          confirmVariant="default"
+          reasonLabel="Motif de la réouverture *"
+          reasonPlaceholder="Ex : clôture anticipée par erreur"
+          onConfirm={(reason) => runTransition('reopen', { reason })}
+          trigger={
+            <Button className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading}>
+              {actionLoading ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+              Réouvrir l'événement
+            </Button>
+          }
+        />
+        <ConfirmAction
           disabled={actionLoading}
-          onClick={() => runTransition('archive', "Archiver l'événement ? Cette action est terminale.")}
-          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all"
-        >
-          {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Archive className="w-4 h-4" />}
-          Archiver l'événement
-        </button>
+          busy={actionLoading}
+          title="Archiver l'événement ?"
+          description="Cette action est terminale : l'événement passe en lecture seule et ne pourra plus être réouvert."
+          confirmLabel="Archiver l'événement"
+          confirmVariant="destructive"
+          onConfirm={() => runTransition('archive')}
+          trigger={
+            <Button variant="secondary" className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading}>
+              {actionLoading ? <Loader2 className="animate-spin" /> : <Archive />}
+              Archiver l'événement
+            </Button>
+          }
+        />
       </div>
     );
   }
 
   if (event.status === 'archived') {
-    return <p className="text-xs text-slate-500">Événement archivé — lecture seule.</p>;
+    return <p className="text-xs text-muted-foreground">Événement archivé — lecture seule.</p>;
   }
 
-  return <p className="text-xs text-slate-500">Aucune action de cycle de vie disponible pour cet état ({event.status}).</p>;
+  return (
+    <p className="text-xs text-muted-foreground">
+      Aucune action de cycle de vie disponible pour cet état ({event.status}).
+    </p>
+  );
 };

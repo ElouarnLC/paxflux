@@ -3,6 +3,8 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { apiFetch, setCsrfToken, setUnauthorizedHandler } from '../api/client.js';
 import { AuthSessionResponse, ProblemDetails, StaffUser } from '@paxflux/shared';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { CenteredPanel } from '@/components/paxflux/layout';
 
 interface AuthContextValue {
   user: StaffUser;
@@ -84,32 +86,26 @@ export const AuthProvider: React.FC = () => {
 
   if (state.kind === 'loading' || state.kind === 'redirecting') {
     return (
-      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400">
-        <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
+      <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <RefreshCw className="size-8 animate-spin text-primary-accent" />
       </div>
     );
   }
 
   if (state.kind === 'error') {
     return (
-      <div className="flex-1 flex items-center justify-center p-6 bg-slate-950 text-slate-100">
-        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl text-center">
-          <div className="w-14 h-14 rounded-2xl bg-rose-950/80 border border-rose-500/30 flex items-center justify-center mx-auto mb-6 text-rose-400">
-            <AlertTriangle className="w-8 h-8" />
-          </div>
-          <h1 className="text-xl font-bold text-white mb-2">Connexion au serveur impossible</h1>
-          <p className="text-slate-400 text-sm mb-6">{state.detail}</p>
-          <button
-            type="button"
-            onClick={() => {
-              refreshSession();
-            }}
-            className="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-lg transition-all"
-          >
-            <RefreshCw className="w-4 h-4" />
+      <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
+        <CenteredPanel
+          icon={AlertTriangle}
+          tone="danger"
+          title="Connexion au serveur impossible"
+          description={state.detail}
+        >
+          <Button className="mt-6 w-full" onClick={() => refreshSession()}>
+            <RefreshCw />
             Réessayer
-          </button>
-        </div>
+          </Button>
+        </CenteredPanel>
       </div>
     );
   }

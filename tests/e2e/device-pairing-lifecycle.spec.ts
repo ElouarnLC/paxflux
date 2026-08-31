@@ -69,7 +69,10 @@ test('cycle appareil complet : appairage sur un second appareil, heartbeat, supe
   const adminPage = await adminContext.newPage();
   await loginAsAdmin(adminPage);
   await adminPage.goto(`/admin/events/${topo.eventId}/devices`);
-  await expect(adminPage.getByText('● En ligne')).toBeVisible({ timeout: 10_000 });
+  // The written status, not the bullet that used to precede it: the status
+  // is now rendered by the shared StatusText component, which pairs the
+  // word with an icon instead of a decorative character. Same assertion.
+  await expect(adminPage.getByText('En ligne')).toBeVisible({ timeout: 10_000 });
 
   // The supervisor pulls the device.
   await revokeDeviceSession(session, deviceId);

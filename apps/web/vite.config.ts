@@ -1,3 +1,4 @@
+import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -14,8 +15,12 @@ export default defineConfig({
         name: 'PaxFlux',
         short_name: 'PaxFlux',
         description: 'Self-hosted realtime crowd flow & occupancy management.',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
+        // The sRGB rendering of the `--background` token in
+        // src/styles/index.css (oklch(0.165 0.020 258)). A manifest cannot
+        // read a CSS custom property, so these two literals are kept in
+        // step with the token by hand.
+        theme_color: '#090f17',
+        background_color: '#090f17',
         display: 'standalone',
         orientation: 'portrait',
         icons: [
@@ -48,6 +53,14 @@ export default defineConfig({
       }
     })
   ],
+  resolve: {
+    // Mirrors the `@/*` path mapping in tsconfig.json. Both are needed:
+    // TypeScript resolves the import for typechecking, Vite resolves it at
+    // build time, and they have to agree.
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   server: {
     port: 5173,
     proxy: {

@@ -34,8 +34,8 @@ const RootRedirect: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400">
-        <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
+      <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <RefreshCw className="size-8 animate-spin text-primary-accent" />
       </div>
     );
   }

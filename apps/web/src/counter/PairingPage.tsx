@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { beginPairingHandoff, persistBootstrap } from '../offline/snapshot.js';
 import { Loader2, AlertCircle, CheckCircle, Smartphone } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { CenteredPanel } from '@/components/paxflux/layout';
 import { DeviceBootstrapResponse, DeviceSessionModel, ProblemDetails } from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
 
@@ -95,40 +97,38 @@ export const PairingPage: React.FC = () => {
   }, [navigate]);
 
   return (
-    <div className="flex-1 flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100">
-      <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-center">
-        <div className="w-16 h-16 rounded-2xl bg-indigo-950/80 border border-indigo-500/30 flex items-center justify-center mx-auto mb-6 text-indigo-400">
-          <Smartphone className="w-8 h-8" />
-        </div>
-
-        <h1 className="text-2xl font-bold tracking-tight text-white mb-2">Appairage Compteur</h1>
-        <p className="text-slate-400 text-sm mb-6">Configuration de l’appareil de comptage terrain...</p>
-
+    <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
+      <CenteredPanel
+        icon={Smartphone}
+        title="Appairage Compteur"
+        description="Configuration de l’appareil de comptage terrain..."
+        className="text-center"
+      >
         {status === 'reading' || status === 'pairing' ? (
-          <div className="py-8 flex flex-col items-center justify-center gap-3">
-            <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
-            <span className="text-sm font-medium text-slate-300">Connexion et enregistrement...</span>
+          <div className="flex flex-col items-center justify-center gap-3 py-8">
+            <Loader2 className="size-8 animate-spin text-primary-accent" />
+            <span className="text-sm font-medium text-foreground/90">Connexion et enregistrement...</span>
           </div>
         ) : null}
 
         {status === 'success' ? (
-          <div className="py-8 flex flex-col items-center justify-center gap-3 text-emerald-400">
-            <CheckCircle className="w-10 h-10 animate-bounce" />
+          <div className="flex flex-col items-center justify-center gap-3 py-8 text-success">
+            <CheckCircle className="size-10" />
             <span className="text-base font-semibold">Appairage réussi !</span>
-            <span className="text-xs text-slate-400">Ouverture de l’interface de comptage...</span>
+            <span className="text-xs text-muted-foreground">Ouverture de l’interface de comptage...</span>
           </div>
         ) : null}
 
         {status === 'error' ? (
-          <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-500/30 text-rose-300 text-sm text-left flex gap-3 items-start my-4">
-            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-400" />
-            <div>
-              <p className="font-semibold text-rose-200">Erreur d’appairage</p>
-              <p className="text-xs text-rose-300/80 mt-1">{errorMessage}</p>
+          <Alert tone="danger" className="my-4 text-left">
+            <AlertCircle />
+            <div className="min-w-0">
+              <AlertTitle>Erreur d’appairage</AlertTitle>
+              <AlertDescription>{errorMessage}</AlertDescription>
             </div>
-          </div>
+          </Alert>
         ) : null}
-      </div>
+      </CenteredPanel>
     </div>
   );
 };

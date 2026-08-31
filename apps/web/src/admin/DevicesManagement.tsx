@@ -1,21 +1,33 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { QRCodeSVG } from 'qrcode.react';
-import {
-  QrCode,
-  CheckCircle,
-  AlertCircle,
-  AlertTriangle,
-  ArrowLeft,
-  RefreshCw,
-} from 'lucide-react';
+import { QrCode, CheckCircle, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react';
 import {
   CreateDeviceInviteResponse,
   CheckpointModel,
   EventDeviceSummary,
   ProblemDetails,
 } from '@paxflux/shared';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { CardPanel } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableEmpty,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableScroller,
+} from '@/components/ui/table';
+import { ConfirmAction } from '@/components/paxflux/confirm-action';
+import { PageHeader, Section } from '@/components/paxflux/layout';
+import { StatusText } from '@/components/paxflux/status';
 
 const DEVICES_POLL_INTERVAL_MS = 5_000;
 
@@ -123,8 +135,11 @@ export const DevicesManagement: React.FC = () => {
     }
   };
 
+  // Reached only from a confirmed dialog. Revocation used to sit behind a
+  // `window.confirm`, which on an installed PWA renders as an unbranded
+  // system sheet naming the origin — and which Playwright dismisses by
+  // default, so the path was effectively untested.
   const handleRevokeDevice = async (sessionId: string) => {
-    if (!confirm('Voulez-vous vraiment révoquer cet appareil ? Il ne pourra plus envoyer de comptages.')) return;
     setActionError(null);
     try {
       await apiFetch(`/api/v1/device-sessions/${sessionId}/revoke`, { method: 'POST' });
@@ -138,199 +153,170 @@ export const DevicesManagement: React.FC = () => {
   const checkpoints = listState.kind === 'ready' ? listState.checkpoints : [];
 
   return (
-    // `w-full` is load-bearing, not decoration: this page is a flex item of
-    // #root, and a flex item with `auto` cross-axis margins (`mx-auto`) is
-    // not stretched to its container — it sizes to its content instead. Two
-    // admin pages were therefore as wide as their widest table, which
-    // `overflow-x-hidden` on <body> used to hide.
-    <div className="flex-1 bg-slate-950 text-slate-100 p-4 sm:p-6 w-full max-w-5xl mx-auto space-y-4 sm:space-y-6">
-      {/* "back on the left, title on the right" is a desktop pattern; on a
-          phone the two simply collide, so they stack with the title first. */}
-      <div className="flex flex-col sm:flex-row-reverse sm:items-center sm:justify-between gap-1 sm:gap-3">
-        <h1 className="text-lg sm:text-xl font-bold text-white break-words">Gestion des Appareils et QR Codes</h1>
-        <Link
-          to="/admin"
-          className="inline-flex items-center gap-2 self-start min-h-11 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4 flex-shrink-0" /> Retour au tableau de bord
-        </Link>
-      </div>
+    <div className="mx-auto w-full max-w-5xl flex-1 space-y-4 p-4 sm:space-y-6 sm:p-6">
+      <PageHeader title="Gestion des Appareils et QR Codes" />
 
       {actionError ? (
-        <div className="p-3.5 rounded-2xl bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs flex gap-2.5 items-start">
-          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-400" />
-          <span>{actionError}</span>
-        </div>
+        <Alert tone="danger">
+          <AlertCircle />
+          <AlertDescription className="mt-0 text-foreground/90">{actionError}</AlertDescription>
+        </Alert>
       ) : null}
 
-      {/* 1. Generate Invite Section */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
-        <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">
-          Ajouter un Appareil Compteur
-        </h2>
-
-        <div className="flex flex-col sm:flex-row gap-4 items-end">
-          <div className="flex-1 w-full">
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Choisir la porte / le checkpoint :
-            </label>
-            <select
+      <Section title="Ajouter un Appareil Compteur">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+          <div className="w-full flex-1 space-y-1.5">
+            <Label htmlFor="checkpoint-picker">Choisir la porte / le checkpoint :</Label>
+            <NativeSelect
+              id="checkpoint-picker"
               value={selectedCheckpointId}
               onChange={(e) => setSelectedCheckpointId(e.target.value)}
-              className="w-full min-w-0 min-h-11 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm"
             >
               {checkpoints.map((cp) => (
                 <option key={cp.id} value={cp.id}>
                   {cp.name}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </div>
 
-          <button
-            type="button"
+          <Button
+            className="w-full sm:w-auto"
             disabled={creating || !selectedCheckpointId}
             onClick={handleCreateInvite}
-            className="w-full sm:w-auto min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all"
           >
-            <QrCode className="w-4 h-4 flex-shrink-0" />
+            <QrCode />
             Générer le QR Code d'appairage
-          </button>
+          </Button>
         </div>
 
-        {/* QR Code Display Modal / Box. The 180px code keeps its size —
-            smaller scans badly — so the panel's own padding is what gives
-            way at 320px, and the text column shrinks beside it. */}
+        {/* The 180px code keeps its size — smaller scans badly — so the
+            panel's own padding is what gives way at 320px, and the text
+            column shrinks beside it. */}
         {activeInvite ? (
-          <div className="mt-6 p-4 sm:p-6 rounded-2xl bg-slate-950 border border-indigo-500/40 flex flex-col md:flex-row items-center gap-4 sm:gap-6">
-            <div className="flex-shrink-0 p-3 sm:p-4 bg-white rounded-2xl shadow-xl">
+          <CardPanel className="mt-6 flex flex-col items-center gap-4 border-primary-accent/40 p-4 sm:gap-6 sm:p-6 md:flex-row">
+            {/* The only literal colour left in the admin interface: a QR
+                code is only reliably scannable as dark-on-white, whatever
+                the surrounding theme. */}
+            <div className="shrink-0 rounded-lg bg-white p-3 sm:p-4">
               <QRCodeSVG value={activeInvite.pairUrl} size={180} level="M" />
             </div>
 
-            <div className="w-full min-w-0 space-y-3 text-center md:text-left flex-1">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-500/30">
-                <CheckCircle className="w-3.5 h-3.5" />
+            <div className="w-full min-w-0 flex-1 space-y-3 text-center md:text-left">
+              <Badge tone="success">
+                <CheckCircle />
                 QR Code Prêt pour scan
-              </span>
-              <p className="text-sm font-bold text-white">Scannez ce QR Code avec l'appareil photo du téléphone.</p>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Le secret d'appairage est transmis dans le fragment URL et ne sera pas stocké dans les logs serveur. Valable 30 minutes, à usage unique.
+              </Badge>
+              <p className="text-sm font-bold text-foreground">
+                Scannez ce QR Code avec l'appareil photo du téléphone.
+              </p>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Le secret d'appairage est transmis dans le fragment URL et ne sera pas stocké dans les logs
+                serveur. Valable 30 minutes, à usage unique.
               </p>
 
               {activeInvite.unreachableFromPhone ? (
-                <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2 text-left">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
-                  <span>
-                    Cette URL pointe vers une adresse locale à ce serveur : un téléphone ne pourra pas l'ouvrir.
-                    Configurez <span className="font-mono">PUBLIC_BASE_URL</span>, ou ouvrez PaxFlux via l'adresse
-                    réseau que les téléphones peuvent joindre.
-                  </span>
-                </div>
+                <Alert tone="warning" className="text-left">
+                  <AlertTriangle />
+                  <AlertDescription className="mt-0 text-foreground/90">
+                    Cette URL pointe vers une adresse locale à ce serveur : un téléphone ne pourra pas
+                    l'ouvrir. Configurez <span className="font-mono">PUBLIC_BASE_URL</span>, ou ouvrez
+                    PaxFlux via l'adresse réseau que les téléphones peuvent joindre.
+                  </AlertDescription>
+                </Alert>
               ) : null}
 
-              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-400 break-all select-all">
+              <p className="select-all break-all rounded-lg border border-border bg-background p-2.5 font-mono text-[11px] text-muted-foreground">
                 {activeInvite.pairUrl}
-              </div>
+              </p>
             </div>
-          </div>
+          </CardPanel>
         ) : null}
-      </div>
+      </Section>
 
-      {/* 2. Registered Devices List */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">
-            Appareils Enregistrés ({devices.length})
-          </h2>
-          <button
-            type="button"
-            disabled={refreshing}
-            onClick={() => fetchDevices({ silent: true })}
-            className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-50 text-[11px] font-semibold transition-colors"
-          >
-            <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} /> Actualiser
-          </button>
-        </div>
-
+      <Section
+        title={`Appareils Enregistrés (${devices.length})`}
+        contentClassName="p-0 sm:p-0"
+        actions={
+          <Button variant="ghost" size="sm" disabled={refreshing} onClick={() => fetchDevices({ silent: true })}>
+            <RefreshCw className={refreshing ? 'size-3 animate-spin' : 'size-3'} /> Actualiser
+          </Button>
+        }
+      >
         {listState.kind === 'loading' ? (
-          <p className="text-xs text-slate-400 flex items-center gap-2 py-4">
-            <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Chargement des appareils…
+          <p className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground">
+            <RefreshCw className="size-3.5 animate-spin" /> Chargement des appareils…
           </p>
         ) : listState.kind === 'error' ? (
-          <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p>{listState.detail}</p>
-              <button
-                type="button"
-                onClick={() => fetchDevices()}
-                className="mt-2 inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
-              >
-                <RefreshCw className="w-3 h-3" /> Réessayer
-              </button>
+          <Alert tone="danger" className="mx-4 mb-4">
+            <AlertCircle />
+            <div className="min-w-0 flex-1">
+              <AlertDescription className="mt-0 text-foreground/90">{listState.detail}</AlertDescription>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => fetchDevices()}>
+                <RefreshCw className="size-3" /> Réessayer
+              </Button>
             </div>
-          </div>
+          </Alert>
         ) : (
-          // Six columns of device state stay in their own scroll area
-          // rather than widening the page.
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[42rem] text-left text-xs text-slate-300">
-              <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
-                <tr>
-                  <th className="py-3 px-4">Porte</th>
-                  <th className="py-3 px-4">Libellé</th>
-                  <th className="py-3 px-4">Statut</th>
-                  <th className="py-3 px-4">En attente</th>
-                  <th className="py-3 px-4">Dernier Contact</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800 font-mono">
+          /* Six columns of device state stay in their own scroll area
+             rather than widening the page. */
+          <TableScroller className="px-1 pb-4" minWidth="42rem">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Porte</TableHead>
+                  <TableHead>Libellé</TableHead>
+                  <TableHead>Statut</TableHead>
+                  <TableHead>En attente</TableHead>
+                  <TableHead>Dernier Contact</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {devices.map((dev) => (
-                  <tr key={dev.id}>
-                    <td className="py-3 px-4 font-sans font-medium text-white">{dev.checkpointName}</td>
-                    <td className="py-3 px-4 font-sans text-slate-300">{dev.label}</td>
-                    <td className="py-3 px-4 font-sans">
+                  <TableRow key={dev.id}>
+                    <TableCell className="font-medium text-foreground">{dev.checkpointName}</TableCell>
+                    <TableCell>{dev.label}</TableCell>
+                    <TableCell>
                       {/* isOnline is computed server-side against the shared
                           threshold, so this matches what the closing gate
                           sees rather than a second frontend approximation. */}
-                      {dev.isOnline ? (
-                        <span className="text-emerald-400 font-semibold">● En ligne</span>
-                      ) : (
-                        <span className="text-rose-400 font-semibold">● Hors ligne</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4">
+                      <StatusText status={dev.isOnline ? 'online' : 'offline'} />
+                    </TableCell>
+                    <TableCell className="font-mono">
                       {dev.lastPendingCount > 0 ? (
-                        <span className="text-amber-400 font-semibold">{dev.lastPendingCount}</span>
+                        <span className="font-semibold text-warning">{dev.lastPendingCount}</span>
                       ) : (
-                        <span className="text-slate-500">0</span>
+                        <span className="text-muted-foreground">0</span>
                       )}
-                    </td>
-                    <td className="py-3 px-4 text-slate-400">{formatLastSeen(dev.lastSeenAtMs)}</td>
-                    <td className="py-3 px-4 text-right font-sans">
-                      <button
-                        type="button"
-                        onClick={() => handleRevokeDevice(dev.id)}
-                        className="min-h-11 px-3 rounded-lg bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 text-xs font-semibold transition-colors"
-                      >
-                        Révoquer
-                      </button>
-                    </td>
-                  </tr>
+                    </TableCell>
+                    <TableCell className="font-mono text-muted-foreground">
+                      {formatLastSeen(dev.lastSeenAtMs)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <ConfirmAction
+                        title="Révoquer cet appareil ?"
+                        description={`« ${dev.label} » (${dev.checkpointName}) ne pourra plus envoyer de comptages. Les comptages qu'il détient encore devront être régularisés par un responsable.`}
+                        confirmLabel="Révoquer l'appareil"
+                        confirmVariant="destructive"
+                        onConfirm={() => handleRevokeDevice(dev.id)}
+                        trigger={
+                          <Button variant="danger" size="sm">
+                            Révoquer
+                          </Button>
+                        }
+                      />
+                    </TableCell>
+                  </TableRow>
                 ))}
                 {devices.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-6 text-center text-slate-500 font-sans">
-                      Aucun appareil connecté.
-                    </td>
-                  </tr>
+                  <TableEmpty colSpan={6}>Aucun appareil connecté.</TableEmpty>
                 ) : null}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </TableScroller>
         )}
-      </div>
+      </Section>
     </div>
   );
 };

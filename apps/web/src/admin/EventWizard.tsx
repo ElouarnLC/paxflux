@@ -3,6 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { Plus, Trash2, ArrowRight, ArrowLeft, CheckCircle, AlertCircle } from 'lucide-react';
 import { CreateEventDraftRequest, CreateEventDraftResponse } from '@paxflux/shared';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardPanel } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
+import { cn } from '@/lib/utils';
+
+const STEP_NAMES = ['Général', 'Espaces', 'Portes', 'Validation'] as const;
 
 const EXTERIOR_CLIENT_ID = 'exterieur';
 
@@ -174,87 +183,96 @@ export const EventWizard: React.FC = () => {
     checkpointDrafts.every((cp) => cp.name.trim().length > 0 && cp.labelAToB.trim().length > 0 && cp.labelBToA.trim().length > 0 && (cp.allowAToB || cp.allowBToA));
 
   return (
-    <div className="flex-1 bg-slate-950 text-slate-100 flex flex-col p-4 sm:p-6 items-center justify-center">
-      <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-8 shadow-2xl">
-        {/* Step Indicator — the four markers must fit 320px on their own,
+    <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6">
+      <Card className="w-full max-w-2xl p-4 sm:p-8">
+        {/* Step indicator — the four markers must fit 320px on their own,
             which is why the step names only appear from `sm` up. */}
-        <div className="flex items-center justify-between gap-1 mb-6 sm:mb-8">
+        <ol className="mb-6 flex items-center justify-between gap-1 sm:mb-8">
           {[1, 2, 3, 4].map((s) => (
-            <div key={s} className="flex items-center gap-2">
-              <div
-                className={`w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${
+            <li key={s} className="flex items-center gap-2">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold',
                   step === s
-                    ? 'bg-indigo-600 text-white'
+                    ? 'bg-primary text-primary-foreground'
                     : step > s
-                    ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40'
-                    : 'bg-slate-800 text-slate-500'
-                }`}
+                      ? 'border border-success/40 bg-success/15 text-success'
+                      : 'bg-muted text-muted-foreground'
+                )}
               >
                 {step > s ? '✓' : s}
-              </div>
-              <span className="text-xs font-semibold text-slate-400 hidden sm:inline">
-                {s === 1 ? 'Général' : s === 2 ? 'Espaces' : s === 3 ? 'Portes' : 'Validation'}
               </span>
-            </div>
+              <span
+                aria-current={step === s ? 'step' : undefined}
+                className={cn(
+                  'hidden text-xs font-semibold sm:inline',
+                  step === s ? 'text-foreground' : 'text-muted-foreground'
+                )}
+              >
+                {STEP_NAMES[s - 1]}
+              </span>
+            </li>
           ))}
-        </div>
+        </ol>
 
         {error ? (
-          <div className="mb-6 p-3.5 rounded-2xl bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs flex gap-2.5 items-start">
-            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-400" />
-            <span>{error}</span>
-          </div>
+          <Alert tone="danger" className="mb-6">
+            <AlertCircle />
+            <AlertDescription className="mt-0 text-foreground/90">{error}</AlertDescription>
+          </Alert>
         ) : null}
 
         {/* Step 1: General */}
         {step === 1 ? (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white mb-1">1. Informations Générales</h2>
-            <p className="text-slate-400 text-xs mb-4">Définissez le nom et la jauge maximale autorisée.</p>
-
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Nom de l'événement *</label>
-              <input
+              <h2 className="text-xl font-bold text-foreground">1. Informations Générales</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Définissez le nom et la jauge maximale autorisée.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="event-name">Nom de l'événement *</Label>
+              <Input
+                id="event-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
               />
             </div>
 
             {/* Two columns of ~120px at 320px leaves no room for a capacity
                 and a timezone; they stack until there is. */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Capacité maximale (jauge) *</label>
-                <input
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="event-capacity">Capacité maximale (jauge) *</Label>
+                <Input
+                  id="event-capacity"
                   type="number"
                   min="1"
                   value={capacity}
                   onChange={(e) => setCapacity(parseInt(e.target.value, 10) || 0)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm font-mono focus:border-indigo-500"
+                  className="font-mono"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Fuseau horaire</label>
-                <input
+              <div className="space-y-1.5">
+                <Label htmlFor="event-timezone">Fuseau horaire</Label>
+                <Input
+                  id="event-timezone"
                   type="text"
                   value={timezone}
                   onChange={(e) => setTimezone(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
                 />
               </div>
             </div>
 
-            <div className="pt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setStep(2)}
-                className="min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5"
-              >
-                Suivant <ArrowRight className="w-4 h-4" />
-              </button>
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-4">
+              <Button onClick={() => setStep(2)}>
+                Suivant <ArrowRight />
+              </Button>
             </div>
           </div>
         ) : null}
@@ -262,15 +280,17 @@ export const EventWizard: React.FC = () => {
         {/* Step 2: Spaces */}
         {step === 2 ? (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white mb-1">2. Espaces</h2>
-            <p className="text-slate-400 text-xs mb-4">
-              "Extérieur" existe toujours pour le comptage de frontière. Ajoutez les zones intérieures utiles — une zone
-              n'a pas forcément besoin de sa propre porte vers l'extérieur.
-            </p>
-
-            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 font-semibold">
-              Extérieur <span className="text-slate-500 font-normal">(frontière, toujours présent)</span>
+            <div>
+              <h2 className="text-xl font-bold text-foreground">2. Espaces</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                "Extérieur" existe toujours pour le comptage de frontière. Ajoutez les zones intérieures
+                utiles — une zone n'a pas forcément besoin de sa propre porte vers l'extérieur.
+              </p>
             </div>
+
+            <CardPanel className="text-xs font-semibold text-foreground/90">
+              Extérieur <span className="font-normal text-muted-foreground">(frontière, toujours présent)</span>
+            </CardPanel>
 
             <div className="space-y-2">
               {internalSpaces.map((s) => (
@@ -278,60 +298,52 @@ export const EventWizard: React.FC = () => {
                 // field about 100px wide and pushes the row past the
                 // viewport. The name takes its own line below `sm`, and the
                 // capacity shares the second one with the delete button.
-                <div key={s.clientId} className="flex flex-wrap gap-2 items-center">
-                  <input
+                <div key={s.clientId} className="flex flex-wrap items-center gap-2">
+                  <Input
                     type="text"
                     aria-label="Nom de l'espace intérieur"
                     placeholder="Nom de la zone"
                     value={s.name}
                     onChange={(e) => updateInternalSpace(s.clientId, { name: e.target.value })}
-                    className="w-full sm:flex-1 min-w-0 min-h-11 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-base lg:text-sm text-white"
+                    className="w-full sm:flex-1"
                   />
-                  <input
+                  <Input
                     type="number"
                     aria-label="Capacité de l'espace"
                     placeholder="Capacité"
                     value={s.capacity}
-                    onChange={(e) => updateInternalSpace(s.clientId, { capacity: e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0 })}
-                    className="flex-1 sm:flex-none sm:w-28 min-w-0 min-h-11 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-base lg:text-sm text-white font-mono"
+                    onChange={(e) =>
+                      updateInternalSpace(s.clientId, {
+                        capacity: e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0,
+                      })
+                    }
+                    className="flex-1 font-mono sm:w-28 sm:flex-none"
                   />
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     aria-label="Supprimer cet espace"
                     disabled={internalSpaces.length <= 1}
                     onClick={() => removeInternalSpace(s.clientId)}
-                    className="flex-shrink-0 min-h-11 min-w-11 flex items-center justify-center rounded-xl text-rose-400 hover:bg-rose-950/40 disabled:opacity-30 disabled:cursor-not-allowed"
+                    className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger"
                   >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                    <Trash2 />
+                  </Button>
                 </div>
               ))}
             </div>
 
-            <button
-              type="button"
-              onClick={addInternalSpace}
-              className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
-            >
-              <Plus className="w-3.5 h-3.5" /> Ajouter un espace intérieur
-            </button>
+            <Button variant="secondary" size="sm" onClick={addInternalSpace}>
+              <Plus className="size-3.5" /> Ajouter un espace intérieur
+            </Button>
 
-            <div className="pt-4 flex justify-between">
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className="min-h-11 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
-              >
-                <ArrowLeft className="w-4 h-4" /> Retour
-              </button>
-              <button
-                type="button"
-                disabled={!canGoToCheckpoints}
-                onClick={() => setStep(3)}
-                className="min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5"
-              >
-                Suivant <ArrowRight className="w-4 h-4" />
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-4">
+              <Button variant="secondary" onClick={() => setStep(1)}>
+                <ArrowLeft /> Retour
+              </Button>
+              <Button disabled={!canGoToCheckpoints} onClick={() => setStep(3)}>
+                Suivant <ArrowRight />
+              </Button>
             </div>
           </div>
         ) : null}
@@ -339,145 +351,130 @@ export const EventWizard: React.FC = () => {
         {/* Step 3: Checkpoints */}
         {step === 3 ? (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white mb-1">3. Portes & Checkpoints</h2>
-            <p className="text-slate-400 text-xs mb-4">
-              Configurez autant de portes physiques que nécessaire, y compris plusieurs entre les deux mêmes espaces.
-            </p>
+            <div>
+              <h2 className="text-xl font-bold text-foreground">3. Portes &amp; Checkpoints</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Configurez autant de portes physiques que nécessaire, y compris plusieurs entre les deux
+                mêmes espaces.
+              </p>
+            </div>
 
             <div className="space-y-3">
               {checkpointDrafts.map((cp) => (
-                <div key={cp.key} className="p-3 sm:p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
-                  <div className="flex gap-2 items-center">
-                    <input
+                <CardPanel key={cp.key} className="space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <Input
                       type="text"
                       aria-label="Nom de la porte"
                       value={cp.name}
                       onChange={(e) => updateCheckpoint(cp.key, { name: e.target.value })}
-                      className="flex-1 min-w-0 min-h-11 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base lg:text-sm"
+                      className="flex-1"
                     />
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       aria-label="Supprimer cette porte"
                       disabled={checkpointDrafts.length <= 1}
                       onClick={() => removeCheckpoint(cp.key)}
-                      className="flex-shrink-0 min-h-11 min-w-11 flex items-center justify-center rounded-xl text-rose-400 hover:bg-rose-950/40 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger"
                     >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                      <Trash2 />
+                    </Button>
                   </div>
 
                   {/* Two endpoint selectors, then two direction labels: each
                       pair collapses to one column when two would be too
                       narrow to read the space names in. */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-semibold text-slate-500 mb-1">Espace A</label>
-                      <select
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">Espace A</Label>
+                      <NativeSelect
                         aria-label="Espace A"
                         value={cp.spaceAClientId}
                         onChange={(e) => updateCheckpoint(cp.key, { spaceAClientId: e.target.value })}
-                        className="w-full min-w-0 min-h-11 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base lg:text-xs"
                       >
                         {allSpaceOptions.map((opt) => (
                           <option key={opt.clientId} value={opt.clientId}>
                             {opt.name}
                           </option>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold text-slate-500 mb-1">Espace B</label>
-                      <select
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">Espace B</Label>
+                      <NativeSelect
                         aria-label="Espace B"
                         value={cp.spaceBClientId}
                         onChange={(e) => updateCheckpoint(cp.key, { spaceBClientId: e.target.value })}
-                        className="w-full min-w-0 min-h-11 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base lg:text-xs"
                       >
                         {allSpaceOptions.map((opt) => (
                           <option key={opt.clientId} value={opt.clientId}>
                             {opt.name}
                           </option>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div className="flex items-center gap-1">
                       {/* The box stays 20×20 so it still reads as a
                           checkbox; the <label> around it is the target a
                           thumb actually hits, and clicking anywhere in it
                           toggles the box. */}
-                      <label className="flex-shrink-0 flex items-center justify-center min-w-11 min-h-11 cursor-pointer">
+                      <label className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center">
                         <input
                           type="checkbox"
-                          className="w-5 h-5"
+                          className="size-5 accent-[var(--color-primary)]"
                           aria-label="Sens A vers B activé"
                           checked={cp.allowAToB}
                           onChange={(e) => updateCheckpoint(cp.key, { allowAToB: e.target.checked })}
                         />
                       </label>
-                      <input
+                      <Input
                         type="text"
                         aria-label="Libellé A vers B"
                         value={cp.labelAToB}
                         onChange={(e) => updateCheckpoint(cp.key, { labelAToB: e.target.value })}
                         placeholder={`${spaceName(cp.spaceAClientId)} → ${spaceName(cp.spaceBClientId)}`}
-                        className="flex-1 min-w-0 min-h-11 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-base lg:text-xs"
+                        className="flex-1"
                       />
                     </div>
                     <div className="flex items-center gap-1">
-                      {/* The box stays 20×20 so it still reads as a
-                          checkbox; the <label> around it is the target a
-                          thumb actually hits, and clicking anywhere in it
-                          toggles the box. */}
-                      <label className="flex-shrink-0 flex items-center justify-center min-w-11 min-h-11 cursor-pointer">
+                      <label className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center">
                         <input
                           type="checkbox"
-                          className="w-5 h-5"
+                          className="size-5 accent-[var(--color-primary)]"
                           aria-label="Sens B vers A activé"
                           checked={cp.allowBToA}
                           onChange={(e) => updateCheckpoint(cp.key, { allowBToA: e.target.checked })}
                         />
                       </label>
-                      <input
+                      <Input
                         type="text"
                         aria-label="Libellé B vers A"
                         value={cp.labelBToA}
                         onChange={(e) => updateCheckpoint(cp.key, { labelBToA: e.target.value })}
                         placeholder={`${spaceName(cp.spaceBClientId)} → ${spaceName(cp.spaceAClientId)}`}
-                        className="flex-1 min-w-0 min-h-11 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-base lg:text-xs"
+                        className="flex-1"
                       />
                     </div>
                   </div>
-                </div>
+                </CardPanel>
               ))}
             </div>
 
-            <button
-              type="button"
-              onClick={addCheckpoint}
-              className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
-            >
-              <Plus className="w-3.5 h-3.5" /> Ajouter une porte
-            </button>
+            <Button variant="secondary" size="sm" onClick={addCheckpoint}>
+              <Plus className="size-3.5" /> Ajouter une porte
+            </Button>
 
-            <div className="pt-4 flex justify-between">
-              <button
-                type="button"
-                onClick={() => setStep(2)}
-                className="min-h-11 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
-              >
-                <ArrowLeft className="w-4 h-4" /> Retour
-              </button>
-              <button
-                type="button"
-                disabled={!canCreate}
-                onClick={() => setStep(4)}
-                className="min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5"
-              >
-                Suivant <ArrowRight className="w-4 h-4" />
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-4">
+              <Button variant="secondary" onClick={() => setStep(2)}>
+                <ArrowLeft /> Retour
+              </Button>
+              <Button disabled={!canCreate} onClick={() => setStep(4)}>
+                Suivant <ArrowRight />
+              </Button>
             </div>
           </div>
         ) : null}
@@ -485,22 +482,25 @@ export const EventWizard: React.FC = () => {
         {/* Step 4: Validation */}
         {step === 4 ? (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white mb-1">4. Validation de la Topologie</h2>
-            <p className="text-slate-400 text-xs mb-4">
-              Vérifiez la structure, puis enregistrez l'événement en brouillon. Vous le lancerez explicitement depuis le
-              tableau de bord, après vérification du préflight.
-            </p>
+            <div>
+              <h2 className="text-xl font-bold text-foreground">4. Validation de la Topologie</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Vérifiez la structure, puis enregistrez l'événement en brouillon. Vous le lancerez
+                explicitement depuis le tableau de bord, après vérification du préflight.
+              </p>
+            </div>
 
-            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-3">
+            <CardPanel className="space-y-3 p-4 text-xs text-foreground/80">
               <p>
-                Événement : <strong className="text-white break-words">{name}</strong> (Capacité : {capacity})
+                Événement : <strong className="break-words text-foreground">{name}</strong> (Capacité :{' '}
+                {capacity})
               </p>
 
               <div>
-                <p className="text-emerald-400 font-semibold mb-1">Espaces ({allSpaceOptions.length})</p>
+                <p className="mb-1 font-semibold text-success">Espaces ({allSpaceOptions.length})</p>
                 <ul className="space-y-0.5">
                   {allSpaceOptions.map((s) => (
-                    <li key={s.clientId} className="text-slate-300 break-words">
+                    <li key={s.clientId} className="break-words">
                       • {s.name}
                     </li>
                   ))}
@@ -508,10 +508,12 @@ export const EventWizard: React.FC = () => {
               </div>
 
               <div>
-                <p className="text-indigo-400 font-semibold mb-1">Checkpoints ({checkpointDrafts.length})</p>
+                <p className="mb-1 font-semibold text-primary-accent">
+                  Checkpoints ({checkpointDrafts.length})
+                </p>
                 <ul className="space-y-0.5">
                   {checkpointDrafts.map((cp) => (
-                    <li key={cp.key} className="text-slate-300 break-words">
+                    <li key={cp.key} className="break-words">
                       • {cp.name} — {spaceName(cp.spaceAClientId)} ⇄ {spaceName(cp.spaceBClientId)}
                       {cp.allowAToB ? ` (${cp.labelAToB})` : ''}
                       {cp.allowBToA ? ` / (${cp.labelBToA})` : ''}
@@ -519,29 +521,20 @@ export const EventWizard: React.FC = () => {
                   ))}
                 </ul>
               </div>
-            </div>
+            </CardPanel>
 
-            <div className="pt-4 flex justify-between">
-              <button
-                type="button"
-                onClick={() => setStep(3)}
-                className="min-h-11 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
-              >
-                <ArrowLeft className="w-4 h-4" /> Retour
-              </button>
-              <button
-                type="button"
-                disabled={loading}
-                onClick={handleCreateEvent}
-                className="min-h-11 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-950/60"
-              >
-                <CheckCircle className="w-4 h-4" />
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-4">
+              <Button variant="secondary" onClick={() => setStep(3)}>
+                <ArrowLeft /> Retour
+              </Button>
+              <Button variant="success" disabled={loading} onClick={handleCreateEvent}>
+                <CheckCircle />
                 Créer l'événement (brouillon)
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}
-      </div>
+      </Card>
     </div>
   );
 };

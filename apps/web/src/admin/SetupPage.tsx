@@ -2,6 +2,11 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch, setCsrfToken } from '../api/client.js';
 import { ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { CenteredPanel } from '@/components/paxflux/layout';
 
 export const SetupPage: React.FC = () => {
   const navigate = useNavigate();
@@ -48,92 +53,89 @@ export const SetupPage: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100">
-      <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
-        <div className="w-14 h-14 rounded-2xl bg-indigo-950/80 border border-indigo-500/30 flex items-center justify-center mx-auto mb-6 text-indigo-400">
-          <ShieldCheck className="w-8 h-8" />
-        </div>
-
-        <h1 className="text-2xl font-bold text-center text-white mb-2">Initialisation PaxFlux</h1>
-        <p className="text-slate-400 text-xs text-center mb-6 leading-relaxed">
-          Saisissez le setup token généré lors du premier démarrage du conteneur (disponible dans les logs serveur ou <code className="text-indigo-300">/data/setup-token.txt</code>).
-        </p>
-
+    <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
+      <CenteredPanel
+        icon={ShieldCheck}
+        title="Initialisation PaxFlux"
+        description={
+          <>
+            Saisissez le setup token généré lors du premier démarrage du conteneur (disponible dans les
+            logs serveur ou <code className="text-primary-accent">/data/setup-token.txt</code>).
+          </>
+        }
+      >
         {error ? (
-          <div className="mb-6 p-3.5 rounded-2xl bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs flex gap-2.5 items-start">
-            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-400" />
-            <span>{error}</span>
-          </div>
+          <Alert tone="danger" className="mt-6">
+            <AlertCircle />
+            <AlertDescription className="mt-0 text-foreground/90">{error}</AlertDescription>
+          </Alert>
         ) : null}
 
-        <form onSubmit={handleSetup} className="space-y-4 text-left">
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Setup Token *</label>
-            <input
+        <form onSubmit={handleSetup} className="mt-6 space-y-4 text-left">
+          <div className="space-y-1.5">
+            <Label htmlFor="setup-token">Setup Token *</Label>
+            <Input
+              id="setup-token"
               type="text"
               required
               value={setupToken}
               onChange={(e) => setSetupToken(e.target.value)}
               placeholder="f5aa4d232bc..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-base lg:text-sm focus:border-indigo-500 transition-colors"
+              className="font-mono"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Nom de l'instance</label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="setup-instance">Nom de l'instance</Label>
+            <Input
+              id="setup-instance"
               type="text"
               value={instanceName}
               onChange={(e) => setInstanceName(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Nom d'administrateur *</label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="setup-username">Nom d'administrateur *</Label>
+            <Input
+              id="setup-username"
               type="text"
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Mot de passe administrateur *</label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="setup-password">Mot de passe administrateur *</Label>
+            <Input
+              id="setup-password"
               type="password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Confirmer le mot de passe *</label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="setup-password-confirm">Confirmer le mot de passe *</Label>
+            <Input
+              id="setup-password-confirm"
               type="password"
               required
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full min-h-11 mt-6 py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold text-sm shadow-lg shadow-indigo-950/60 transition-all flex items-center justify-center gap-2"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+          <Button type="submit" block size="lg" disabled={loading} className="mt-6">
+            {loading ? <Loader2 className="animate-spin" /> : null}
             Créer le compte et démarrer
-          </button>
+          </Button>
         </form>
-      </div>
+      </CenteredPanel>
     </div>
   );
 };
