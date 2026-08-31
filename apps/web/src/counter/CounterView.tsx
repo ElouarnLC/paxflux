@@ -126,7 +126,9 @@ export const CounterView: React.FC = () => {
   // SSE Stream for real-time state updates
   const { isConnected } = useSSE({
     url: '/api/v1/device/stream',
-    enabled: isOnline,
+    // A revoked session must not keep — or keep reconnecting — a stream it
+    // is no longer entitled to.
+    enabled: isOnline && !isSessionRevoked,
     onState: (state) => {
       setServerState(state);
       localDb.device_cache.put({

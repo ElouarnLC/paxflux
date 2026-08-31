@@ -194,7 +194,11 @@ export interface DeviceBootstrapResponse {
 }
 
 export const DeviceHeartbeatRequestSchema = z.object({
-  pendingCount: z.number().int().nonnegative().default(0),
+  // Required, with no default: a heartbeat exists to report what this
+  // device still holds. Defaulting a missing value to 0 would let an empty
+  // or malformed body silently overwrite `lastPendingCount` and tell the
+  // supervisor a device is fully synced when it may not be.
+  pendingCount: z.number().int().nonnegative(),
   lastClientSequence: z.number().int().nonnegative().optional(),
   appVersion: z.string().max(50).optional(),
 });

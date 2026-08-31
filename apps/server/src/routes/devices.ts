@@ -60,12 +60,23 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
           title: 'Événement non appairable',
           detail: 'Cet événement n’accepte plus de nouvel appareil (appairage possible en brouillon ou en direct uniquement).',
         },
+        CHECKPOINT_UNUSABLE: {
+          status: 409,
+          code: 'CHECKPOINT_NOT_FOUND',
+          title: 'Porte indisponible',
+          detail: 'La porte associée à ce QR code n’est plus disponible pour cet événement. Demandez un nouveau QR code.',
+        },
         INTERNAL_ERROR: { status: 500, code: 'INTERNAL_ERROR', title: 'Erreur interne', detail: 'L’appairage a échoué. Réessayez avec un nouveau QR code.' },
       };
 
       const info = codeMap[result.error];
-      if (info.status === 500) {
-        app.log.error({ inviteError: result.error }, 'Device pairing failed unexpectedly');
+      if (result.error === 'INTERNAL_ERROR') {
+        // Never sent to the client: the response carries only the generic
+        // detail above, with no SQL or driver text.
+        app.log.error(
+          { err: result.cause, rollbackErr: result.rollbackError },
+          'Device pairing transaction failed unexpectedly'
+        );
       }
       return reply.status(info.status).send(createProblemDetails(info.status, info.code, info.title, info.detail));
     }

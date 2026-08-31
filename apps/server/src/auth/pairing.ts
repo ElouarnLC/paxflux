@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { AppDb } from '../db/index.js';
-import { deviceInvites, deviceSessions } from '../db/schema.js';
+import { deviceInvites, deviceSessions, checkpoints } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import {
   COOKIE_NAME_DEVICE,
@@ -20,6 +20,11 @@ export function getDeviceCookieName(env: Env): string {
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1', '0.0.0.0']);
+
+/** Strips any port, then reports whether a phone could reach this host. */
+function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.has(host.replace(/:\d+$/, ''));
+}
 
 export interface PairingBaseUrl {
   baseUrl: string;
@@ -47,11 +52,22 @@ export function resolvePairingBaseUrl(
   requestOrigin: { protocol: string; host: string } | null
 ): PairingBaseUrl | { error: 'NO_PUBLIC_BASE_URL' } {
   if (env.PUBLIC_BASE_URL) {
-    return {
-      baseUrl: env.PUBLIC_BASE_URL.replace(/\/+$/, ''),
-      source: 'public_base_url',
-      unreachableFromPhone: false,
-    };
+    const configured = env.PUBLIC_BASE_URL.replace(/\/+$/, '');
+    // A configured PUBLIC_BASE_URL is authoritative, but being configured
+    // does not make it reachable: `http://localhost:3000` is a common
+    // copy-paste that produces a QR no handset can open. Flag it just the
+    // same rather than trusting the setting blindly.
+    let unreachableFromPhone = false;
+    try {
+      unreachableFromPhone = isLoopbackHost(new URL(configured).hostname);
+    } catch {
+      // EnvSchema already validates PUBLIC_BASE_URL as a URL, so this is
+      // unreachable in practice; treat an unparseable value as reachable
+      // rather than inventing a warning about it.
+      unreachableFromPhone = false;
+    }
+
+    return { baseUrl: configured, source: 'public_base_url', unreachableFromPhone };
   }
 
   if (!requestOrigin?.host) {
@@ -60,11 +76,10 @@ export function resolvePairingBaseUrl(
     return { error: 'NO_PUBLIC_BASE_URL' };
   }
 
-  const hostname = requestOrigin.host.replace(/:\d+$/, '');
   return {
     baseUrl: `${requestOrigin.protocol}://${requestOrigin.host}`.replace(/\/+$/, ''),
     source: 'request_origin',
-    unreachableFromPhone: LOOPBACK_HOSTS.has(hostname),
+    unreachableFromPhone: isLoopbackHost(requestOrigin.host),
   };
 }
 
@@ -117,6 +132,7 @@ export type ExchangeDeviceInviteError =
   | 'INVITE_ALREADY_USED'
   | 'INVITE_REVOKED'
   | 'EVENT_NOT_PAIRABLE'
+  | 'CHECKPOINT_UNUSABLE'
   | 'INTERNAL_ERROR';
 
 export type ExchangeDeviceInviteResult =
@@ -125,7 +141,10 @@ export type ExchangeDeviceInviteResult =
       sessionToken: string;
       expiresAtMs: number;
     }
-  | { error: ExchangeDeviceInviteError };
+  | { error: Exclude<ExchangeDeviceInviteError, 'INTERNAL_ERROR'> }
+  // The cause and any rollback failure never reach the client — they exist
+  // so the route can log what actually went wrong.
+  | { error: 'INTERNAL_ERROR'; cause: unknown; rollbackError: unknown };
 
 interface InviteRow {
   id: string;
@@ -200,6 +219,20 @@ function exchangeDeviceInviteSync(
       return { error: 'EVENT_NOT_PAIRABLE' };
     }
 
+    // The checkpoint is re-verified at consumption, not just at creation:
+    // an invitation minted in `draft` may be scanned much later, by which
+    // point its door may have been renamed away, deactivated, or (for rows
+    // predating the creation-time check) never have belonged to this event
+    // at all. Checked *before* the claim, so a refused scan does not burn
+    // the token — staff can fix the topology and reuse the same QR.
+    const cp = sqlite
+      .prepare('SELECT name, event_id, is_active FROM checkpoints WHERE id = ?')
+      .get(invite.checkpoint_id) as { name: string; event_id: string; is_active: number } | undefined;
+    if (!cp || cp.event_id !== invite.event_id || !cp.is_active) {
+      sqlite.exec('ROLLBACK;');
+      return { error: 'CHECKPOINT_UNUSABLE' };
+    }
+
     // The atomic claim: only one caller can flip `used_at_ms` from NULL.
     const claim = sqlite
       .prepare('UPDATE device_invites SET used_at_ms = ? WHERE id = ? AND used_at_ms IS NULL')
@@ -209,15 +242,12 @@ function exchangeDeviceInviteSync(
       return { error: 'INVITE_ALREADY_USED' };
     }
 
-    const cp = sqlite.prepare('SELECT name FROM checkpoints WHERE id = ?').get(invite.checkpoint_id) as
-      | { name: string }
-      | undefined;
     const existing = sqlite
       .prepare('SELECT COUNT(*) AS total FROM device_sessions WHERE checkpoint_id = ?')
       .get(invite.checkpoint_id) as { total: number } | undefined;
 
     const deviceIndex = Number(existing?.total || 0) + 1;
-    const label = `${cp?.name || 'Checkpoint'} — appareil ${deviceIndex}`;
+    const label = `${cp.name} — appareil ${deviceIndex}`;
 
     const sessionId = crypto.randomUUID();
     const sessionToken = crypto.randomBytes(32).toString('base64url');
@@ -262,16 +292,22 @@ function exchangeDeviceInviteSync(
     };
 
     return { deviceSession: sessionModel, sessionToken, expiresAtMs };
-  } catch {
+  } catch (err) {
+    // Same contract as Phase 4's topology transaction: keep the real cause
+    // for server-side logging, only attempt a rollback when a transaction
+    // was actually opened (BEGIN itself may be what failed), and capture a
+    // rollback failure separately so it can never mask — nor silently
+    // swallow — the error that triggered it.
+    let rollbackError: unknown = null;
     if (transactionStarted) {
       try {
         sqlite.exec('ROLLBACK;');
-      } catch {
-        // A failed rollback must not mask the original failure; the caller
-        // only ever learns a generic internal error either way.
+      } catch (errDuringRollback) {
+        rollbackError = errDuringRollback;
       }
     }
-    return { error: 'INTERNAL_ERROR' };
+
+    return { error: 'INTERNAL_ERROR', cause: err, rollbackError };
   }
 }
 
@@ -328,6 +364,25 @@ export async function authenticateDeviceRequest(
   }
 
   if (session.revokedAtMs !== null || session.expiresAtMs <= now) {
+    return null;
+  }
+
+  // `device_sessions` has no composite FK tying (event_id, checkpoint_id)
+  // together, and rows created before Phase 5 could be minted from an
+  // invitation pointing at another event's door. Such a session would
+  // otherwise authenticate and count through a checkpoint its event does
+  // not own. Rejected here, so bootstrap, heartbeat, SSE and batch all
+  // refuse it at once.
+  //
+  // Deliberately *not* a check on event status: a session belonging to a
+  // `closing` event must keep authenticating so it can drain its outbox.
+  const checkpoint = await db
+    .select({ eventId: checkpoints.eventId })
+    .from(checkpoints)
+    .where(eq(checkpoints.id, session.checkpointId))
+    .get();
+
+  if (!checkpoint || checkpoint.eventId !== session.eventId) {
     return null;
   }
 

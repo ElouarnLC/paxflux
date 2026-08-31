@@ -129,6 +129,23 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
       expect(invite.pairUrl).not.toContain('//pair');
     });
 
+    it('flags a loopback PUBLIC_BASE_URL as unreachable from a phone, while still using it verbatim', async () => {
+      await app.close();
+      sqlite.close();
+      await boot({ PUBLIC_BASE_URL: 'http://localhost:3000' });
+
+      const { event, checkpoints: cps } = await createDraftEvent('Repro Loopback Public URL');
+      const res = await createInvite(event.id, cps[0].id);
+
+      const invite = res.json();
+      // Configured is still authoritative — but a QR pointing at localhost
+      // is one no handset can open, so the admin must be told rather than
+      // finding out at the door.
+      expect(invite.pairUrl).toBe(`http://localhost:3000/pair#${invite.token}`);
+      expect(invite.pairUrlSource).toBe('public_base_url');
+      expect(invite.unreachableFromPhone).toBe(true);
+    });
+
     it('falls back to the request origin when PUBLIC_BASE_URL is unset, never to a bare relative path', async () => {
       // Local development has no PUBLIC_BASE_URL; the QR must still encode
       // something a phone on the same LAN can actually open, rather than a
@@ -296,6 +313,185 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
     });
   });
 
+  describe('checkpoint revalidation at consumption', () => {
+    it('refuses a scan whose checkpoint was deactivated after the invite was created, without burning the token', async () => {
+      const { event, checkpoints: cps } = await createDraftEvent('Repro Checkpoint Deactivated');
+      const inviteRes = await createInvite(event.id, cps[0].id);
+      const { token, id: inviteId } = inviteRes.json();
+
+      // An invitation minted in `draft` can be scanned much later — by
+      // which point staff may have deactivated that door.
+      await db.update(checkpoints).set({ isActive: false }).where(eq(checkpoints.id, cps[0].id));
+
+      const res = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token } });
+
+      expect(res.statusCode).toBe(409);
+      const sessions = await db.select().from(deviceSessions).all();
+      expect(sessions).toHaveLength(0);
+
+      // The token is not burnt: staff can reactivate the door and reuse
+      // the same QR rather than reprinting it.
+      const invite = await db.select().from(deviceInvites).where(eq(deviceInvites.id, inviteId)).get();
+      expect(invite?.usedAtMs).toBeNull();
+    });
+
+    it('refuses a legacy invite whose checkpoint belongs to another event, and creates no session', async () => {
+      // Rows like this could be created before Phase 5 added the
+      // creation-time consistency check, so they must still be refused at
+      // consumption rather than trusted.
+      const eventA = await createDraftEvent('Repro Legacy Cross Event A');
+      const eventB = await createDraftEvent('Repro Legacy Cross Event B');
+
+      const inviteRes = await createInvite(eventA.event.id, eventA.checkpoints[0].id);
+      const { token, id: inviteId } = inviteRes.json();
+      await db
+        .update(deviceInvites)
+        .set({ checkpointId: eventB.checkpoints[0].id })
+        .where(eq(deviceInvites.id, inviteId));
+
+      const res = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token } });
+
+      expect(res.statusCode).toBe(409);
+      const sessions = await db.select().from(deviceSessions).all();
+      expect(sessions).toHaveLength(0);
+    });
+
+    it('refuses to authenticate a legacy device session whose checkpoint belongs to another event', async () => {
+      const eventA = await createDraftEvent('Repro Legacy Session A');
+      const eventB = await createDraftEvent('Repro Legacy Session B');
+
+      const inviteRes = await createInvite(eventA.event.id, eventA.checkpoints[0].id);
+      const { token } = inviteRes.json();
+      const pairRes = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token } });
+      const cookie = pairRes.cookies[0];
+      const deviceCookie = `${cookie.name}=${cookie.value}`;
+      const deviceSessionId = pairRes.json().deviceSession.id as string;
+
+      // Simulates a session minted before the invite check existed: its
+      // checkpoint is not one its own event owns. `device_sessions` has no
+      // composite FK, so nothing at the schema level stops this row.
+      await db
+        .update(deviceSessions)
+        .set({ checkpointId: eventB.checkpoints[0].id })
+        .where(eq(deviceSessions.id, deviceSessionId));
+
+      const bootstrap = await app.inject({
+        method: 'GET',
+        url: '/api/v1/device/bootstrap',
+        headers: { cookie: deviceCookie },
+      });
+      expect(bootstrap.statusCode).toBe(401);
+
+      const heartbeat = await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: { pendingCount: 0 },
+      });
+      expect(heartbeat.statusCode).toBe(401);
+
+      const batch = await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/actions/batch',
+        headers: { cookie: deviceCookie },
+        payload: { actions: [], pendingCount: 0 },
+      });
+      expect(batch.statusCode).toBe(401);
+    });
+
+    it('keeps authenticating a device whose event is `closing`, so it can still drain its outbox', async () => {
+      const { event, checkpoints: cps } = await createDraftEvent('Repro Closing Still Authenticates');
+      const inviteRes = await createInvite(event.id, cps[0].id);
+      const { token } = inviteRes.json();
+      const pairRes = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token } });
+      const cookie = pairRes.cookies[0];
+      const deviceCookie = `${cookie.name}=${cookie.value}`;
+
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/start`, headers: authHeaders() });
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+
+      // Hardening the session check must not strand a device that still
+      // holds queued actions — `closing` exists precisely to drain them.
+      const bootstrap = await app.inject({
+        method: 'GET',
+        url: '/api/v1/device/bootstrap',
+        headers: { cookie: deviceCookie },
+      });
+      expect(bootstrap.statusCode).toBe(200);
+
+      const heartbeat = await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: { pendingCount: 3 },
+      });
+      expect(heartbeat.statusCode).toBe(200);
+    });
+  });
+
+  describe('pairing transaction error handling', () => {
+    it('never leaks a raw SQLite error when BEGIN fails', async () => {
+      const { event, checkpoints: cps } = await createDraftEvent('Repro Pairing BEGIN Failure');
+      const inviteRes = await createInvite(event.id, cps[0].id);
+      const { token } = inviteRes.json();
+
+      // A transaction already open on the shared connection makes the
+      // exchange's own BEGIN IMMEDIATE fail.
+      sqlite.exec('BEGIN IMMEDIATE;');
+      try {
+        const res = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token } });
+
+        expect(res.statusCode).toBe(500);
+        const body = res.json();
+        expect(body.code).toBe('INTERNAL_ERROR');
+        expect(body.detail).not.toMatch(/sqlite|BEGIN|transaction within a transaction/i);
+      } finally {
+        sqlite.exec('ROLLBACK;');
+      }
+    });
+
+    it('reports a rollback failure as a 500 rather than swallowing it', async () => {
+      const { event, checkpoints: cps } = await createDraftEvent('Repro Pairing Rollback Failure');
+      const inviteRes = await createInvite(event.id, cps[0].id);
+      const { token } = inviteRes.json();
+
+      // Break the session INSERT so the exchange fails after claiming the
+      // token, then make the ROLLBACK that should undo it fail too.
+      const originalPrepare = sqlite.prepare.bind(sqlite);
+      const originalExec = sqlite.exec.bind(sqlite);
+      let rollbackAttempts = 0;
+      (sqlite as unknown as { prepare: typeof sqlite.prepare }).prepare = ((sql: string) => {
+        if (sql.includes('INSERT INTO device_sessions')) {
+          throw new Error('Simulated INSERT failure');
+        }
+        return originalPrepare(sql);
+      }) as typeof sqlite.prepare;
+      (sqlite as unknown as { exec: typeof sqlite.exec }).exec = ((sql: string) => {
+        if (sql.trim() === 'ROLLBACK;' && rollbackAttempts === 0) {
+          rollbackAttempts += 1;
+          throw new Error('Simulated ROLLBACK failure');
+        }
+        return originalExec(sql);
+      }) as typeof sqlite.exec;
+
+      try {
+        const res = await app.inject({ method: 'POST', url: '/api/v1/device/pair', payload: { token } });
+
+        expect(res.statusCode).toBe(500);
+        expect(res.json().code).toBe('INTERNAL_ERROR');
+        expect(rollbackAttempts).toBe(1);
+      } finally {
+        (sqlite as unknown as { prepare: typeof sqlite.prepare }).prepare = originalPrepare;
+        (sqlite as unknown as { exec: typeof sqlite.exec }).exec = originalExec;
+        try {
+          sqlite.exec('ROLLBACK;');
+        } catch {
+          // Already clean — nothing was left open.
+        }
+      }
+    });
+  });
+
   describe('heartbeat validation', () => {
     async function pairDevice() {
       const { event, checkpoints: cps } = await createDraftEvent(`Repro Heartbeat ${crypto.randomUUID()}`);
@@ -356,6 +552,41 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
       expect(after?.lastClientSequence).toBe(12);
       expect(after?.appVersion).toBe('1.0.0');
       expect(after?.lastSeenAtMs).toBe(before?.lastSeenAtMs);
+    });
+
+    it('rejects a heartbeat that omits pendingCount entirely, without touching any device state', async () => {
+      const { deviceSessionId, deviceCookie } = await pairDevice();
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: { pendingCount: 7, lastClientSequence: 12, appVersion: '1.0.0' },
+      });
+      const before = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
+      expect(before?.lastPendingCount).toBe(7);
+
+      // `pendingCount` carries the entire point of a heartbeat. An empty
+      // body — or one that only carries an appVersion — states nothing
+      // about what this device still holds, and must never be read as
+      // "zero pending" by omission.
+      for (const payload of [{}, { appVersion: '1.0.1' }]) {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/device/heartbeat',
+          headers: { cookie: deviceCookie },
+          payload,
+        });
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json().code).toBe('VALIDATION_ERROR');
+
+        const after = await db.select().from(deviceSessions).where(eq(deviceSessions.id, deviceSessionId)).get();
+        expect(after?.lastPendingCount).toBe(7);
+        expect(after?.lastSeenAtMs).toBe(before?.lastSeenAtMs);
+        expect(after?.lastClientSequence).toBe(12);
+        expect(after?.appVersion).toBe('1.0.0');
+      }
     });
 
     it('refuses a heartbeat from a revoked session with 401', async () => {
