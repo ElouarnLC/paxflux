@@ -50,7 +50,22 @@ export function runMigrations(sqlite: DatabaseSync, dbPath: string = './data/app
     sqlite.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}'`);
   }
 
-  // Apply pending migrations inside a transaction
+  // Apply each pending migration in its own transaction.
+  //
+  // A migration is one unit: either every statement in the file lands and
+  // the ledger records it, or nothing does. Applying the statements loose
+  // and inserting the ledger row afterwards leaves the two ways to be wrong
+  // that matter here — a half-applied file whose later statements failed,
+  // and a fully-applied file the ledger never recorded, which the next run
+  // would replay. Both leave a database no `runMigrations` can repair.
+  //
+  // The ledger insert is inside the transaction for the same reason: it is
+  // the statement that makes the migration true, so it commits with the
+  // change it describes.
+  //
+  // `BEGIN IMMEDIATE` rather than a deferred begin: a migration writes, and
+  // taking the write lock up front turns a busy database into an immediate,
+  // legible failure instead of one surfacing mid-file.
   let appliedCount = 0;
   for (const file of pendingFiles) {
     const sqlContent = fs.readFileSync(path.join(migrationsFolder, file), 'utf8');
@@ -59,14 +74,38 @@ export function runMigrations(sqlite: DatabaseSync, dbPath: string = './data/app
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
-    for (const stmt of statements) {
-      sqlite.exec(stmt);
+    let transactionStarted = false;
+    try {
+      sqlite.exec('BEGIN IMMEDIATE;');
+      transactionStarted = true;
+
+      for (const stmt of statements) {
+        sqlite.exec(stmt);
+      }
+
+      sqlite.prepare('INSERT INTO "__drizzle_migrations" (hash, created_at) VALUES (?, ?)').run(
+        file,
+        Date.now()
+      );
+
+      sqlite.exec('COMMIT;');
+    } catch (err) {
+      // Roll back only if the transaction actually opened: a failing BEGIN
+      // leaves nothing to undo, and a ROLLBACK then would throw an error of
+      // its own on top of the real one.
+      if (transactionStarted) {
+        try {
+          sqlite.exec('ROLLBACK;');
+        } catch (rollbackErr) {
+          // The original failure is what explains the state of the
+          // database; a rollback that also failed is context, not the
+          // cause, so it is reported without replacing it.
+          console.error(`Rollback failed while aborting migration ${file}:`, rollbackErr);
+        }
+      }
+      throw new Error(`Migration ${file} failed and was rolled back`, { cause: err });
     }
 
-    sqlite.prepare('INSERT INTO "__drizzle_migrations" (hash, created_at) VALUES (?, ?)').run(
-      file,
-      Date.now()
-    );
     appliedCount++;
   }
 
