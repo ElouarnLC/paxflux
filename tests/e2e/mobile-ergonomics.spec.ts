@@ -12,6 +12,7 @@ import {
 } from './helpers.js';
 import {
   assertFieldsDoNotTriggerIosZoom,
+  assertSafeAreaContract,
   assertTouchTargets,
   assertVisibleFocusIndicator,
 } from './responsive-helpers.js';
@@ -79,6 +80,26 @@ test('le texte reste sélectionnable en dehors des surfaces tactiles', async ({ 
     bodyUserSelect,
     '<body> disables text selection globally, so no value in the interface can be copied'
   ).not.toBe('none');
+});
+
+test('les zones de sécurité sont appliquées une seule fois, à la racine', async ({ page }) => {
+  await loginAsAdmin(page);
+  await page.goto(`/admin?event=${topo.eventId}`);
+  await expect(page.getByText(LONG_FIXTURE_NAMES.siteSpace).first()).toBeVisible();
+
+  // The dashboard is the screen with a sticky bar carrying the event
+  // selector and both shortcuts — the content that must not end up under a
+  // status bar.
+  await expect(page.locator('header')).toBeVisible();
+  await assertSafeAreaContract(page, '/admin (Dashboard)');
+
+  // And the counter, the only full-bleed screen and therefore the one most
+  // likely to be given an inset of its own on top of #root's.
+  const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
+  await page.goto(`/pair#${token}`);
+  await page.waitForURL('**/counter');
+  await expect(page.getByTestId('count-a-to-b')).toBeVisible();
+  await assertSafeAreaContract(page, '/counter (CounterView)');
 });
 
 test('les champs de saisie n’imposent pas le zoom iOS au focus', async ({ page }) => {

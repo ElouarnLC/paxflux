@@ -450,7 +450,7 @@ export const CounterView: React.FC = () => {
     // matches the cookie this browser holds, and any tap or heartbeat made
     // under it would be attributed to the wrong device.
     return (
-      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400 p-6">
+      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400 p-6">
         <div className="flex flex-col items-center gap-3 text-center max-w-sm">
           <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
           {awaitingConfigurationFor ? (
@@ -472,20 +472,21 @@ export const CounterView: React.FC = () => {
   }
 
   return (
-    // `min-h-dvh`, not `min-h-full`: a percentage height chains up to the
-    // initial containing block, which on mobile is the viewport *without*
-    // the browser chrome — so the counter was taller than the screen for as
-    // long as the address bar was showing, which is exactly when the
-    // operator arrives. `select-none` lives on the tap surfaces below now,
-    // not on the document, and `safe-x` keeps the layout clear of a
-    // landscape cutout.
-    <div className="min-h-dvh flex flex-col bg-slate-950 text-slate-100 safe-x">
+    // `flex-1`, never a height percentage: #root establishes the dynamic
+    // viewport height once (`min-h-dvh`) and each route claims it here. A
+    // percentage would need #root to have a definite height, which it must
+    // not — a long page has to be able to grow past the viewport.
+    //
+    // No safe-area class either: #root already insets every route, and a
+    // second inset here would be double-counted. `select-none` lives on the
+    // tap surfaces below now, not on the document.
+    <div className="flex-1 flex flex-col bg-slate-950 text-slate-100">
       {/* 1. Header: Event, Checkpoint, Connection State */}
-      <header className="px-4 pb-3 safe-top border-b border-slate-900 bg-slate-950/80 backdrop-blur sticky top-0 z-20">
-        {/* The top padding lives here rather than on <header> so `safe-top`
-            can add the display-cutout inset on top of it instead of
-            replacing it. */}
-        <div className="pt-3 flex items-start justify-between gap-2">
+      {/* `sticky-safe-top` replaces `top-0`: a sticky element offsets from
+          the scrollport, not from #root, so at `top: 0` it would slide under
+          the status bar as soon as the operator scrolls a banner state. */}
+      <header className="px-4 py-3 border-b border-slate-900 bg-slate-950/80 backdrop-blur sticky sticky-safe-top z-20">
+        <div className="flex items-start justify-between gap-2">
           {/* `min-w-0` is what lets the two clamps below actually clamp: a
               flex item defaults to its content's minimum width, so a long
               door name would otherwise push the sync badge off the screen
@@ -745,11 +746,11 @@ export const CounterView: React.FC = () => {
         ) : null}
       </main>
 
-      {/* 4. Footer: Last Action Feedback & Undo. `safe-bottom` adds the
-          home-indicator inset underneath the footer's own padding, which is
-          why that padding sits on the inner row rather than on <footer>. */}
-      <footer className="px-4 pt-3 safe-bottom border-t border-slate-900 bg-slate-950/90">
-        <div className="pb-3 flex flex-wrap items-center justify-between gap-2">
+      {/* 4. Footer: Last Action Feedback & Undo. The home-indicator inset is
+          #root's job, not this element's — see the safe-area contract in
+          styles/index.css. */}
+      <footer className="px-4 py-3 border-t border-slate-900 bg-slate-950/90">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0 flex-1 text-xs text-slate-300 flex items-center gap-2">
             {lastAction ? (
               <>

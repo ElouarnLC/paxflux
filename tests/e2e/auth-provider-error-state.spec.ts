@@ -12,10 +12,14 @@ async function loginAsAdmin(page: import('@playwright/test').Page) {
 test('un échec réseau au bootstrap affiche un état d\'erreur avec Réessayer, pas une déconnexion', async ({ page }) => {
   await loginAsAdmin(page);
 
-  let callCount = 0;
+  // A flag, not a call count: `waitForURL('**/admin')` resolves on the URL
+  // change, so the previous page's session request can start either side of
+  // this registration. Counting calls makes "the first one" a different
+  // request under load — the reload's call then succeeds and the error state
+  // never appears. This is the race behind this spec's intermittent failures.
+  let failSessionCalls = true;
   await page.route('**/api/v1/auth/session', async (route) => {
-    callCount++;
-    if (callCount === 1) {
+    if (failSessionCalls) {
       await route.abort('failed');
     } else {
       await route.continue();
@@ -31,6 +35,7 @@ test('un échec réseau au bootstrap affiche un état d\'erreur avec Réessayer,
   await expect(retryButton).toBeVisible();
   expect(page.url()).not.toContain('/login');
 
+  failSessionCalls = false;
   await retryButton.click();
 
   // Once the (simulated) network recovers, retrying must land back in the
@@ -41,10 +46,11 @@ test('un échec réseau au bootstrap affiche un état d\'erreur avec Réessayer,
 test('un 500 du serveur au bootstrap affiche un état d\'erreur, pas une déconnexion', async ({ page }) => {
   await loginAsAdmin(page);
 
-  let callCount = 0;
+  // Same reasoning as above: the failure window is a flag, so which request
+  // happens to be first cannot change what this test observes.
+  let failSessionCalls = true;
   await page.route('**/api/v1/auth/session', async (route) => {
-    callCount++;
-    if (callCount === 1) {
+    if (failSessionCalls) {
       await route.fulfill({
         status: 500,
         contentType: 'application/json',
@@ -66,6 +72,7 @@ test('un 500 du serveur au bootstrap affiche un état d\'erreur, pas une déconn
   await expect(page.getByText(/connexion au serveur impossible/i)).toBeVisible();
   expect(page.url()).not.toContain('/login');
 
+  failSessionCalls = false;
   await page.getByRole('button', { name: /réessayer/i }).click();
   await expect(page.getByRole('link', { name: /nouvel événement|créer un événement/i })).toBeVisible();
 });

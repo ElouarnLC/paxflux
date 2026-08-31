@@ -1,14 +1,22 @@
 <!DOCTYPE html>
-<html lang="fr" class="dark h-full bg-slate-950 text-slate-100">
+<html lang="fr" class="dark bg-slate-950 text-slate-100">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!--
-      No `maximum-scale` and no `user-scalable=no`: an operator reading a
-      gauge in bad light must be able to pinch-zoom, and WCAG 1.4.4 expects
-      at least 5× (SC 1.4.4). `viewport-fit=cover` lets the app paint into
-      the display cutout area, which is only safe because the counter
-      applies real `env(safe-area-inset-*)` padding (see styles/index.css).
+      No `maximum-scale` and no `user-scalable=no`: suppressing pinch-zoom
+      is a documented failure of WCAG 2.1 SC 1.4.4 (Resize Text), which
+      requires text to be resizable to at least 200% without loss of
+      content or function — an operator reading a gauge in bad light must
+      be able to enlarge it. The regression test accepts any
+      `maximum-scale` of 5 or more, the threshold below which mobile
+      accessibility audits flag the tag at all.
+
+      `viewport-fit=cover` lets the page paint into the display cutout
+      area. It is only safe because the safe-area contract in
+      styles/index.css is actually implemented: #root insets every route's
+      content by `env(safe-area-inset-*)`, so what reaches the cutout is
+      the page background and nothing else.
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0f172a" />
@@ -16,14 +24,21 @@
     <title>PaxFlux</title>
   </head>
   <!--
+    No height percentages anywhere in this chain. #root establishes the
+    dynamic viewport height once (`min-h-dvh`) and every route claims it
+    with `flex-1`; `height: 100%` on <html>/<body> would only be a second,
+    conflicting source of truth — and `min-height: 100%` on a route would
+    not resolve at all, since #root deliberately has no definite height so
+    that long pages can grow past the viewport and scroll.
+
     `select-none` belongs on the counter's tap surfaces, not on the
     document: applied here it also made every pairing URL, checksum and
     event name in the admin interface impossible to copy. `overflow-x-hidden`
     is gone for the same class of reason — it clipped horizontal overflow
     out of sight instead of preventing it.
   -->
-  <body class="h-full antialiased font-sans">
-    <div id="root" class="min-h-dvh flex flex-col"></div>
+  <body class="antialiased font-sans">
+    <div id="root" class="min-h-dvh flex flex-col safe-area-root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -84,7 +84,7 @@ export const AuthProvider: React.FC = () => {
 
   if (state.kind === 'loading' || state.kind === 'redirecting') {
     return (
-      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400">
+      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400">
         <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
       </div>
     );
@@ -92,7 +92,7 @@ export const AuthProvider: React.FC = () => {
 
   if (state.kind === 'error') {
     return (
-      <div className="min-h-full flex items-center justify-center p-6 bg-slate-950 text-slate-100">
+      <div className="flex-1 flex items-center justify-center p-6 bg-slate-950 text-slate-100">
         <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl text-center">
           <div className="w-14 h-14 rounded-2xl bg-rose-950/80 border border-rose-500/30 flex items-center justify-center mx-auto mb-6 text-rose-400">
             <AlertTriangle className="w-8 h-8" />
@@ -104,7 +104,7 @@ export const AuthProvider: React.FC = () => {
             onClick={() => {
               refreshSession();
             }}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-lg transition-all"
+            className="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-lg transition-all"
           >
             <RefreshCw className="w-4 h-4" />
             Réessayer

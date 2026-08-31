@@ -95,7 +95,7 @@ export const PairingPage: React.FC = () => {
   }, [navigate]);
 
   return (
-    <div className="min-h-full flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100">
+    <div className="flex-1 flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100">
       <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-center">
         <div className="w-16 h-16 rounded-2xl bg-indigo-950/80 border border-indigo-500/30 flex items-center justify-center mx-auto mb-6 text-indigo-400">
           <Smartphone className="w-8 h-8" />

@@ -143,7 +143,7 @@ export const DevicesManagement: React.FC = () => {
     // not stretched to its container — it sizes to its content instead. Two
     // admin pages were therefore as wide as their widest table, which
     // `overflow-x-hidden` on <body> used to hide.
-    <div className="min-h-full bg-slate-950 text-slate-100 p-4 sm:p-6 w-full max-w-5xl mx-auto space-y-4 sm:space-y-6">
+    <div className="flex-1 bg-slate-950 text-slate-100 p-4 sm:p-6 w-full max-w-5xl mx-auto space-y-4 sm:space-y-6">
       {/* "back on the left, title on the right" is a desktop pattern; on a
           phone the two simply collide, so they stack with the title first. */}
       <div className="flex flex-col sm:flex-row-reverse sm:items-center sm:justify-between gap-1 sm:gap-3">
@@ -177,7 +177,7 @@ export const DevicesManagement: React.FC = () => {
             <select
               value={selectedCheckpointId}
               onChange={(e) => setSelectedCheckpointId(e.target.value)}
-              className="w-full min-w-0 min-h-11 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm"
+              className="w-full min-w-0 min-h-11 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm"
             >
               {checkpoints.map((cp) => (
                 <option key={cp.id} value={cp.id}>

@@ -34,14 +34,14 @@ export const AnalyticsView: React.FC = () => {
 
   if (loading || !data) {
     return (
-      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400">
+      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400">
         <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-full bg-slate-950 text-slate-100 p-4 sm:p-6 w-full max-w-6xl mx-auto space-y-4 sm:space-y-6">
+    <div className="flex-1 bg-slate-950 text-slate-100 p-4 sm:p-6 w-full max-w-6xl mx-auto space-y-4 sm:space-y-6">
       <div className="flex flex-col sm:flex-row-reverse sm:items-center sm:justify-between gap-1 sm:gap-3">
         <h1 className="text-lg sm:text-xl font-bold text-white break-words">Statistiques & Analyse de Flux</h1>
         <Link

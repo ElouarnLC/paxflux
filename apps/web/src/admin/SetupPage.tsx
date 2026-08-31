@@ -48,7 +48,7 @@ export const SetupPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-full flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100">
+    <div className="flex-1 flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100">
       <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
         <div className="w-14 h-14 rounded-2xl bg-indigo-950/80 border border-indigo-500/30 flex items-center justify-center mx-auto mb-6 text-indigo-400">
           <ShieldCheck className="w-8 h-8" />
@@ -75,7 +75,7 @@ export const SetupPage: React.FC = () => {
               value={setupToken}
               onChange={(e) => setSetupToken(e.target.value)}
               placeholder="f5aa4d232bc..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-base md:text-sm focus:border-indigo-500 transition-colors"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-base lg:text-sm focus:border-indigo-500 transition-colors"
             />
           </div>
 
@@ -85,7 +85,7 @@ export const SetupPage: React.FC = () => {
               type="text"
               value={instanceName}
               onChange={(e) => setInstanceName(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
             />
           </div>
 
@@ -96,7 +96,7 @@ export const SetupPage: React.FC = () => {
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
             />
           </div>
 
@@ -108,7 +108,7 @@ export const SetupPage: React.FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
             />
           </div>
 
@@ -120,7 +120,7 @@ export const SetupPage: React.FC = () => {
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
             />
           </div>
 

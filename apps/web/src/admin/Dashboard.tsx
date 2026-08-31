@@ -106,7 +106,7 @@ export const Dashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400">
+      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400">
         <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
       </div>
     );
@@ -114,7 +114,7 @@ export const Dashboard: React.FC = () => {
 
   if (eventsList.length === 0) {
     return (
-      <div className="min-h-full flex flex-col items-center justify-center p-6 text-center bg-slate-950 text-slate-100">
+      <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-slate-950 text-slate-100">
         <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl">
           <Users className="w-12 h-12 text-indigo-400 mx-auto mb-4" />
           <h2 className="text-xl font-bold mb-2">Aucun événement configuré</h2>
@@ -142,14 +142,19 @@ export const Dashboard: React.FC = () => {
   const syncQuality: SyncQuality = eventDetail?.syncQuality || 'reliable';
 
   return (
-    <div className="min-h-full bg-slate-950 text-slate-100 flex flex-col">
+    <div className="flex-1 bg-slate-950 text-slate-100 flex flex-col">
       {/* Top Navbar */}
       {/* The brand, the shortcut to Système and the event control used to
           share one non-wrapping row. On a phone that row was simply wider
           than the screen, taking `Nouvel événement` off it. It now folds:
           brand and Système on the first line, the selector and the create
           action on the second, back to a single row from `sm` up. */}
-      <header className="px-4 sm:px-6 py-3 border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2">
+      {/* `sticky-safe-top` replaces `top-0`: a sticky element offsets from
+          the scrollport rather than from #root, so at `top: 0` this bar —
+          which carries the event selector and both shortcuts — would sit
+          under the status bar as soon as the page is scrolled in a
+          standalone PWA. See the safe-area contract in styles/index.css. */}
+      <header className="px-4 sm:px-6 py-3 border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky sticky-safe-top z-20 flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="font-black text-lg sm:text-xl tracking-tight text-white">PaxFlux</span>
           <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-950 border border-indigo-500/30 text-indigo-300 font-medium">
@@ -172,7 +177,7 @@ export const Dashboard: React.FC = () => {
           <select
             value={selectedEventId || ''}
             onChange={(e) => setSelectedEventId(e.target.value)}
-            className="flex-1 sm:flex-none sm:max-w-64 min-w-0 min-h-11 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-base md:text-xs font-semibold text-white"
+            className="flex-1 sm:flex-none sm:max-w-64 min-w-0 min-h-11 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-base lg:text-xs font-semibold text-white"
           >
             {eventsList.map((ev) => (
               <option key={ev.id} value={ev.id}>

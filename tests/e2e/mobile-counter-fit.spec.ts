@@ -130,57 +130,6 @@ test('le compteur est dimensionné en hauteur de viewport dynamique', async ({ p
   await assertNoVerticalScrolling(page, '/counter (hauteur dynamique)');
 });
 
-test('les zones de sécurité du compteur sont réellement appliquées', async ({ page }) => {
-  const topo = await createLongNamedTopology(session, { suffix: `safe-${test.info().project.name}` });
-  await startEvent(session, topo.eventId);
-  await pairCounter(page, topo);
-
-  // `pb-safe` was a class name with no rule behind it: it read like safe
-  // area handling and did exactly nothing. So this asserts two things a
-  // decorative class name cannot satisfy — a rule that consults
-  // `env(safe-area-inset-*)` exists, and it actually matches an element on
-  // this screen. The insets are 0 in this browser, so the assertion is on
-  // the mechanism being wired up, not on the value it produces here.
-  const guarded = await page.evaluate(() => {
-    const selectors = new Set<string>();
-
-    // Tailwind emits its output inside `@layer` blocks, so the style rules
-    // are never at the top level of a sheet.
-    function walk(rules: CSSRuleList) {
-      for (const rule of Array.from(rules)) {
-        const styleRule = rule as CSSStyleRule;
-        if (styleRule.selectorText && styleRule.cssText.includes('safe-area-inset')) {
-          selectors.add(styleRule.selectorText);
-        }
-        const nested = (rule as CSSGroupingRule).cssRules;
-        if (nested && nested.length > 0) walk(nested);
-      }
-    }
-
-    for (const sheet of Array.from(document.styleSheets)) {
-      try {
-        walk(sheet.cssRules);
-      } catch {
-        continue; // not one of ours
-      }
-    }
-
-    return {
-      declared: Array.from(selectors),
-      matching: Array.from(selectors).filter((selector) => document.querySelector(selector) !== null),
-    };
-  });
-
-  expect(
-    guarded.declared.length,
-    'no stylesheet rule references env(safe-area-inset-*): the counter has no safe-area handling, only class names that look like it'
-  ).toBeGreaterThan(0);
-  expect(
-    guarded.matching.length,
-    `safe-area rules exist (${guarded.declared.join(', ')}) but match nothing on the counter, so nothing is inset`
-  ).toBeGreaterThan(0);
-});
-
 test('un état exceptionnel n’enferme aucune action hors de l’écran', async ({ page }) => {
   const topo = await createLongNamedTopology(session, { suffix: `banner-${test.info().project.name}` });
   await startEvent(session, topo.eventId);

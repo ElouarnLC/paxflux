@@ -217,6 +217,16 @@ export async function assertScreenFitsViewport(page: Page, label: string): Promi
 /**
  * Every visible control a thumb has to hit must be at least 44×44.
  *
+ * The sweep covers form controls, not just buttons and links: a 20×20
+ * checkbox is the hardest thing on any of these screens to hit, and leaving
+ * `input` out of the selector was a hole this assertion claimed not to have.
+ *
+ * What is measured is the *effective activation target*, not the control's
+ * own box. A checkbox is legitimately drawn at 20×20 as long as a <label>
+ * around it (or pointing at it) gives the finger 44×44 to land on — that
+ * label is what the browser dispatches the toggle from, so that is what the
+ * assertion sizes.
+ *
  * Applied on touch viewports only: a desktop pointer is precise, and
  * inflating a dense desktop table is not this phase's business.
  */
@@ -224,42 +234,67 @@ export async function assertTouchTargets(page: Page, label: string): Promise<voi
   if (!isTouchViewport(page)) return;
 
   const tooSmall = await page.evaluate((minimum) => {
-    const selector = 'button, a[href], select, [role="button"]';
+    const selector =
+      'button, a[href], select, textarea, input, [role="button"], [role="checkbox"], [role="switch"]';
+
+    /**
+     * The box a tap actually has to land in: the control itself, or the
+     * label that activates it when that label is bigger.
+     */
+    function activationTarget(el: Element): DOMRect {
+      let best = el.getBoundingClientRect();
+
+      const labels = (el as HTMLInputElement).labels;
+      if (labels) {
+        for (const owner of Array.from(labels)) {
+          const rect = owner.getBoundingClientRect();
+          if (rect.width * rect.height > best.width * best.height) best = rect;
+        }
+      }
+      return best;
+    }
+
     return Array.from(document.querySelectorAll(selector))
       .filter((el) => el.getAttribute('aria-hidden') !== 'true')
+      .filter((el) => {
+        if (el.tagName !== 'INPUT') return true;
+        // A hidden or file-less input has no target to speak of.
+        return (el as HTMLInputElement).type !== 'hidden';
+      })
       .filter((el) => {
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
       })
-      .filter((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.height < minimum - 0.5 || rect.width < minimum - 0.5;
-      })
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        return {
-          tag: el.tagName.toLowerCase(),
-          text: (el.textContent || '').trim().slice(0, 40) || el.getAttribute('aria-label') || '(no label)',
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-        };
-      });
+      .map((el) => ({ el, target: activationTarget(el) }))
+      .filter(({ target }) => target.height < minimum - 0.5 || target.width < minimum - 0.5)
+      .map(({ el, target }) => ({
+        tag: el.tagName.toLowerCase() + (el.tagName === 'INPUT' ? `[${(el as HTMLInputElement).type}]` : ''),
+        text:
+          (el.textContent || '').trim().slice(0, 40) ||
+          el.getAttribute('aria-label') ||
+          el.getAttribute('placeholder') ||
+          '(no label)',
+        width: Math.round(target.width),
+        height: Math.round(target.height),
+      }));
   }, MIN_TOUCH_TARGET_PX);
 
   expect(
     tooSmall,
-    `${label}: ${tooSmall.length} control(s) smaller than ${MIN_TOUCH_TARGET_PX}×${MIN_TOUCH_TARGET_PX} on a touch viewport:\n${JSON.stringify(tooSmall, null, 2)}`
+    `${label}: ${tooSmall.length} control(s) whose effective tap target is smaller than ${MIN_TOUCH_TARGET_PX}×${MIN_TOUCH_TARGET_PX} on a touch viewport:\n${JSON.stringify(tooSmall, null, 2)}`
   ).toEqual([]);
 }
 
 /**
- * Text fields must compute to at least 16px on a phone.
+ * Text fields must compute to at least 16px on any touch viewport.
  *
- * Below that, iOS Safari zooms the page on focus and never zooms back —
- * the operator ends up panning a magnified form with one hand.
+ * Below that, iOS Safari zooms the page on focus and never zooms back — the
+ * operator ends up panning a magnified form with one hand. The threshold
+ * covers the 768px tablet too, which is why the fields step back down at
+ * `lg` rather than `md`: a tablet is a touch device, not a desktop.
  */
 export async function assertFieldsDoNotTriggerIosZoom(page: Page, label: string): Promise<void> {
-  if (!isPhoneViewport(page)) return;
+  if (!isTouchViewport(page)) return;
 
   const tooSmall = await page.evaluate((minimum) => {
     const textualInputTypes = new Set([
@@ -366,4 +401,154 @@ export async function assertFullyVisible(page: Page, target: Locator, label: str
     rect.x >= -1 && rect.x + rect.width <= size.width + 1,
     `${label}: element is not horizontally inside the ${size.width}×${size.height} viewport (left ${Math.round(rect.x)}, right ${Math.round(rect.x + rect.width)})`
   ).toBe(true);
+}
+
+/**
+ * The routed page fills at least the visible viewport, and keeps whatever
+ * vertical centring it was written with.
+ *
+ * This is the top-level height contract: #root establishes the dynamic
+ * viewport height once and each route claims it with `flex-1`. The failure
+ * it guards against is silent — a route that asks for `min-height: 100%`
+ * against a parent with no definite height simply collapses to its content
+ * and rides at the top of the screen, with no overflow, no error and no
+ * visual clue beyond "the card is not where it used to be".
+ *
+ * `expectsCentring` says whether the page was written to centre its content;
+ * the check only applies while that content is short enough for centring to
+ * mean anything, since a card taller than the screen can only start at the
+ * top and scroll.
+ */
+export async function assertShellFillsViewport(
+  page: Page,
+  label: string,
+  opts: { expectsCentring?: boolean } = {}
+): Promise<void> {
+  const size = page.viewportSize();
+  if (!size) throw new Error('This spec requires a fixed viewport; none is configured.');
+
+  const measured = await page.evaluate(() => {
+    const shell = document.querySelector('#root > *');
+    if (!shell) return null;
+    const card = shell.firstElementChild;
+    const shellRect = shell.getBoundingClientRect();
+    const cardRect = card ? card.getBoundingClientRect() : null;
+    return {
+      shellHeight: shellRect.height,
+      card: cardRect ? { top: cardRect.top, height: cardRect.height } : null,
+    };
+  });
+
+  expect(measured, `${label}: no routed element under #root at all`).not.toBeNull();
+  const { shellHeight, card } = measured!;
+
+  expect(
+    Math.round(shellHeight),
+    `${label}: the routed page is ${Math.round(shellHeight)}px tall in a ${size.height}px viewport — ` +
+      `it is not filling the screen, so its background stops short and anything it centres sits high`
+  ).toBeGreaterThanOrEqual(size.height - 1);
+
+  if (!opts.expectsCentring || card === null) return;
+
+  // Centring is only meaningful while the content fits; past that the page
+  // legitimately starts at the top and scrolls.
+  if (card.height > size.height) return;
+
+  const cardCentre = card.top + card.height / 2;
+  const viewportCentre = size.height / 2;
+  expect(
+    Math.abs(cardCentre - viewportCentre),
+    `${label}: the centred content sits at y=${Math.round(cardCentre)} in a ${size.height}px viewport ` +
+      `(centre ${Math.round(viewportCentre)}) — the page is no longer centring it vertically`
+  ).toBeLessThanOrEqual(2);
+}
+
+/**
+ * The safe-area contract, as stated in `apps/web/src/styles/index.css`.
+ *
+ * `viewport-fit=cover` lets the page paint into the display cutout, which is
+ * a promise the CSS has to keep. Before this contract a `pb-safe` class name
+ * existed with no rule behind it: it read like safe-area handling and did
+ * nothing at all.
+ *
+ * Three things are asserted, because each of the three ways of getting it
+ * wrong is invisible in a browser with no cutout:
+ *
+ *  - an inset rule exists *and reaches an element* — a rule matching nothing
+ *    protects nothing;
+ *  - it reaches exactly `#root` — a second inset on a descendant is counted
+ *    twice, pushing content further in on every device that has a notch;
+ *  - every `position: sticky` element takes its `top` from a rule that
+ *    consults the inset. A sticky element offsets from the scrollport, not
+ *    from `#root`, so at `top: 0` it slides under the status bar as soon as
+ *    the page scrolls. With no cutout here both spellings compute to `0px`,
+ *    so the computed value cannot tell them apart — the matching rule can.
+ */
+export async function assertSafeAreaContract(page: Page, label: string): Promise<void> {
+  const insets = await page.evaluate(() => {
+    const paddingRules: Array<{ selector: string; matches: string[] }> = [];
+    const offsetRules: string[] = [];
+
+    function describe(el: Element): string {
+      return el.id ? `#${el.id}` : el.tagName.toLowerCase();
+    }
+
+    // Tailwind emits inside `@layer` blocks, and modern Chrome exposes
+    // `cssRules` on plain style rules too (nested CSS), so every rule is
+    // both visited and descended into.
+    function walk(rules: CSSRuleList) {
+      for (const rule of Array.from(rules)) {
+        const styleRule = rule as CSSStyleRule;
+        const selector = styleRule.selectorText;
+        if (selector && styleRule.style) {
+          const declaration = styleRule.style.cssText;
+          if (declaration.includes('safe-area-inset')) {
+            if (/padding/.test(declaration)) {
+              paddingRules.push({
+                selector,
+                matches: Array.from(document.querySelectorAll(selector)).map(describe),
+              });
+            }
+            if (/(^|[^-])top:/.test(declaration)) offsetRules.push(selector);
+          }
+        }
+        const nested = (rule as CSSGroupingRule).cssRules;
+        if (nested && nested.length > 0) walk(nested);
+      }
+    }
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        walk(sheet.cssRules);
+      } catch {
+        continue; // not one of ours
+      }
+    }
+
+    const stickyElements = Array.from(document.querySelectorAll('*'))
+      .filter((el) => getComputedStyle(el).position === 'sticky')
+      .map((el) => ({
+        tag: describe(el),
+        safeOffset: offsetRules.some((selector) => el.matches(selector)),
+      }));
+
+    return { paddingRules, stickyElements };
+  });
+
+  const insetElements = insets.paddingRules.flatMap((rule) => rule.matches);
+
+  expect(
+    insetElements.length,
+    `${label}: no rule referencing env(safe-area-inset-*) matches anything on this screen — the app declares viewport-fit=cover and then insets nothing`
+  ).toBeGreaterThan(0);
+
+  expect(
+    insetElements,
+    `${label}: the device insets reach more than #root (${JSON.stringify(insets.paddingRules)}); a second inset on a descendant is counted twice`
+  ).toEqual(['#root']);
+
+  expect(
+    insets.stickyElements.filter((el) => !el.safeOffset),
+    `${label}: sticky element(s) offset from the scrollport without clearing the status bar: ${JSON.stringify(insets.stickyElements)}`
+  ).toEqual([]);
 }

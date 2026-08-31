@@ -174,7 +174,7 @@ export const EventWizard: React.FC = () => {
     checkpointDrafts.every((cp) => cp.name.trim().length > 0 && cp.labelAToB.trim().length > 0 && cp.labelBToA.trim().length > 0 && (cp.allowAToB || cp.allowBToA));
 
   return (
-    <div className="min-h-full bg-slate-950 text-slate-100 flex flex-col p-4 sm:p-6 items-center justify-center">
+    <div className="flex-1 bg-slate-950 text-slate-100 flex flex-col p-4 sm:p-6 items-center justify-center">
       <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-8 shadow-2xl">
         {/* Step Indicator — the four markers must fit 320px on their own,
             which is why the step names only appear from `sm` up. */}
@@ -218,7 +218,7 @@ export const EventWizard: React.FC = () => {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
               />
             </div>
 
@@ -232,7 +232,7 @@ export const EventWizard: React.FC = () => {
                   min="1"
                   value={capacity}
                   onChange={(e) => setCapacity(parseInt(e.target.value, 10) || 0)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm font-mono focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm font-mono focus:border-indigo-500"
                 />
               </div>
 
@@ -242,7 +242,7 @@ export const EventWizard: React.FC = () => {
                   type="text"
                   value={timezone}
                   onChange={(e) => setTimezone(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base lg:text-sm focus:border-indigo-500"
                 />
               </div>
             </div>
@@ -285,7 +285,7 @@ export const EventWizard: React.FC = () => {
                     placeholder="Nom de la zone"
                     value={s.name}
                     onChange={(e) => updateInternalSpace(s.clientId, { name: e.target.value })}
-                    className="w-full sm:flex-1 min-w-0 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-base md:text-sm text-white"
+                    className="w-full sm:flex-1 min-w-0 min-h-11 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-base lg:text-sm text-white"
                   />
                   <input
                     type="number"
@@ -293,7 +293,7 @@ export const EventWizard: React.FC = () => {
                     placeholder="Capacité"
                     value={s.capacity}
                     onChange={(e) => updateInternalSpace(s.clientId, { capacity: e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0 })}
-                    className="flex-1 sm:flex-none sm:w-28 min-w-0 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-base md:text-sm text-white font-mono"
+                    className="flex-1 sm:flex-none sm:w-28 min-w-0 min-h-11 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-base lg:text-sm text-white font-mono"
                   />
                   <button
                     type="button"
@@ -353,7 +353,7 @@ export const EventWizard: React.FC = () => {
                       aria-label="Nom de la porte"
                       value={cp.name}
                       onChange={(e) => updateCheckpoint(cp.key, { name: e.target.value })}
-                      className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base md:text-sm"
+                      className="flex-1 min-w-0 min-h-11 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base lg:text-sm"
                     />
                     <button
                       type="button"
@@ -376,7 +376,7 @@ export const EventWizard: React.FC = () => {
                         aria-label="Espace A"
                         value={cp.spaceAClientId}
                         onChange={(e) => updateCheckpoint(cp.key, { spaceAClientId: e.target.value })}
-                        className="w-full min-w-0 min-h-11 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base md:text-xs"
+                        className="w-full min-w-0 min-h-11 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base lg:text-xs"
                       >
                         {allSpaceOptions.map((opt) => (
                           <option key={opt.clientId} value={opt.clientId}>
@@ -391,7 +391,7 @@ export const EventWizard: React.FC = () => {
                         aria-label="Espace B"
                         value={cp.spaceBClientId}
                         onChange={(e) => updateCheckpoint(cp.key, { spaceBClientId: e.target.value })}
-                        className="w-full min-w-0 min-h-11 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base md:text-xs"
+                        className="w-full min-w-0 min-h-11 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base lg:text-xs"
                       >
                         {allSpaceOptions.map((opt) => (
                           <option key={opt.clientId} value={opt.clientId}>
@@ -403,38 +403,50 @@ export const EventWizard: React.FC = () => {
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        className="w-5 h-5 flex-shrink-0"
-                        aria-label="Sens A vers B activé"
-                        checked={cp.allowAToB}
-                        onChange={(e) => updateCheckpoint(cp.key, { allowAToB: e.target.checked })}
-                      />
+                    <div className="flex items-center gap-1">
+                      {/* The box stays 20×20 so it still reads as a
+                          checkbox; the <label> around it is the target a
+                          thumb actually hits, and clicking anywhere in it
+                          toggles the box. */}
+                      <label className="flex-shrink-0 flex items-center justify-center min-w-11 min-h-11 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="w-5 h-5"
+                          aria-label="Sens A vers B activé"
+                          checked={cp.allowAToB}
+                          onChange={(e) => updateCheckpoint(cp.key, { allowAToB: e.target.checked })}
+                        />
+                      </label>
                       <input
                         type="text"
                         aria-label="Libellé A vers B"
                         value={cp.labelAToB}
                         onChange={(e) => updateCheckpoint(cp.key, { labelAToB: e.target.value })}
                         placeholder={`${spaceName(cp.spaceAClientId)} → ${spaceName(cp.spaceBClientId)}`}
-                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-base md:text-xs"
+                        className="flex-1 min-w-0 min-h-11 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-base lg:text-xs"
                       />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        className="w-5 h-5 flex-shrink-0"
-                        aria-label="Sens B vers A activé"
-                        checked={cp.allowBToA}
-                        onChange={(e) => updateCheckpoint(cp.key, { allowBToA: e.target.checked })}
-                      />
+                    <div className="flex items-center gap-1">
+                      {/* The box stays 20×20 so it still reads as a
+                          checkbox; the <label> around it is the target a
+                          thumb actually hits, and clicking anywhere in it
+                          toggles the box. */}
+                      <label className="flex-shrink-0 flex items-center justify-center min-w-11 min-h-11 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="w-5 h-5"
+                          aria-label="Sens B vers A activé"
+                          checked={cp.allowBToA}
+                          onChange={(e) => updateCheckpoint(cp.key, { allowBToA: e.target.checked })}
+                        />
+                      </label>
                       <input
                         type="text"
                         aria-label="Libellé B vers A"
                         value={cp.labelBToA}
                         onChange={(e) => updateCheckpoint(cp.key, { labelBToA: e.target.value })}
                         placeholder={`${spaceName(cp.spaceBClientId)} → ${spaceName(cp.spaceAClientId)}`}
-                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-base md:text-xs"
+                        className="flex-1 min-w-0 min-h-11 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-base lg:text-xs"
                       />
                     </div>
                   </div>
