@@ -290,9 +290,15 @@ function runAtomicInsert(
   eventInput: CreateEventDraftRequest['event'],
   actorUserId: string
 ): CreateEventDraftResult {
-  sqlite.exec('BEGIN IMMEDIATE;');
+  // Tracks whether a transaction is actually open, so the catch block below
+  // only ever attempts a ROLLBACK when there is one — never in response to
+  // BEGIN itself failing, and never again once COMMIT has already closed it.
+  let transactionStarted = false;
 
   try {
+    sqlite.exec('BEGIN IMMEDIATE;');
+    transactionStarted = true;
+
     const now = Date.now();
     const eventId = crypto.randomUUID();
     const { timezone, capacity, warningRatio1, warningRatio2, startsAtMs, endsAtMs } = eventInput;
@@ -405,6 +411,7 @@ function runAtomicInsert(
     }
 
     sqlite.exec('COMMIT;');
+    transactionStarted = false;
 
     const createdEvent: EventModel = {
       id: eventId,
@@ -432,15 +439,25 @@ function runAtomicInsert(
   } catch (err) {
     // A ROLLBACK failure must never mask the original error that triggered
     // it — caught separately so the real cause below is always the one
-    // that actually broke the insert, not a secondary rollback failure.
+    // that actually broke the insert, not a secondary rollback failure. It
+    // is also only ever attempted when a transaction is actually open:
+    // never in response to BEGIN itself failing (there is nothing to roll
+    // back), and never after a successful COMMIT (already closed).
     let rollbackError: unknown = null;
-    try {
-      sqlite.exec('ROLLBACK;');
-    } catch (errDuringRollback) {
-      rollbackError = errDuringRollback;
+    if (transactionStarted) {
+      try {
+        sqlite.exec('ROLLBACK;');
+      } catch (errDuringRollback) {
+        rollbackError = errDuringRollback;
+      }
     }
 
-    if (err instanceof TopologyValidationFailure) {
+    // A business-rule rejection is only safe to report as a normal 400 if
+    // the rollback that was supposed to undo everything actually
+    // succeeded. If it didn't, atomicity is no longer guaranteed — this is
+    // now a server-side integrity problem, not a validation error, and
+    // must surface (and be logged) as one.
+    if (err instanceof TopologyValidationFailure && !rollbackError) {
       return { ok: false, status: 400, code: err.code, detail: err.detail };
     }
 

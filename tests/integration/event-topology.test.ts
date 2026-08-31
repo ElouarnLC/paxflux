@@ -273,6 +273,87 @@ describe('POST /api/v1/events/drafts — atomic event + topology creation', () =
     expect(allCheckpoints).toHaveLength(0);
   });
 
+  it('a BEGIN failure (e.g. a transaction already open on the connection) never leaks a raw SQLite error to the client', async () => {
+    // Force BEGIN IMMEDIATE to fail by already having one open on the same
+    // shared connection — node:sqlite rejects a nested BEGIN. This is the
+    // one place in the whole call where `transactionStarted` must stay
+    // `false`, so the catch block below never attempts its own ROLLBACK
+    // (there is nothing this call opened to undo).
+    sqlite.exec('BEGIN IMMEDIATE;');
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/events/drafts',
+        headers: authHeaders(),
+        payload: referenceScenarioPayload('Repro BEGIN Failure'),
+      });
+
+      expect(res.statusCode).toBe(500);
+      const body = res.json();
+      expect(body.code).toBe('INTERNAL_ERROR');
+      expect(body.detail).not.toMatch(/sqlite|sql|BEGIN|transaction within a transaction/i);
+
+      const orphanEvent = await db.select().from(events).where(eq(events.name, 'Repro BEGIN Failure')).get();
+      expect(orphanEvent).toBeUndefined();
+    } finally {
+      sqlite.exec('ROLLBACK;');
+    }
+  });
+
+  it('a business rejection whose ROLLBACK itself fails surfaces as 500, never as a false-positive 400', async () => {
+    // Same "invalid third checkpoint" scenario as the rollback test above,
+    // but this time the ROLLBACK call itself is made to fail once — the
+    // point being that atomicity is no longer guaranteed in that case, so
+    // this must never come back as a normal 400 validation response.
+    const originalExec = sqlite.exec.bind(sqlite);
+    let rollbackAttempts = 0;
+    (sqlite as any).exec = (sql: string) => {
+      if (sql.trim() === 'ROLLBACK;' && rollbackAttempts === 0) {
+        rollbackAttempts += 1;
+        throw new Error('Simulated ROLLBACK failure');
+      }
+      return originalExec(sql);
+    };
+
+    try {
+      const payload = referenceScenarioPayload('Repro Rollback Failure');
+      payload.checkpoints = [
+        payload.checkpoints[0],
+        payload.checkpoints[1],
+        {
+          name: 'Porte Invalide',
+          spaceAClientId: 'site',
+          spaceBClientId: 'site',
+          allowAToB: true,
+          allowBToA: true,
+          labelAToB: 'X',
+          labelBToA: 'Y',
+        },
+      ];
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/events/drafts',
+        headers: authHeaders(),
+        payload,
+      });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json().code).toBe('INTERNAL_ERROR');
+      expect(rollbackAttempts).toBe(1);
+    } finally {
+      sqlite.exec = originalExec;
+      // The simulated failure meant the real ROLLBACK never ran, so the
+      // connection may still have this transaction open — close it out so
+      // it doesn't bleed into afterEach's sqlite.close().
+      try {
+        sqlite.exec('ROLLBACK;');
+      } catch {
+        // Already clean — nothing was left open.
+      }
+    }
+  });
+
   it('rejects the request for a non-admin (supervisor) session (403)', async () => {
     // Supervisors cannot create events per existing POST /api/v1/events rules.
     const supervisorUserId = crypto.randomUUID();
