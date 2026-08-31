@@ -88,7 +88,7 @@ export async function buildApp(options: AppOptions) {
   await registerAuthRoutes(app, db, env);
   await registerEventRoutes(app, sqlite, db, env);
   await registerTopologyRoutes(app, sqlite, db, env);
-  await registerDeviceRoutes(app, db, env);
+  await registerDeviceRoutes(app, sqlite, db, env);
   await registerCountingRoutes(app, sqlite, db, env);
   await registerSSERoutes(app, db, env);
   await registerExportRoutes(app, db, env);

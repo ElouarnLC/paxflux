@@ -1,11 +1,9 @@
 import { AppDb } from '../db/index.js';
 import { events, spaces, spaceState, deviceSessions, checkpoints } from '../db/schema.js';
 import { eq, and, isNull } from 'drizzle-orm';
-import { EventStatus, SpaceModel, CheckpointModel, CompactEventState } from '@paxflux/shared';
+import { EventStatus, SpaceModel, CheckpointModel, CompactEventState, DEVICE_OFFLINE_THRESHOLD_MS } from '@paxflux/shared';
 import { validateCheckpointRules } from './checkpoints.js';
 import { calculateAggregateOccupancy } from './spaces.js';
-
-const DEVICE_ONLINE_THRESHOLD_MS = 45_000;
 
 export interface UnsyncedDevice {
   deviceId: string;
@@ -34,7 +32,7 @@ export async function getUnsyncedActiveDevices(db: AppDb, eventId: string): Prom
       deviceId: device.id,
       checkpointName: checkpoint.name,
       label: device.label,
-      isOnline: device.lastSeenAtMs !== null && now - device.lastSeenAtMs <= DEVICE_ONLINE_THRESHOLD_MS,
+      isOnline: device.lastSeenAtMs !== null && now - device.lastSeenAtMs <= DEVICE_OFFLINE_THRESHOLD_MS,
       pendingCount: device.lastPendingCount,
     }))
     .filter((d) => !d.isOnline || d.pendingCount > 0);

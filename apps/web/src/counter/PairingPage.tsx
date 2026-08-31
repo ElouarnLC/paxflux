@@ -3,7 +3,20 @@ import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { localDb } from '../offline/db.js';
 import { Loader2, AlertCircle, CheckCircle, Smartphone } from 'lucide-react';
-import { DeviceBootstrapResponse } from '@paxflux/shared';
+import { DeviceBootstrapResponse, DeviceSessionModel, ProblemDetails } from '@paxflux/shared';
+import { CLIENT_APP_VERSION } from '../version.js';
+
+interface PairDeviceResponse {
+  success: boolean;
+  deviceSession: Pick<DeviceSessionModel, 'id' | 'label'>;
+}
+
+function errorDetail(err: unknown, fallback: string): string {
+  if (typeof err === 'object' && err !== null && 'detail' in err) {
+    return String((err as ProblemDetails).detail);
+  }
+  return fallback;
+}
 
 export const PairingPage: React.FC = () => {
   const navigate = useNavigate();
@@ -29,13 +42,17 @@ export const PairingPage: React.FC = () => {
 
       try {
         // Exchange fragment token for device session cookie
-        const res = await apiFetch<{ success: boolean; deviceSession: any }>('/api/v1/device/pair', {
+        const res = await apiFetch<PairDeviceResponse>('/api/v1/device/pair', {
           method: 'POST',
-          body: JSON.stringify({ token: rawToken, appVersion: '1.0.0' }),
+          body: JSON.stringify({ token: rawToken, appVersion: CLIENT_APP_VERSION }),
         });
 
         if (res.success) {
-          // Fetch bootstrap config to pre-fill cache
+          // Pre-fill the offline cache so the counter opens instantly. This
+          // is an optimisation, not part of pairing: /counter fetches its
+          // own bootstrap anyway, so a failure here must not turn a
+          // successful pairing into an error screen — it is logged and the
+          // flow continues.
           try {
             const bootstrap = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
             await localDb.device_cache.put({
@@ -44,8 +61,8 @@ export const PairingPage: React.FC = () => {
               lastState: bootstrap.state,
               updatedAtMs: Date.now(),
             });
-          } catch {
-            // ignore
+          } catch (err) {
+            console.debug('Bootstrap cache pre-fill failed; the counter will fetch it itself:', err);
           }
 
           setStatus('success');
@@ -53,9 +70,11 @@ export const PairingPage: React.FC = () => {
             navigate('/counter', { replace: true });
           }, 800);
         }
-      } catch (err: any) {
+      } catch (err) {
         setStatus('error');
-        setErrorMessage(err.detail || 'Impossible d’appairer cet appareil. Le QR code a peut-être expiré ou été utilisé.');
+        setErrorMessage(
+          errorDetail(err, 'Impossible d’appairer cet appareil. Le QR code a peut-être expiré ou été utilisé.')
+        );
       }
     }
 

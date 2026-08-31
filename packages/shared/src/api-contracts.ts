@@ -148,7 +148,16 @@ export interface CreateDeviceInviteResponse {
   id: string;
   checkpointId: string;
   token: string; // Plaintext token returned once for QR generation
+  /**
+   * The canonical pairing URL, built server-side from PUBLIC_BASE_URL when
+   * set and from the request origin otherwise. Clients must encode and
+   * display this value as-is — rebuilding it from `window.location` yields
+   * a QR that only works from wherever the admin happens to be browsing.
+   */
   pairUrl: string;
+  pairUrlSource: 'public_base_url' | 'request_origin';
+  /** True when pairUrl resolves to a loopback address a phone cannot reach. */
+  unreachableFromPhone: boolean;
   expiresAtMs: number;
 }
 
@@ -185,7 +194,11 @@ export interface DeviceBootstrapResponse {
 }
 
 export const DeviceHeartbeatRequestSchema = z.object({
-  pendingCount: z.number().int().nonnegative().default(0),
+  // Required, with no default: a heartbeat exists to report what this
+  // device still holds. Defaulting a missing value to 0 would let an empty
+  // or malformed body silently overwrite `lastPendingCount` and tell the
+  // supervisor a device is fully synced when it may not be.
+  pendingCount: z.number().int().nonnegative(),
   lastClientSequence: z.number().int().nonnegative().optional(),
   appVersion: z.string().max(50).optional(),
 });
@@ -204,6 +217,22 @@ export interface PreflightResponse {
   error: { code: string; message: string } | null;
 }
 
+/**
+ * One active device as the supervision surfaces see it. `isOnline` is
+ * computed server-side against DEVICE_ONLINE_THRESHOLD_MS so every client
+ * shows the same verdict rather than its own approximation.
+ */
+export interface EventDeviceSummary {
+  id: string;
+  checkpointId: string;
+  checkpointName: string;
+  label: string;
+  isOnline: boolean;
+  lastSeenAtMs: number | null;
+  lastPendingCount: number;
+  appVersion: string | null;
+}
+
 export interface EventDetailResponse {
   event: EventModel;
   spaces: SpaceModel[];
@@ -212,16 +241,7 @@ export interface EventDetailResponse {
     global: number;
     spaces: Record<string, number>;
   };
-  devices: Array<{
-    id: string;
-    checkpointId: string;
-    checkpointName: string;
-    label: string;
-    isOnline: boolean;
-    lastSeenAtMs: number | null;
-    lastPendingCount: number;
-    appVersion: string | null;
-  }>;
+  devices: EventDeviceSummary[];
   syncQuality: SyncQuality;
 }
 
