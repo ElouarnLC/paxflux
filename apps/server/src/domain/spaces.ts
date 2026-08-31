@@ -47,10 +47,16 @@ export function validateSpaceRules(
     }
   }
 
-  // Aggregate spaces cannot be children of leaf spaces
+  // A parent must exist among this event's own spaces — `existingSpaces` is
+  // always scoped to one event by its caller, so this also rejects a
+  // parentId that belongs to a different event, not just an unknown UUID.
   if (space.parentId) {
     const parent = existingSpaces.find((s) => s.id === space.parentId);
-    if (parent && parent.kind === 'leaf') {
+    if (!parent) {
+      return { code: 'PARENT_NOT_FOUND', message: `Parent space (${space.parentId}) was not found in this event.` };
+    }
+    // Aggregate spaces cannot be children of leaf spaces
+    if (parent.kind === 'leaf') {
       return { code: 'INVALID_PARENT_KIND', message: 'A leaf space cannot be a parent of another space.' };
     }
   }

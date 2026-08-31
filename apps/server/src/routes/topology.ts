@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyReply } from 'fastify';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import type { ZodIssue } from 'zod';
 import { AppDb } from '../db/index.js';
 import { Env } from '../config/env.js';
 import { events, spaces, checkpoints, spaceState } from '../db/schema.js';
@@ -40,7 +41,7 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
             'Paramètres invalides',
             'Payload de topologie invalide.',
             undefined,
-            parseResult.error.errors.map((e: any) => ({
+            parseResult.error.errors.map((e: ZodIssue) => ({
               name: e.path.join('.'),
               reason: e.message,
             }))
@@ -48,10 +49,13 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
         );
     }
 
-    const result = await createEventDraftAtomic(sqlite, db, parseResult.data, sessionData.user.id);
+    const result = await createEventDraftAtomic(sqlite, parseResult.data, sessionData.user.id);
     if (!result.ok) {
       if (result.status === 500) {
-        app.log.error({ detail: result.detail }, 'Atomic event-draft creation failed unexpectedly');
+        app.log.error(
+          { err: result.cause, rollbackErr: result.rollbackError },
+          'Atomic event-draft creation failed unexpectedly'
+        );
       }
       return reply
         .status(result.status)

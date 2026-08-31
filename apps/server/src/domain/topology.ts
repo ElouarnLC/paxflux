@@ -1,8 +1,5 @@
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { AppDb } from '../db/index.js';
-import { events, spaces, spaceState, checkpoints } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
 import { CreateEventDraftRequest, EventModel, SpaceModel, CheckpointModel, ErrorCode } from '@paxflux/shared';
 import { validateSpaceRules } from './spaces.js';
 import { validateCheckpointRules } from './checkpoints.js';
@@ -126,7 +123,8 @@ export function resolveDraftTopologyReferences(payload: CreateEventDraftRequest)
 
 export type CreateEventDraftResult =
   | { ok: true; event: EventModel; spaces: SpaceModel[]; checkpoints: CheckpointModel[] }
-  | ({ ok: false; status: 400 | 500 } & TopologyRejection);
+  | { ok: false; status: 400; code: ErrorCode; detail: string }
+  | { ok: false; status: 500; code: ErrorCode; detail: string; cause: unknown; rollbackError: unknown };
 
 class TopologyValidationFailure extends Error {
   constructor(public code: ErrorCode, public detail: string) {
@@ -134,40 +132,176 @@ class TopologyValidationFailure extends Error {
   }
 }
 
+interface EventRowValues {
+  id: string;
+  name: string;
+  slug: string;
+  timezone: string;
+  capacity: number;
+  status: string;
+  warningRatio1: number;
+  warningRatio2: number;
+  startsAtMs: number | null;
+  endsAtMs: number | null;
+  version: number;
+  createdBy: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+interface SpaceRowValues {
+  id: string;
+  eventId: string;
+  parentId: string | null;
+  name: string;
+  kind: string;
+  capacity: number | null;
+  sortOrder: number;
+  isActive: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+interface SpaceStateRowValues {
+  eventId: string;
+  spaceId: string;
+  occupancy: number;
+  updatedAtMs: number;
+}
+
+interface CheckpointRowValues {
+  id: string;
+  eventId: string;
+  name: string;
+  spaceAId: string;
+  spaceBId: string;
+  allowAToB: boolean;
+  allowBToA: boolean;
+  labelAToB: string;
+  labelBToA: string;
+  sortOrder: number;
+  isActive: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+// Raw, synchronous inserts (node:sqlite's StatementSync.run is synchronous)
+// — deliberately bypassing the drizzle `db` wrapper here, which always
+// returns a Promise (even though it resolves synchronously under the hood)
+// and would otherwise force an `await` inside the open transaction below.
+
+function insertEventRow(sqlite: DatabaseSync, v: EventRowValues): void {
+  sqlite
+    .prepare(
+      `INSERT INTO events (
+        id, name, slug, timezone, capacity, status,
+        warning_ratio_1, warning_ratio_2, starts_at_ms, ends_at_ms,
+        version, created_by, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      v.id,
+      v.name,
+      v.slug,
+      v.timezone,
+      v.capacity,
+      v.status,
+      v.warningRatio1,
+      v.warningRatio2,
+      v.startsAtMs,
+      v.endsAtMs,
+      v.version,
+      v.createdBy,
+      v.createdAtMs,
+      v.updatedAtMs
+    );
+}
+
+function insertSpaceRow(sqlite: DatabaseSync, v: SpaceRowValues): void {
+  sqlite
+    .prepare(
+      `INSERT INTO spaces (
+        id, event_id, parent_id, name, kind, capacity, sort_order, is_active,
+        created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      v.id,
+      v.eventId,
+      v.parentId,
+      v.name,
+      v.kind,
+      v.capacity,
+      v.sortOrder,
+      v.isActive ? 1 : 0,
+      v.createdAtMs,
+      v.updatedAtMs
+    );
+}
+
+function insertSpaceStateRow(sqlite: DatabaseSync, v: SpaceStateRowValues): void {
+  sqlite
+    .prepare(`INSERT INTO space_state (event_id, space_id, occupancy, updated_at_ms) VALUES (?, ?, ?, ?)`)
+    .run(v.eventId, v.spaceId, v.occupancy, v.updatedAtMs);
+}
+
+function insertCheckpointRow(sqlite: DatabaseSync, v: CheckpointRowValues): void {
+  sqlite
+    .prepare(
+      `INSERT INTO checkpoints (
+        id, event_id, name, space_a_id, space_b_id, allow_a_to_b, allow_b_to_a,
+        label_a_to_b, label_b_to_a, sort_order, is_active, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      v.id,
+      v.eventId,
+      v.name,
+      v.spaceAId,
+      v.spaceBId,
+      v.allowAToB ? 1 : 0,
+      v.allowBToA ? 1 : 0,
+      v.labelAToB,
+      v.labelBToA,
+      v.sortOrder,
+      v.isActive ? 1 : 0,
+      v.createdAtMs,
+      v.updatedAtMs
+    );
+}
+
 /**
- * Creates a draft event and its full topology (spaces + checkpoints) as a
- * single SQLite transaction on the same connection: either everything
- * commits, or nothing does. Space- and checkpoint-level business rules are
- * checked one item at a time, immediately before each insert — reusing the
- * exact same validators (`validateSpaceRules`, `validateCheckpointRules`)
- * the individual POST /spaces and /checkpoints endpoints already use — so
- * an invalid item later in either list genuinely rolls back everything
- * already inserted before it (the event, and any earlier spaces/
- * checkpoints), rather than relying on a compensating cleanup step.
+ * Everything from `BEGIN IMMEDIATE` to `COMMIT`/`ROLLBACK` in here is
+ * strictly synchronous — no `await`, no Promise, anywhere in this call
+ * stack. A SQLite transaction belongs to the *connection*, not to a call
+ * stack or a request, and every route in this server shares the same
+ * `DatabaseSync` connection. If this function yielded to the event loop
+ * (via an `await`) while its transaction was open, another request's own
+ * SQL could execute against — and silently join — this uncommitted
+ * transaction, and would then be rolled back with it on failure even
+ * though it has nothing to do with this draft. Keeping the whole section
+ * one synchronous call stack makes that structurally impossible: Node
+ * never switches to another callback in the middle of it.
  */
-export async function createEventDraftAtomic(
+function runAtomicInsert(
   sqlite: DatabaseSync,
-  db: AppDb,
-  payload: CreateEventDraftRequest,
+  resolvedSpaces: ResolvedSpace[],
+  resolvedCheckpoints: ResolvedCheckpoint[],
+  eventInput: CreateEventDraftRequest['event'],
   actorUserId: string
-): Promise<CreateEventDraftResult> {
-  const resolved = resolveDraftTopologyReferences(payload);
-  if (!resolved.ok) {
-    return { ok: false, status: 400, code: resolved.code, detail: resolved.detail };
-  }
-
-  const { spaces: resolvedSpaces, checkpoints: resolvedCheckpoints } = resolved;
-
+): CreateEventDraftResult {
   sqlite.exec('BEGIN IMMEDIATE;');
+
   try {
     const now = Date.now();
     const eventId = crypto.randomUUID();
-    const { name, timezone, capacity, warningRatio1, warningRatio2, startsAtMs, endsAtMs } = payload.event;
-    const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}-${Date.now().toString(36)}`;
+    const { timezone, capacity, warningRatio1, warningRatio2, startsAtMs, endsAtMs } = eventInput;
+    const trimmedName = eventInput.name.trim();
+    const slug = `${trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}-${now.toString(36)}`;
 
-    await db.insert(events).values({
+    insertEventRow(sqlite, {
       id: eventId,
-      name: name.trim(),
+      name: trimmedName,
       slug,
       timezone,
       capacity,
@@ -193,7 +327,7 @@ export async function createEventDraftAtomic(
         throw new TopologyValidationFailure('INVALID_TOPOLOGY', `Espace "${space.name}" : ${ruleError.message}`);
       }
 
-      await db.insert(spaces).values({
+      insertSpaceRow(sqlite, {
         id: space.id,
         eventId,
         parentId: space.parentId,
@@ -207,12 +341,7 @@ export async function createEventDraftAtomic(
       });
 
       if (space.kind === 'leaf') {
-        await db.insert(spaceState).values({
-          eventId,
-          spaceId: space.id,
-          occupancy: 0,
-          updatedAtMs: now,
-        });
+        insertSpaceStateRow(sqlite, { eventId, spaceId: space.id, occupancy: 0, updatedAtMs: now });
       }
 
       insertedSpaces.push({
@@ -242,7 +371,7 @@ export async function createEventDraftAtomic(
       }
 
       const cpId = crypto.randomUUID();
-      await db.insert(checkpoints).values({
+      insertCheckpointRow(sqlite, {
         id: cpId,
         eventId,
         name: cp.name,
@@ -275,16 +404,81 @@ export async function createEventDraftAtomic(
       });
     }
 
-    const createdEvent = await db.select().from(events).where(eq(events.id, eventId)).get();
     sqlite.exec('COMMIT;');
 
-    return { ok: true, event: createdEvent as EventModel, spaces: insertedSpaces, checkpoints: insertedCheckpoints };
+    const createdEvent: EventModel = {
+      id: eventId,
+      name: trimmedName,
+      slug,
+      timezone,
+      capacity,
+      status: 'draft',
+      warningRatio1,
+      warningRatio2,
+      startsAtMs: startsAtMs ?? null,
+      endsAtMs: endsAtMs ?? null,
+      liveStartedAtMs: null,
+      closingStartedAtMs: null,
+      closedAtMs: null,
+      archivedAtMs: null,
+      version: 1,
+      topologyLockedAtMs: null,
+      createdBy: actorUserId,
+      createdAtMs: now,
+      updatedAtMs: now,
+    };
+
+    return { ok: true, event: createdEvent, spaces: insertedSpaces, checkpoints: insertedCheckpoints };
   } catch (err) {
-    sqlite.exec('ROLLBACK;');
+    // A ROLLBACK failure must never mask the original error that triggered
+    // it — caught separately so the real cause below is always the one
+    // that actually broke the insert, not a secondary rollback failure.
+    let rollbackError: unknown = null;
+    try {
+      sqlite.exec('ROLLBACK;');
+    } catch (errDuringRollback) {
+      rollbackError = errDuringRollback;
+    }
+
     if (err instanceof TopologyValidationFailure) {
       return { ok: false, status: 400, code: err.code, detail: err.detail };
     }
-    // Never leak raw SQL/driver details to the client.
-    return { ok: false, status: 500, code: 'INTERNAL_ERROR', detail: 'Une erreur interne est survenue lors de la création de la topologie.' };
+
+    // Never leak raw SQL/driver details to the client; the real cause (and
+    // any rollback failure) is returned only for the route to log
+    // server-side.
+    return {
+      ok: false,
+      status: 500,
+      code: 'INTERNAL_ERROR',
+      detail: 'Une erreur interne est survenue lors de la création de la topologie.',
+      cause: err,
+      rollbackError,
+    };
   }
+}
+
+/**
+ * Creates a draft event and its full topology (spaces + checkpoints) as a
+ * single SQLite transaction on the same connection: either everything
+ * commits, or nothing does. Space- and checkpoint-level business rules are
+ * checked one item at a time, immediately before each insert — reusing the
+ * exact same validators (`validateSpaceRules`, `validateCheckpointRules`)
+ * the individual POST /spaces and /checkpoints endpoints already use — so
+ * an invalid item later in either list genuinely rolls back everything
+ * already inserted before it (the event, and any earlier spaces/
+ * checkpoints), rather than relying on a compensating cleanup step. See
+ * `runAtomicInsert` for why that whole section is synchronous.
+ */
+export async function createEventDraftAtomic(
+  sqlite: DatabaseSync,
+  payload: CreateEventDraftRequest,
+  actorUserId: string
+): Promise<CreateEventDraftResult> {
+  const resolved = resolveDraftTopologyReferences(payload);
+  if (!resolved.ok) {
+    return { ok: false, status: 400, code: resolved.code, detail: resolved.detail };
+  }
+
+  return runAtomicInsert(sqlite, resolved.spaces, resolved.checkpoints, payload.event, actorUserId);
 }
