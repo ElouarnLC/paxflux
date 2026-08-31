@@ -1,7 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 export interface MigrationOptions {
   migrationsFolder?: string;

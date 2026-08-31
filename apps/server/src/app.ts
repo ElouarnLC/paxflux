@@ -1,4 +1,4 @@
-import fastify, { FastifyInstance } from 'fastify';
+import fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet from '@fastify/helmet';
 import fastifyRateLimit from '@fastify/rate-limit';

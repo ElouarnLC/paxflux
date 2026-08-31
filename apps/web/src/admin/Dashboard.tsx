@@ -98,6 +98,10 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  // refreshDetails is re-created on every render, so listing it as a dependency would re-run the
+  // effect after each fetch and loop. The real fix is to memoise it with useCallback, which is a
+  // behavioural refactor of the dashboard and out of Phase 9's scope; tracked as a known follow-up.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: adding refreshDetails would loop; see above
   useEffect(() => {
     if (selectedEventId) {
       refreshDetails();

@@ -3,11 +3,10 @@ import { createDatabase } from '../../apps/server/src/db/index.js';
 import { runMigrations } from '../../apps/server/src/db/migrator.js';
 import { createDatabaseBackup, restoreDatabaseFromFile } from '../../apps/server/src/backups/backup-service.js';
 import { parseEnv } from '../../apps/server/src/config/env.js';
-import { staffUsers, staffSessions, deviceSessions, events, checkpoints, spaceState, spaces } from '../../apps/server/src/db/schema.js';
+import { staffUsers, staffSessions } from '../../apps/server/src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 describe('Backup & Restore Operations', () => {
   const scratchDir = path.resolve(process.cwd(), 'tests/scratch-backup-test');

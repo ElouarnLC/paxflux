@@ -1,6 +1,6 @@
 import { AppDb } from '../db/index.js';
 import { events, spaces, spaceState, checkpoints, movements } from '../db/schema.js';
-import { eq, asc, and, gte } from 'drizzle-orm';
+import { eq, asc } from 'drizzle-orm';
 import { AnalyticsResponse } from '@paxflux/shared';
 import { calculateAggregateOccupancy } from './spaces.js';
 

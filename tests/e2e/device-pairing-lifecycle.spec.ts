@@ -115,7 +115,7 @@ test("l'admin affiche l'URL d'appairage fournie par le serveur, sans la reconstr
   await page.getByRole('button', { name: /Générer le QR Code/i }).click();
 
   await expect(page.getByText(new RegExp(`${canonicalOrigin}/pair#`))).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText(new RegExp('127\\.0\\.0\\.1.*?/pair#'))).not.toBeVisible();
+  await expect(page.getByText(/127\.0\.0\.1.*?\/pair#/)).not.toBeVisible();
 });
 
 test('un QR déjà utilisé ne peut pas appairer un second appareil', async ({ browser }) => {

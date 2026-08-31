@@ -37,6 +37,9 @@ export const SystemPanel: React.FC = () => {
     }
   };
 
+  // Same as Dashboard: fetchStatus is a new function on every render and this effect is deliberately
+  // mount-only. Memoising it is a behavioural refactor out of Phase 9's scope; known follow-up.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: adding fetchStatus would loop; see above
   useEffect(() => {
     fetchStatus();
   }, []);

@@ -323,7 +323,7 @@ describe('Event lifecycle transitions & preflight', () => {
   describe('POST /close requires every active device to be synced', () => {
     it('rejects with 409 DEVICES_NOT_SYNCED when a device is still offline', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: false, pendingCount: 0 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
 
@@ -335,7 +335,7 @@ describe('Event lifecycle transitions & preflight', () => {
 
     it('rejects with 409 DEVICES_NOT_SYNCED when an online device still has a pending count', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: true, pendingCount: 3 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
 
@@ -545,7 +545,7 @@ describe('Event lifecycle transitions & preflight', () => {
   describe('POST /force-close', () => {
     it('is rejected for a non-admin (supervisor) session (403)', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: false, pendingCount: 5 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
 
@@ -576,7 +576,7 @@ describe('Event lifecycle transitions & preflight', () => {
 
     it('bypasses the device-sync check for an admin with a reason, and writes an audit log entry', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: false, pendingCount: 7 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
 

@@ -1,5 +1,4 @@
-import { sqliteTable, text, integer, real, uniqueIndex, index, primaryKey } from 'drizzle-orm/sqlite-core';
-import { sql } from 'drizzle-orm';
+import { sqliteTable, text, integer, real, index, primaryKey } from 'drizzle-orm/sqlite-core';
 
 // 17.1 instance_settings
 export const instanceSettings = sqliteTable('instance_settings', {

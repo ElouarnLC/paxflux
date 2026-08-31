@@ -3,8 +3,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { AppDb } from '../db/index.js';
-import { backupRecords, events } from '../db/schema.js';
-import { eq, desc, asc } from 'drizzle-orm';
+import { backupRecords } from '../db/schema.js';
+import { eq, desc } from 'drizzle-orm';
 import { Env } from '../config/env.js';
 
 export interface BackupResult {

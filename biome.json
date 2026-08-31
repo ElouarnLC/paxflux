@@ -1,0 +1,53 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.11/schema.json",
+  "vcs": { "enabled": false, "clientKind": "git", "useIgnoreFile": false },
+  "files": {
+    "includes": [
+      "apps/**/*.ts",
+      "apps/**/*.tsx",
+      "packages/**/*.ts",
+      "tests/**/*.ts",
+      "*.ts",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/coverage",
+      "!playwright-report",
+      "!test-results",
+      "!tests/e2e/.data",
+      "!tests/e2e/.backups",
+      "!**/*.d.ts"
+    ]
+  },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "useImportType": "off",
+        "noNonNullAssertion": "off"
+      },
+      "complexity": {
+        "useOptionalChain": "off"
+      },
+      "suspicious": {
+        "noConfusingVoidType": "off",
+        "noExplicitAny": "error"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "tests/**",
+        "apps/server/src/routes/**",
+        "apps/server/src/db/**",
+        "apps/server/src/domain/**",
+        "apps/server/src/auth/**",
+        "apps/web/src/admin/**"
+      ],
+      "linter": { "rules": { "suspicious": { "noExplicitAny": "off" } } }
+    }
+  ]
+}

@@ -2,15 +2,14 @@ import crypto from 'node:crypto';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { AppDb } from '../db/index.js';
 import { staffSessions, staffUsers } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import {
   StaffUser,
   StaffRole,
   COOKIE_NAME_STAFF,
   COOKIE_NAME_STAFF_PROD,
   CSRF_HEADER_NAME,
-  createProblemDetails,
-} from '@paxflux/shared';
+  createProblemDetails } from '@paxflux/shared';
 import { deriveCsrfToken, hashToken, verifyCsrfToken, validateOriginAndFetchMetadata } from './csrf.js';
 import { Env } from '../config/env.js';
 
@@ -61,7 +60,7 @@ export async function createStaffSession(
 
 export async function authenticateStaffRequest(
   req: FastifyRequest,
-  reply: FastifyReply,
+  _reply: FastifyReply,
   db: AppDb,
   env: Env
 ): Promise<StaffSessionData | null> {

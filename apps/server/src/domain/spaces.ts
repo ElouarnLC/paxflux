@@ -1,7 +1,4 @@
-import { AppDb } from '../db/index.js';
-import { spaces, spaceState } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
-import { SpaceModel, SpaceKind } from '@paxflux/shared';
+import { SpaceKind } from '@paxflux/shared';
 
 export interface SpaceValidationError {
   code: string;

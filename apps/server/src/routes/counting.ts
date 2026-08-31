@@ -29,7 +29,6 @@ import {
   MovementResult,
 } from '../domain/movements.js';
 import { getCompactEventState, resolveDrainAcknowledgment } from '../domain/events.js';
-import { calculateAggregateOccupancy } from '../domain/spaces.js';
 import { broadcaster } from '../realtime/broadcaster.js';
 
 /**

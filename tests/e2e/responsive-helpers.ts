@@ -356,7 +356,7 @@ export async function assertFieldsDoNotTriggerIosZoom(page: Page, label: string)
  * outline, or a ring drawn with box-shadow.
  */
 export async function assertVisibleFocusIndicator(
-  page: Page,
+  _page: Page,
   target: Locator,
   label: string
 ): Promise<void> {
@@ -531,7 +531,7 @@ export async function assertSafeAreaContract(page: Page, label: string): Promise
       try {
         walk(sheet.cssRules);
       } catch {
-        continue; // not one of ours
+        // cross-origin stylesheet: not one of ours, nothing to inspect
       }
     }
 
@@ -605,7 +605,7 @@ export async function assertPortalSafeArea(page: Page, label: string): Promise<v
       try {
         walk(sheet.cssRules);
       } catch {
-        continue; // not one of ours
+        // cross-origin stylesheet: not one of ours, nothing to inspect
       }
     }
 
@@ -691,7 +691,7 @@ export async function assertTextContrast(
         return acc;
       }
 
-      const decode = (u: number) => (u <= 0.04045 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4));
+      const decode = (u: number) => (u <= 0.04045 ? u / 12.92 : ((u + 0.055) / 1.055) ** 2.4);
       function relLum([r, g, b]: [number, number, number]) {
         return 0.2126 * decode(r) + 0.7152 * decode(g) + 0.0722 * decode(b);
       }
