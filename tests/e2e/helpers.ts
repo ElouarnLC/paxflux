@@ -221,3 +221,27 @@ export async function getEventCheckpoints(session: AdminSession, eventId: string
 export async function getEventPreflight(session: AdminSession, eventId: string): Promise<any> {
   return adminApi(session, 'GET', `/api/v1/events/${eventId}/preflight`);
 }
+
+/**
+ * Drives a leaf space to an exact occupancy through the supervisor
+ * adjustment endpoint. Used by the offline specs to move the authoritative
+ * state away from the value a device cached at bootstrap time, without
+ * needing a second paired device.
+ */
+export async function adjustSpaceOccupancy(
+  session: AdminSession,
+  eventId: string,
+  spaceId: string,
+  observedCount: number,
+  reason = 'Recalage E2E'
+): Promise<void> {
+  await adminApi(session, 'POST', `/api/v1/events/${eventId}/adjustments`, {
+    spaceId,
+    observedCount,
+    reason,
+  });
+}
+
+export async function closeEvent(session: AdminSession, eventId: string) {
+  return adminApi(session, 'POST', `/api/v1/events/${eventId}/close`);
+}

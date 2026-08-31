@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEVICE_HEARTBEAT_INTERVAL_MS } from '@paxflux/shared';
 import { apiFetch } from '../api/client.js';
-import { getPendingActionsCount } from '../offline/outbox.js';
+import { getUnresolvedActionsCount } from '../offline/outbox.js';
 import { CLIENT_APP_VERSION } from '../version.js';
 
 export type HeartbeatState = 'idle' | 'running' | 'session-invalid';
@@ -41,7 +41,11 @@ export function useDeviceHeartbeat(enabled: boolean): HeartbeatState {
 
     const beat = async () => {
       try {
-        const pendingCount = await getPendingActionsCount();
+        // Unresolved, not retryable: a device still holding a refused or
+        // quarantined count is not drained, and reporting only what the
+        // engine can still send would tell the supervisor otherwise — and
+        // let a normal `/close` through.
+        const pendingCount = await getUnresolvedActionsCount();
         // `lastClientSequence` is intentionally omitted: the local model
         // tracks the next sequence to assign, not the last one the server
         // acknowledged, and reporting the former as the latter would tell

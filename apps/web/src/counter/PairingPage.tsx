@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
-import { localDb } from '../offline/db.js';
+import { persistBootstrap } from '../offline/snapshot.js';
 import { Loader2, AlertCircle, CheckCircle, Smartphone } from 'lucide-react';
 import { DeviceBootstrapResponse, DeviceSessionModel, ProblemDetails } from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
@@ -55,12 +55,10 @@ export const PairingPage: React.FC = () => {
           // flow continues.
           try {
             const bootstrap = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
-            await localDb.device_cache.put({
-              key: 'bootstrap_config',
-              bootstrap,
-              lastState: bootstrap.state,
-              updatedAtMs: Date.now(),
-            });
+            // Through the same funnel as every other authoritative state,
+            // so this new pairing's identity and its state are stored
+            // together and can never describe two different pairings.
+            await persistBootstrap(bootstrap);
           } catch (err) {
             console.debug('Bootstrap cache pre-fill failed; the counter will fetch it itself:', err);
           }

@@ -218,6 +218,7 @@ describe('Counting API & Offline Batch Synchronization', () => {
       headers: { cookie: `paxflux_device_session=${rawDeviceToken}` },
       payload: { actions: [action1] },
     });
+    expect(res1.json().acknowledged[0].status).toBe('applied');
     expect(res1.json().state.eventOccupancy).toBe(1);
 
     // Replay same batch 3 times
@@ -228,7 +229,15 @@ describe('Counting API & Offline Batch Synchronization', () => {
         headers: { cookie: `paxflux_device_session=${rawDeviceToken}` },
         payload: { actions: [action1] },
       });
-      expect(resDup.json().acknowledged[0].status).toBe('applied');
+      // A replay is acknowledged as `duplicate`, not `applied`. Both are
+      // successes and a client deletes the action on either, but the
+      // distinction is what makes ADR-005's lost-acknowledgment path
+      // observable: a device that re-sends after losing a response can see
+      // that the server already had the movement. The invariant this test
+      // exists for is unchanged and asserted below — the effect stays
+      // exactly-once.
+      expect(resDup.json().acknowledged[0].status).toBe('duplicate');
+      expect(resDup.json().acknowledged[0].movementId).toBe(res1.json().acknowledged[0].movementId);
       expect(resDup.json().state.eventOccupancy).toBe(1);
     }
   });
