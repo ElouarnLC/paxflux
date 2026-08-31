@@ -23,7 +23,7 @@ test('un transfert interne hors-ligne ne doit pas modifier la jauge globale proj
   await page.goto(`/pair#${token}`);
   await page.waitForURL('**/counter');
 
-  const occupancyValue = page.locator('span.text-5xl.font-black');
+  const occupancyValue = page.getByTestId('global-occupancy');
   await expect(occupancyValue).toHaveText('0');
 
   await context.setOffline(true);

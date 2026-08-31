@@ -192,7 +192,7 @@ export async function readEventStateRecord(page: Page): Promise<Record<string, u
 
 /** The occupancy figure the counter displays, as a number. */
 export async function displayedOccupancy(page: Page): Promise<number> {
-  const text = await page.locator('span.text-5xl.font-black').innerText();
+  const text = await page.getByTestId('global-occupancy').innerText();
   return Number(text.replace(/[^\d-]/g, ''));
 }
 

@@ -53,7 +53,7 @@ async function pairDevice(browser: Browser, token: string): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`/pair#${token}`);
   await page.waitForURL('**/counter');
-  await expect(page.locator('span.text-5xl.font-black')).toBeVisible();
+  await expect(page.getByTestId('global-occupancy')).toBeVisible();
   return page;
 }
 
@@ -94,10 +94,10 @@ test.describe('Phase 6 — acceptation', () => {
     for (let i = 0; i < 3; i++) {
       await sitePage.getByRole('button', { name: /ENTRÉE/ }).click();
     }
-    await expect(sitePage.locator('span.text-5xl.font-black')).toHaveText('3');
+    await expect(sitePage.getByTestId('global-occupancy')).toHaveText('3');
 
     await sitePage.getByRole('button', { name: /ANNULER/ }).click();
-    await expect(sitePage.locator('span.text-5xl.font-black')).toHaveText('2');
+    await expect(sitePage.getByTestId('global-occupancy')).toHaveText('2');
 
     // --- Device VIP: offline, one internal transfer --------------------
     await vipPage.context().setOffline(true);
@@ -132,8 +132,8 @@ test.describe('Phase 6 — acceptation', () => {
 
     // The authoritative state replaces the projection cleanly rather than
     // adding to it — a device that double-counted would show 3 or 4 here.
-    await expect(sitePage.locator('span.text-5xl.font-black')).toHaveText('2', { timeout: 15_000 });
-    await expect(vipPage.locator('span.text-5xl.font-black')).toHaveText('2', { timeout: 15_000 });
+    await expect(sitePage.getByTestId('global-occupancy')).toHaveText('2', { timeout: 15_000 });
+    await expect(vipPage.getByTestId('global-occupancy')).toHaveText('2', { timeout: 15_000 });
 
     // And it stays there: no oscillation between projection and truth.
     await sitePage.waitForTimeout(3_000);
@@ -174,7 +174,7 @@ test.describe('Phase 6 — acceptation', () => {
 
     await page.context().setOffline(true);
     await page.getByRole('button', { name: /ENTRÉE/ }).click();
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('1');
+    await expect(page.getByTestId('global-occupancy')).toHaveText('1');
 
     await beginClosingEvent(session, festival.eventId);
     await forceCloseEvent(session, festival.eventId, 'Appareil hors ligne, fermeture forcée');
@@ -191,7 +191,7 @@ test.describe('Phase 6 — acceptation', () => {
 
     // A refusal the server pronounced is not occupancy: the gauge drops
     // back to the authoritative 0 rather than keeping the optimistic +1.
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('0');
+    await expect(page.getByTestId('global-occupancy')).toHaveText('0');
 
     // And it is not hammered at the server while it waits for a human.
     const afterFirstRound = batchRequests;
@@ -244,7 +244,7 @@ test.describe('Phase 6 — acceptation', () => {
     // A tap made while the event is still live, with no network.
     await page.context().setOffline(true);
     await page.getByRole('button', { name: /ENTRÉE/ }).click();
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('1');
+    await expect(page.getByTestId('global-occupancy')).toHaveText('1');
     expect(await readOutbox(page)).toHaveLength(1);
 
     // The supervisor begins closing while this device is still offline.

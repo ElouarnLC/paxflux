@@ -266,3 +266,110 @@ export async function forceCloseEvent(session: AdminSession, eventId: string, re
 export async function reopenEvent(session: AdminSession, eventId: string, reason = 'Réouverture E2E') {
   return adminApi(session, 'POST', `/api/v1/events/${eventId}/reopen`, { reason });
 }
+
+/**
+ * Names of the length an actual event uses.
+ *
+ * An interface that only holds together with "Site", "Porte" and
+ * "Festival" is not responsive — it just has not been asked a real
+ * question yet. Every value here stays inside the shared contract's
+ * limits (event 120, space 100, checkpoint 100, direction label 50) so
+ * these are strings the product must accept, not synthetic stress input.
+ */
+export const LONG_FIXTURE_NAMES = {
+  event: 'Festival Interceltique des Rencontres Atlantiques — Édition 2026',
+  siteSpace: 'Esplanade Principale et Village des Partenaires',
+  vipSpace: 'Terrasse Panoramique VIP — Niveau Supérieur Nord',
+  mainCheckpoint: 'Porte Nord — Contrôle Billetterie et Accréditations',
+  innerCheckpoint: 'Passage Intérieur vers la Terrasse Panoramique',
+  labelAToB: 'ENTRÉE PRINCIPALE CONTRÔLÉE +1',
+  labelBToA: 'SORTIE DÉFINITIVE CONTRÔLÉE −1',
+  innerLabelAToB: 'MONTÉE VERS LA TERRASSE +1',
+  innerLabelBToA: 'DESCENTE VERS L’ESPLANADE −1',
+} as const;
+
+export interface LongNamedTopology {
+  eventId: string;
+  externalSpaceId: string;
+  siteSpaceId: string;
+  vipSpaceId: string;
+  mainCheckpointId: string;
+  innerCheckpointId: string;
+}
+
+/**
+ * Creates, in one atomic draft request, an event whose every displayed
+ * string is realistically long: two internal zones, a boundary door and an
+ * internal transfer door, each direction carrying a full label.
+ *
+ * `suffix` disambiguates the runs of one spec across viewport projects,
+ * which share a single server and database.
+ */
+export async function createLongNamedTopology(
+  session: AdminSession,
+  opts: { suffix: string; capacity?: number }
+): Promise<LongNamedTopology> {
+  const externalClientId = 'exterieur';
+  const siteClientId = 'esplanade';
+  const vipClientId = 'terrasse-vip';
+
+  const draft = await adminApi<{
+    event: { id: string };
+    spaces: Array<{ id: string; name: string; kind: string }>;
+    checkpoints: Array<{ id: string; name: string }>;
+  }>(session, 'POST', '/api/v1/events/drafts', {
+    event: {
+      name: `${LONG_FIXTURE_NAMES.event} · ${opts.suffix}`.slice(0, 120),
+      capacity: opts.capacity ?? 12_500,
+      warningRatio1: 0.8,
+      warningRatio2: 0.9,
+      timezone: 'Europe/Paris',
+    },
+    spaces: [
+      { clientId: externalClientId, name: 'Extérieur', kind: 'external', sortOrder: 0 },
+      { clientId: siteClientId, name: LONG_FIXTURE_NAMES.siteSpace, kind: 'leaf', capacity: 12_500, sortOrder: 1 },
+      { clientId: vipClientId, name: LONG_FIXTURE_NAMES.vipSpace, kind: 'leaf', capacity: 850, sortOrder: 2 },
+    ],
+    checkpoints: [
+      {
+        name: LONG_FIXTURE_NAMES.mainCheckpoint,
+        spaceAClientId: externalClientId,
+        spaceBClientId: siteClientId,
+        allowAToB: true,
+        allowBToA: true,
+        labelAToB: LONG_FIXTURE_NAMES.labelAToB,
+        labelBToA: LONG_FIXTURE_NAMES.labelBToA,
+        sortOrder: 0,
+      },
+      {
+        name: LONG_FIXTURE_NAMES.innerCheckpoint,
+        spaceAClientId: siteClientId,
+        spaceBClientId: vipClientId,
+        allowAToB: true,
+        allowBToA: true,
+        labelAToB: LONG_FIXTURE_NAMES.innerLabelAToB,
+        labelBToA: LONG_FIXTURE_NAMES.innerLabelBToA,
+        sortOrder: 1,
+      },
+    ],
+  });
+
+  const external = draft.spaces.find((s) => s.kind === 'external');
+  const site = draft.spaces.find((s) => s.name === LONG_FIXTURE_NAMES.siteSpace);
+  const vip = draft.spaces.find((s) => s.name === LONG_FIXTURE_NAMES.vipSpace);
+  const main = draft.checkpoints.find((c) => c.name === LONG_FIXTURE_NAMES.mainCheckpoint);
+  const inner = draft.checkpoints.find((c) => c.name === LONG_FIXTURE_NAMES.innerCheckpoint);
+
+  if (!external || !site || !vip || !main || !inner) {
+    throw new Error(`Draft topology came back incomplete: ${JSON.stringify(draft)}`);
+  }
+
+  return {
+    eventId: draft.event.id,
+    externalSpaceId: external.id,
+    siteSpaceId: site.id,
+    vipSpaceId: vip.id,
+    mainCheckpointId: main.id,
+    innerCheckpointId: inner.id,
+  };
+}

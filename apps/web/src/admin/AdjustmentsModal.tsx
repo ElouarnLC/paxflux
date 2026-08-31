@@ -136,7 +136,7 @@ export const AdjustmentsModal: React.FC<AdjustmentsModalProps> = ({
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="Ex: Recomptage manuel après coupure réseau temporaire"
-              className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-indigo-500"
+              className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:border-indigo-500"
             />
           </div>
 

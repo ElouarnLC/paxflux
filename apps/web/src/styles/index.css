@@ -4,4 +4,59 @@
   * {
     -webkit-tap-highlight-color: transparent;
   }
+
+  /*
+   * One visible keyboard indicator for the whole application.
+   *
+   * Several controls used to carry `focus:outline-none` with nothing in its
+   * place, which makes the interface unusable without a pointer. The rule
+   * lives here rather than being repeated per component so a control cannot
+   * be added without one; `:focus-visible` means a mouse click on a button
+   * still does not draw a ring, while Tab always does.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-indigo-400);
+    outline-offset: 2px;
+  }
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Safe-area contract
+ * ---------------------------------------------------------------------------
+ *
+ * `viewport-fit=cover` (index.html) lets the page paint to the physical
+ * edges of the screen. That is only acceptable if something actually keeps
+ * content out of the display cutout, the status bar and the home indicator.
+ * Before these rules a `pb-safe` class name existed with no rule behind it,
+ * which looked like safe-area handling and did nothing.
+ *
+ * The contract is deliberately one rule in one place:
+ *
+ *   1. `.safe-area-root` applies all four `env(safe-area-inset-*)` values as
+ *      padding on #root. Every route is inside that padding box, so no page
+ *      has to opt in and none can forget to. What reaches the cutout is the
+ *      page background painted by <html>, and nothing else.
+ *
+ *   2. The only elements that escape #root's padding box are `position:
+ *      sticky` headers, which offset from the scrollport rather than from
+ *      their ancestor: a sticky header at `top: 0` slides under the notch
+ *      as soon as the page is scrolled. `.sticky-safe-top` restates the top
+ *      inset as that offset. It replaces `top-0`, it does not accompany it.
+ *
+ *   3. Nothing else adds a safe-area padding of its own. A second inset on
+ *      a descendant of #root would be double-counted, which is why the
+ *      counter — the only full-bleed screen — carries none.
+ */
+@layer utilities {
+  .safe-area-root {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+
+  .sticky-safe-top {
+    top: env(safe-area-inset-top, 0px);
+  }
 }

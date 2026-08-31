@@ -182,7 +182,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
               <button
                 type="button"
                 onClick={refreshPreflight}
-                className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
+                className="mt-2 inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
               >
                 <RefreshCw className="w-3 h-3" /> Réessayer
               </button>
@@ -206,7 +206,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
           type="button"
           disabled={actionLoading || preflight.kind !== 'ready' || !preflight.data.ready}
           onClick={() => runTransition('start', "Démarrer l'événement et le passer en direct ?")}
-          className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
+          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
         >
           {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
           Démarrer l'événement
@@ -228,7 +228,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
               "Débuter la fermeture ? Les compteurs sur le terrain n'accepteront plus de nouveaux comptages."
             )
           }
-          className="w-full py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
+          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
         >
           {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
           Débuter la fermeture
@@ -256,7 +256,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
               <button
                 type="button"
                 onClick={() => refreshDevices()}
-                className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
+                className="mt-2 inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-100 font-semibold"
               >
                 <RefreshCw className="w-3 h-3" /> Réessayer
               </button>
@@ -264,15 +264,15 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
           </div>
         ) : (
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="min-w-0 text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
                 Appareils actifs — mise à jour automatique
               </span>
               <button
                 type="button"
                 disabled={devicesRefreshing}
                 onClick={() => refreshDevices({ silent: true })}
-                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-50 text-[11px] font-semibold"
+                className="inline-flex items-center gap-1.5 min-h-11 px-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-50 text-[11px] font-semibold"
               >
                 <RefreshCw className={`w-3 h-3 ${devicesRefreshing ? 'animate-spin' : ''}`} /> Actualiser
               </button>
@@ -284,9 +284,9 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
               devicesState.devices.map((d) => (
                 <div
                   key={d.id}
-                  className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800"
+                  className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800"
                 >
-                  <span className="font-semibold text-slate-200">
+                  <span className="min-w-0 font-semibold text-slate-200 break-words">
                     {d.checkpointName} — {d.label}
                   </span>
                   <span className="flex items-center gap-2.5">
@@ -319,7 +319,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
           type="button"
           disabled={actionLoading || !allSynced}
           onClick={() => runTransition('close', "Clôturer l'événement ? Tous les appareils actifs sont synchronisés.")}
-          className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
+          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
         >
           {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
           Clôturer l'événement
@@ -340,7 +340,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
                 { reason }
               );
             }}
-            className="w-full py-2 px-4 rounded-xl bg-transparent hover:bg-rose-950/40 border border-rose-500/40 disabled:opacity-50 disabled:cursor-not-allowed text-rose-300 font-bold text-[11px] flex items-center justify-center gap-2 transition-all"
+            className="w-full min-h-11 py-2 px-4 rounded-xl bg-transparent hover:bg-rose-950/40 border border-rose-500/40 disabled:opacity-50 disabled:cursor-not-allowed text-rose-300 font-bold text-[11px] flex items-center justify-center gap-2 transition-all"
           >
             <AlertTriangle className="w-3.5 h-3.5" />
             Fermeture forcée (admin)
@@ -366,7 +366,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
             if (!reason) return;
             runTransition('reopen', `Réouvrir l'événement clos ?\n\nMotif : "${reason}"`, { reason });
           }}
-          className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
+          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-all"
         >
           {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
           Réouvrir l'événement
@@ -375,7 +375,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
           type="button"
           disabled={actionLoading}
           onClick={() => runTransition('archive', "Archiver l'événement ? Cette action est terminale.")}
-          className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all"
+          className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all"
         >
           {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Archive className="w-4 h-4" />}
           Archiver l'événement

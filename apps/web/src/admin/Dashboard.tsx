@@ -106,7 +106,7 @@ export const Dashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400">
+      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400">
         <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
       </div>
     );
@@ -114,7 +114,7 @@ export const Dashboard: React.FC = () => {
 
   if (eventsList.length === 0) {
     return (
-      <div className="min-h-full flex flex-col items-center justify-center p-6 text-center bg-slate-950 text-slate-100">
+      <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-slate-950 text-slate-100">
         <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl">
           <Users className="w-12 h-12 text-indigo-400 mx-auto mb-4" />
           <h2 className="text-xl font-bold mb-2">Aucun événement configuré</h2>
@@ -123,7 +123,7 @@ export const Dashboard: React.FC = () => {
           </p>
           <Link
             to="/admin/events/new"
-            className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-bold text-sm text-white shadow-lg transition-all"
+            className="inline-flex items-center gap-2 min-h-11 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-bold text-sm text-white shadow-lg transition-all"
           >
             <Plus className="w-4 h-4" />
             Créer un événement
@@ -142,21 +142,42 @@ export const Dashboard: React.FC = () => {
   const syncQuality: SyncQuality = eventDetail?.syncQuality || 'reliable';
 
   return (
-    <div className="min-h-full bg-slate-950 text-slate-100 flex flex-col">
+    <div className="flex-1 bg-slate-950 text-slate-100 flex flex-col">
       {/* Top Navbar */}
-      <header className="px-6 py-4 border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-20 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="font-black text-xl tracking-tight text-white">PaxFlux</span>
+      {/* The brand, the shortcut to Système and the event control used to
+          share one non-wrapping row. On a phone that row was simply wider
+          than the screen, taking `Nouvel événement` off it. It now folds:
+          brand and Système on the first line, the selector and the create
+          action on the second, back to a single row from `sm` up. */}
+      {/* `sticky-safe-top` replaces `top-0`: a sticky element offsets from
+          the scrollport rather than from #root, so at `top: 0` this bar —
+          which carries the event selector and both shortcuts — would sit
+          under the status bar as soon as the page is scrolled in a
+          standalone PWA. See the safe-area contract in styles/index.css. */}
+      <header className="px-4 sm:px-6 py-3 border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky sticky-safe-top z-20 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-black text-lg sm:text-xl tracking-tight text-white">PaxFlux</span>
           <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-950 border border-indigo-500/30 text-indigo-300 font-medium">
             Supervision
           </span>
         </div>
 
-        <div className="flex items-center gap-4">
+        <Link
+          to="/admin/system"
+          className="ml-auto inline-flex items-center min-h-11 px-2 text-xs font-medium text-slate-400 hover:text-white transition-colors"
+        >
+          Système
+        </Link>
+
+        <div className="w-full sm:w-auto flex items-center gap-2 min-w-0">
+          {/* `min-w-0` is the whole reason this selector can be narrow: a
+              form control's default minimum width is its content, so an
+              event named at full length would otherwise stretch the header
+              past the viewport rather than shrink. */}
           <select
             value={selectedEventId || ''}
             onChange={(e) => setSelectedEventId(e.target.value)}
-            className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs font-semibold text-white focus:outline-none"
+            className="flex-1 sm:flex-none sm:max-w-64 min-w-0 min-h-11 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-base lg:text-xs font-semibold text-white"
           >
             {eventsList.map((ev) => (
               <option key={ev.id} value={ev.id}>
@@ -166,15 +187,8 @@ export const Dashboard: React.FC = () => {
           </select>
 
           <Link
-            to="/admin/system"
-            className="text-xs font-medium text-slate-400 hover:text-white transition-colors"
-          >
-            Système
-          </Link>
-
-          <Link
             to="/admin/events/new"
-            className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md"
+            className="flex-shrink-0 flex items-center gap-1 min-h-11 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md"
           >
             <Plus className="w-3.5 h-3.5" />
             Nouvel événement
@@ -183,19 +197,24 @@ export const Dashboard: React.FC = () => {
       </header>
 
       {/* Main Dashboard Content */}
-      <main className="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
+      <main className="flex-1 p-4 sm:p-6 max-w-7xl mx-auto w-full space-y-4 sm:space-y-6">
         {/* 1. Global Metrics & Sync Health Card */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
           {/* Main Occupancy Card */}
-          <div className="md:col-span-2 bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-4">
-              <div>
+          <div className="md:col-span-2 bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl flex flex-col justify-between">
+            <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
+              <div className="min-w-0">
                 <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">Jauge en Direct</h2>
-                <p className="text-2xl font-black text-white mt-1">{currentEvent?.name}</p>
+                <p
+                  data-testid="dashboard-event-name"
+                  className="text-xl sm:text-2xl font-black text-white mt-1 break-words"
+                >
+                  {currentEvent?.name}
+                </p>
               </div>
 
               {/* Status Badge */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${
                   currentEvent?.status === 'live'
                     ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300'
@@ -209,11 +228,14 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            <div className="my-4 flex items-baseline gap-4 font-mono">
-              <span className="text-6xl font-black text-white tracking-tight">
+            {/* Occupancy, capacity and percentage wrap instead of forcing
+                the card wider: a six-figure gauge next to a six-figure
+                capacity does not fit on one line at 320px. */}
+            <div className="my-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono">
+              <span className="text-4xl sm:text-6xl font-black text-white tracking-tight">
                 {globalOccupancy.toLocaleString('fr-FR')}
               </span>
-              <span className="text-2xl font-bold text-slate-400">
+              <span className="text-xl sm:text-2xl font-bold text-slate-400">
                 / {capacity.toLocaleString('fr-FR')}
               </span>
               <span className="text-sm font-semibold text-slate-400 font-sans ml-auto">
@@ -237,7 +259,7 @@ export const Dashboard: React.FC = () => {
               ></div>
             </div>
 
-            <div className="flex items-center justify-between text-xs font-semibold">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs font-semibold">
               <span className="text-slate-400">
                 {remaining >= 0 ? `${remaining.toLocaleString('fr-FR')} places disponibles` : `Dépassement de ${Math.abs(remaining).toLocaleString('fr-FR')}`}
               </span>
@@ -246,7 +268,7 @@ export const Dashboard: React.FC = () => {
           </div>
 
           {/* Sync Health Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col justify-between">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl flex flex-col justify-between">
             <div>
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-2">Qualité de Synchronisation</h2>
               <div className="mt-4 p-4 rounded-2xl border flex items-start gap-3 bg-slate-950/60">
@@ -281,24 +303,24 @@ export const Dashboard: React.FC = () => {
             <div className="mt-6 flex flex-col gap-2">
               <Link
                 to={`/admin/events/${selectedEventId}/devices`}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-between transition-all"
+                className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-between gap-2 transition-all"
               >
-                <span className="flex items-center gap-2">
-                  <QrCode className="w-4 h-4 text-indigo-400" />
+                <span className="flex items-center gap-2 min-w-0">
+                  <QrCode className="w-4 h-4 text-indigo-400 flex-shrink-0" />
                   Gérer les appareils & QR codes
                 </span>
-                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
               </Link>
 
               <Link
                 to={`/admin/events/${selectedEventId}/analytics`}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-between transition-all"
+                className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-between gap-2 transition-all"
               >
-                <span className="flex items-center gap-2">
-                  <Activity className="w-4 h-4 text-emerald-400" />
+                <span className="flex items-center gap-2 min-w-0">
+                  <Activity className="w-4 h-4 text-emerald-400 flex-shrink-0" />
                   Statistiques détaillées
                 </span>
-                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
               </Link>
             </div>
           </div>
@@ -306,15 +328,15 @@ export const Dashboard: React.FC = () => {
 
         {/* 1b. Lifecycle Controls */}
         {currentEvent ? (
-          <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
+          <section className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
             <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">Cycle de vie de l'événement</h3>
             <LifecycleControls event={currentEvent} onChanged={refreshDetails} />
           </section>
         ) : null}
 
         {/* 2. Space Breakdown */}
-        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
-          <div className="flex items-center justify-between mb-4">
+        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <h3 className="text-base font-bold text-white">Répartition par Zone</h3>
             <span className="text-xs text-slate-400">Total zones : {eventDetail?.spaces.length || 0}</span>
           </div>
@@ -332,14 +354,14 @@ export const Dashboard: React.FC = () => {
                     key={sp.id}
                     className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between"
                   >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h4 className="font-bold text-white text-sm">{sp.name}</h4>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-white text-sm break-words">{sp.name}</h4>
                         <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
                           {sp.kind === 'leaf' ? 'Zone Simple' : 'Agrégat'}
                         </span>
                       </div>
-                      <span className="text-lg font-mono font-bold text-white">
+                      <span className="text-lg font-mono font-bold text-white flex-shrink-0">
                         {occ} {spCap > 0 ? `/ ${spCap}` : ''}
                       </span>
                     </div>
@@ -364,21 +386,25 @@ export const Dashboard: React.FC = () => {
         </section>
 
         {/* 3. Devices & Checkpoints Status */}
-        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
-          <div className="flex items-center justify-between mb-4">
+        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <h3 className="text-base font-bold text-white">Appareils et Portes Actives</h3>
             <a
               href={`/api/v1/events/${selectedEventId}/export/movements.csv`}
               download
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition-colors"
+              className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
               Exporter CSV
             </a>
           </div>
 
+          {/* The table keeps its own horizontal scroll area rather than
+              widening the page: six columns of device state do not fit a
+              phone, and folding them into cards is a redesign this phase
+              does not do. */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-300">
+            <table className="w-full min-w-[36rem] text-left text-xs text-slate-300">
               <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
                 <tr>
                   <th className="py-3 px-4">Porte / Checkpoint</th>

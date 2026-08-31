@@ -40,31 +40,53 @@ export default defineConfig({
       LOG_LEVEL: 'silent',
     },
   },
+  // The responsive suite (`mobile-*.spec.ts`) runs across the whole device
+  // matrix; every other spec runs once, on the desktop `functional`
+  // project. `desktop-1280` re-runs the responsive suite at desktop size so
+  // a mobile-first fix that breaks the large layout fails here rather than
+  // in review.
   projects: [
     {
       name: 'functional',
-      testIgnore: /mobile-viewport-overflow\.spec\.ts/,
+      testIgnore: /mobile-.*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } },
     },
+    // The smallest screen still in service, and the one the counter must
+    // fit both primary buttons into without scrolling.
     {
       name: 'mobile-320',
-      testMatch: /mobile-viewport-overflow\.spec\.ts/,
-      use: { viewport: { width: 320, height: 690 } },
+      testMatch: /mobile-.*\.spec\.ts/,
+      use: { viewport: { width: 320, height: 568 } },
+    },
+    {
+      name: 'mobile-360',
+      testMatch: /mobile-.*\.spec\.ts/,
+      use: { viewport: { width: 360, height: 800 } },
     },
     {
       name: 'mobile-375',
-      testMatch: /mobile-viewport-overflow\.spec\.ts/,
-      use: { viewport: { width: 375, height: 812 } },
+      testMatch: /mobile-.*\.spec\.ts/,
+      use: { viewport: { width: 375, height: 667 } },
     },
     {
       name: 'mobile-390',
-      testMatch: /mobile-viewport-overflow\.spec\.ts/,
+      testMatch: /mobile-.*\.spec\.ts/,
       use: { viewport: { width: 390, height: 844 } },
     },
     {
       name: 'mobile-412',
-      testMatch: /mobile-viewport-overflow\.spec\.ts/,
+      testMatch: /mobile-.*\.spec\.ts/,
       use: { viewport: { width: 412, height: 915 } },
+    },
+    {
+      name: 'tablet-768',
+      testMatch: /mobile-.*\.spec\.ts/,
+      use: { viewport: { width: 768, height: 1024 } },
+    },
+    {
+      name: 'desktop-1280',
+      testMatch: /mobile-.*\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } },
     },
   ],
 });
