@@ -199,6 +199,21 @@ export const DeviceHeartbeatRequestSchema = z.object({
   // or malformed body silently overwrite `lastPendingCount` and tell the
   // supervisor a device is fully synced when it may not be.
   pendingCount: z.number().int().nonnegative(),
+  /**
+   * The device session this report is about, asserted by the client.
+   *
+   * Same reasoning as the batch endpoint: the cookie says which session is
+   * authenticated, not which session the client believes it is. During a
+   * re-pairing those disagree, and a heartbeat sent in that window would
+   * write one device's pending count onto another's session — telling the
+   * supervisor the new device is holding counts it never made.
+   */
+  expectedDeviceSessionId: z.string().uuid(),
+  /**
+   * The closing epoch this device has seen. Same fail-closed rule as the
+   * batch endpoint: absence never confirms a drain.
+   */
+  observedClosingStartedAtMs: z.number().int().positive().nullable().optional(),
   lastClientSequence: z.number().int().nonnegative().optional(),
   appVersion: z.string().max(50).optional(),
 });

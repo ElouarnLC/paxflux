@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import type { ZodIssue } from 'zod';
 import { DatabaseSync } from 'node:sqlite';
 import { AppDb } from '../db/index.js';
 import { Env } from '../config/env.js';
@@ -25,10 +26,27 @@ import {
   applyCountAction,
   applyReversalAction,
   applySupervisorAdjustment,
+  MovementResult,
 } from '../domain/movements.js';
-import { getCompactEventState } from '../domain/events.js';
+import { getCompactEventState, resolveDrainAcknowledgment } from '../domain/events.js';
 import { calculateAggregateOccupancy } from '../domain/spaces.js';
 import { broadcaster } from '../realtime/broadcaster.js';
+
+/**
+ * Wire status for one action.
+ *
+ * The domain reports an idempotent replay as `applied` with `isDuplicate`
+ * set, which keeps its own contract (and its ledger tests) unchanged. On the
+ * wire the distinction is worth keeping: `duplicate` is the answer a client
+ * gets when its first attempt was applied but the response never came back,
+ * and being able to see that is what makes ADR-005's lost-acknowledgment
+ * path observable rather than merely assumed. Both remain successes, and a
+ * client deletes the action either way.
+ */
+function ackStatus(res: MovementResult): ActionAcknowledgment['status'] {
+  if (res.status === 'applied' && res.isDuplicate) return 'duplicate';
+  return res.status;
+}
 
 export async function registerCountingRoutes(
   app: FastifyInstance,
@@ -52,7 +70,7 @@ export async function registerCountingRoutes(
             'Payload invalide',
             'Format de batch d’actions invalide.',
             undefined,
-            parseResult.error.errors.map((e: any) => ({
+            parseResult.error.errors.map((e: ZodIssue) => ({
               name: e.path.join('.'),
               reason: e.message,
             }))
@@ -60,7 +78,34 @@ export async function registerCountingRoutes(
         );
     }
 
-    const { actions, pendingCount = 0, appVersion } = parseResult.data;
+    const {
+      actions,
+      expectedDeviceSessionId,
+      observedClosingStartedAtMs,
+      pendingCount = 0,
+      appVersion,
+    } = parseResult.data;
+
+    // The cookie alone is not proof that this batch belongs to the session
+    // now authenticated. During a re-pairing the browser can already hold
+    // the new session's cookie while the client still believes it is the
+    // previous device — and an unasserted batch would then be applied under
+    // the wrong session, checkpoint and event. Refuse the whole batch
+    // before applying anything, and touch nothing on the session either:
+    // this request says nothing truthful about the current device's state.
+    if (expectedDeviceSessionId !== deviceSession.id) {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'DEVICE_SESSION_MISMATCH',
+            'Session appareil différente',
+            'Ces actions ont été enregistrées sous un autre appairage de cet appareil. Elles ne peuvent pas être envoyées sous la session courante.'
+          )
+        );
+    }
+
     const now = Date.now();
     const eventId = deviceSession.eventId;
     const checkpointId = deviceSession.checkpointId;
@@ -83,7 +128,7 @@ export async function registerCountingRoutes(
 
         acknowledgments.push({
           clientActionId: action.clientActionId,
-          status: res.status,
+          status: ackStatus(res),
           movementId: res.movementId,
           errorCode: res.errorCode,
         });
@@ -101,32 +146,41 @@ export async function registerCountingRoutes(
 
         acknowledgments.push({
           clientActionId: action.clientActionId,
-          status: res.status,
+          status: ackStatus(res),
           movementId: res.movementId,
           errorCode: res.errorCode,
         });
       }
     }
 
-    // The client's own `pendingCount` only accounts for the actions it
-    // deletes locally, i.e. `applied`/`duplicate` — it never subtracts
-    // `rejected` ones, since the client intentionally keeps those in its
-    // outbox (their retry/UX handling is Phase 6). A rejected action is
-    // still genuinely unsynced from the admin's point of view, so it must
-    // still count towards `lastPendingCount`, or a device with only
-    // rejected actions left could be reported as fully synced (0 pending)
-    // and let a normal `/close` through despite having a movement it never
-    // reconciled.
+    // `pendingCount` is what the device will still hold once this batch is
+    // acknowledged, computed before sending and therefore assuming every
+    // action in it succeeds. Actions it had already parked as rejected or
+    // quarantined are not in the batch and stay counted there; what the
+    // client cannot know in advance is what *this* round will refuse, so
+    // the server adds it back. Without that, a device left holding only
+    // refused counts would report itself fully synced and let a normal
+    // `/close` through despite movements nobody reconciled.
     const rejectedCount = acknowledgments.filter((a) => a.status === 'rejected').length;
     const effectivePendingCount = pendingCount + rejectedCount;
 
-    // Update device session status
+    // Re-read the event: applying the batch above may have been the very
+    // thing that drained this device, and the acknowledgment below must be
+    // decided against the state that now holds.
+    const eventAfterBatch = await db.select().from(events).where(eq(events.id, eventId)).get();
+
+    // Update device session status, including the drain acknowledgment this
+    // report earns — written in the same update as the count it is based
+    // on, so a confirmation can never outlive the number behind it.
     await db
       .update(deviceSessions)
       .set({
         lastSeenAtMs: now,
         lastPendingCount: effectivePendingCount,
         appVersion: appVersion || deviceSession.appVersion,
+        drainedForClosingAtMs: eventAfterBatch
+          ? resolveDrainAcknowledgment(eventAfterBatch, observedClosingStartedAtMs, effectivePendingCount)
+          : null,
       })
       .where(eq(deviceSessions.id, deviceSession.id));
 
@@ -145,6 +199,7 @@ export async function registerCountingRoutes(
         eventCapacity: 0,
         spaces: [],
         serverTimeMs: now,
+        closingStartedAtMs: null,
       },
     };
 
@@ -169,7 +224,7 @@ export async function registerCountingRoutes(
             'Paramètres invalides',
             'Motif et comptage observé requis.',
             undefined,
-            parseResult.error.errors.map((e: any) => ({
+            parseResult.error.errors.map((e: ZodIssue) => ({
               name: e.path.join('.'),
               reason: e.message,
             }))

@@ -12,7 +12,12 @@ import {
   PreflightResponse,
 } from '@paxflux/shared';
 import { requireStaffAuth } from '../auth/staff-sessions.js';
-import { isValidStatusTransition, validateEventForLive, getUnsyncedActiveDevices } from '../domain/events.js';
+import {
+  isValidStatusTransition,
+  validateEventForLive,
+  getUnsyncedActiveDevices,
+  getCompactEventState,
+} from '../domain/events.js';
 import { createDatabaseBackup } from '../backups/backup-service.js';
 import { broadcaster } from '../realtime/broadcaster.js';
 
@@ -320,6 +325,15 @@ export async function registerEventRoutes(app: FastifyInstance, sqlite: Database
       })
       .where(eq(events.id, id));
 
+    // A new epoch invalidates every previous drain acknowledgment. What a
+    // device said about an earlier closing — or about the live phase — says
+    // nothing about this one, and re-opening then re-closing an event must
+    // require every device to confirm again.
+    await db
+      .update(deviceSessions)
+      .set({ drainedForClosingAtMs: null })
+      .where(eq(deviceSessions.eventId, id));
+
     broadcaster.broadcastMessage(id, {
       type: 'event-status',
       data: {
@@ -329,6 +343,14 @@ export async function registerEventRoutes(app: FastifyInstance, sqlite: Database
         timestampMs: now,
       },
     });
+
+    // Also push the state, which carries `closingStartedAtMs`: a device
+    // needs the epoch itself to acknowledge it, and the status message
+    // alone would leave one that reconnects later unable to name it.
+    const closingState = await getCompactEventState(db, id);
+    if (closingState) {
+      broadcaster.broadcastState(id, closingState);
+    }
 
     const updated = await db.select().from(events).where(eq(events.id, id)).get();
     return reply.status(200).send(updated);
@@ -465,9 +487,18 @@ export async function registerEventRoutes(app: FastifyInstance, sqlite: Database
       .set({
         status: 'live',
         closedAtMs: null,
+        // The closing epoch is over. Leaving it set would let a stale
+        // acknowledgment satisfy the *next* closing without any device
+        // having confirmed anything about it.
+        closingStartedAtMs: null,
         updatedAtMs: now,
       })
       .where(eq(events.id, id));
+
+    await db
+      .update(deviceSessions)
+      .set({ drainedForClosingAtMs: null })
+      .where(eq(deviceSessions.eventId, id));
 
     await db.insert(auditLog).values({
       eventId: id,

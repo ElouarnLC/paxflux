@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildApp } from '../../apps/server/src/app.js';
 import { createDatabase } from '../../apps/server/src/db/index.js';
 import { parseEnv } from '../../apps/server/src/config/env.js';
-import { instanceSettings, staffUsers, deviceSessions, auditLog } from '../../apps/server/src/db/schema.js';
+import { instanceSettings, staffUsers, events, deviceSessions, auditLog } from '../../apps/server/src/db/schema.js';
 import { createStaffSession } from '../../apps/server/src/auth/staff-sessions.js';
 import { COOKIE_NAME_STAFF } from '@paxflux/shared';
 import { eq } from 'drizzle-orm';
@@ -120,7 +120,34 @@ describe('Event lifecycle transitions & preflight', () => {
       payload: { token, appVersion: '1.0.0' },
     });
     expect(pairRes.statusCode).toBe(200);
-    return pairRes.json().deviceSession.id as string;
+    const cookie = pairRes.cookies[0];
+    return {
+      deviceSessionId: pairRes.json().deviceSession.id as string,
+      deviceCookie: `${cookie.name}=${cookie.value}`,
+    };
+  }
+
+  /**
+   * The real drain confirmation: a heartbeat naming the closing epoch this
+   * device has seen, with nothing unresolved.
+   *
+   * Written as an actual request rather than a direct row update, because
+   * the whole point of the epoch protocol is that the acknowledgment comes
+   * from the device rather than being inferred about it.
+   */
+  async function confirmDrainForClosing(eventId: string, deviceSessionId: string, deviceCookie: string) {
+    const eventRow = await db.select().from(events).where(eq(events.id, eventId)).get();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/device/heartbeat',
+      headers: { cookie: deviceCookie },
+      payload: {
+        pendingCount: 0,
+        expectedDeviceSessionId: deviceSessionId,
+        observedClosingStartedAtMs: eventRow?.closingStartedAtMs ?? null,
+      },
+    });
+    expect(res.statusCode).toBe(200);
   }
 
   async function setDeviceSyncState(deviceSessionId: string, opts: { online: boolean; pendingCount: number }) {
@@ -296,7 +323,7 @@ describe('Event lifecycle transitions & preflight', () => {
   describe('POST /close requires every active device to be synced', () => {
     it('rejects with 409 DEVICES_NOT_SYNCED when a device is still offline', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const deviceId = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: false, pendingCount: 0 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
 
@@ -308,7 +335,7 @@ describe('Event lifecycle transitions & preflight', () => {
 
     it('rejects with 409 DEVICES_NOT_SYNCED when an online device still has a pending count', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const deviceId = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: true, pendingCount: 3 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
 
@@ -320,14 +347,147 @@ describe('Event lifecycle transitions & preflight', () => {
 
     it('succeeds once the only active device is online with no pending actions', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const deviceId = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: true, pendingCount: 0 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+
+      // Looking online with nothing pending is not enough on its own: that
+      // was true before the transition and says nothing about this epoch.
+      const tooEarly = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(tooEarly.statusCode).toBe(409);
+
+      await confirmDrainForClosing(event.id, deviceId, deviceCookie);
 
       const res = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
 
       expect(res.statusCode).toBe(200);
       expect(res.json().status).toBe('closed');
+    });
+
+    it('a report prepared before the transition never confirms the epoch it did not know', async () => {
+      const { event, checkpoint } = await startLiveEvent();
+      const { deviceSessionId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
+
+      // The device reports itself fully drained while the event is still
+      // live. This is the request that arrives late: it is perfectly valid,
+      // perfectly recent, and says nothing about a closing that had not
+      // begun when it was prepared.
+      const preClosing = await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: { pendingCount: 0, expectedDeviceSessionId: deviceSessionId, observedClosingStartedAtMs: null },
+      });
+      expect(preClosing.statusCode).toBe(200);
+
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+
+      // Replaying it after the transition must not satisfy the gate — a
+      // `lastSeenAtMs >= closingStartedAtMs` rule would have let it.
+      const late = await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: { pendingCount: 0, expectedDeviceSessionId: deviceSessionId, observedClosingStartedAtMs: null },
+      });
+      expect(late.statusCode).toBe(200);
+
+      const eventRow = await db.select().from(events).where(eq(events.id, event.id)).get();
+      const deviceRow = await db
+        .select()
+        .from(deviceSessions)
+        .where(eq(deviceSessions.id, deviceSessionId))
+        .get();
+      expect(deviceRow?.lastSeenAtMs).toBeGreaterThanOrEqual(eventRow?.closingStartedAtMs ?? 0);
+      expect(deviceRow?.drainedForClosingAtMs ?? null).toBeNull();
+
+      const refused = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().code).toBe('DEVICES_NOT_SYNCED');
+    });
+
+    it('a report naming the epoch but still holding something does not confirm either', async () => {
+      const { event, checkpoint } = await startLiveEvent();
+      const { deviceSessionId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+
+      const eventRow = await db.select().from(events).where(eq(events.id, event.id)).get();
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: {
+          pendingCount: 2,
+          expectedDeviceSessionId: deviceSessionId,
+          observedClosingStartedAtMs: eventRow?.closingStartedAtMs ?? null,
+        },
+      });
+
+      const refused = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(refused.statusCode).toBe(409);
+
+      // And a later report that still holds something revokes an earlier
+      // confirmation rather than leaving it standing.
+      await confirmDrainForClosing(event.id, deviceSessionId, deviceCookie);
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/device/heartbeat',
+        headers: { cookie: deviceCookie },
+        payload: {
+          pendingCount: 1,
+          expectedDeviceSessionId: deviceSessionId,
+          observedClosingStartedAtMs: eventRow?.closingStartedAtMs ?? null,
+        },
+      });
+
+      const refusedAgain = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(refusedAgain.statusCode).toBe(409);
+    });
+
+    it('reopening and closing again requires a fresh confirmation', async () => {
+      const { event, checkpoint } = await startLiveEvent();
+      const { deviceSessionId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
+
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+      await confirmDrainForClosing(event.id, deviceSessionId, deviceCookie);
+      const firstClose = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(firstClose.statusCode).toBe(200);
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/events/${event.id}/reopen`,
+        headers: authHeaders(),
+        payload: { reason: 'Régularisation terrain' },
+      });
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+
+      // The previous epoch's acknowledgment says nothing about this one:
+      // anything the device counted between the two closings is invisible
+      // in it.
+      const refused = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(refused.statusCode).toBe(409);
+
+      await confirmDrainForClosing(event.id, deviceSessionId, deviceCookie);
+      const secondClose = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(secondClose.statusCode).toBe(200);
+    });
+
+    it('force-close remains the deliberate way past an unconfirmed device', async () => {
+      const { event, checkpoint } = await startLiveEvent();
+      await pairDevice(event.id, checkpoint.id);
+      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
+
+      const refused = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(refused.statusCode).toBe(409);
+
+      const forced = await app.inject({
+        method: 'POST',
+        url: `/api/v1/events/${event.id}/force-close`,
+        headers: authHeaders(),
+        payload: { reason: 'Appareil injoignable en fin d’événement' },
+      });
+      expect(forced.statusCode).toBe(200);
+      expect(forced.json().status).toBe('closed');
     });
 
     it('a rejected action in a batch still counts as pending, even when the client reports pendingCount: 0', async () => {
@@ -362,6 +522,7 @@ describe('Event lifecycle transitions & preflight', () => {
               clientCreatedAtMs: Date.now(),
             },
           ],
+          expectedDeviceSessionId: deviceSessionId,
           pendingCount: 0,
           appVersion: '1.0.0',
         },
@@ -384,7 +545,7 @@ describe('Event lifecycle transitions & preflight', () => {
   describe('POST /force-close', () => {
     it('is rejected for a non-admin (supervisor) session (403)', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const deviceId = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: false, pendingCount: 5 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
 
@@ -415,7 +576,7 @@ describe('Event lifecycle transitions & preflight', () => {
 
     it('bypasses the device-sync check for an admin with a reason, and writes an audit log entry', async () => {
       const { event, checkpoint } = await startLiveEvent();
-      const deviceId = await pairDevice(event.id, checkpoint.id);
+      const { deviceSessionId: deviceId, deviceCookie } = await pairDevice(event.id, checkpoint.id);
       await setDeviceSyncState(deviceId, { online: false, pendingCount: 7 });
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
 
@@ -524,8 +685,9 @@ describe('Event lifecycle transitions & preflight', () => {
       expect(bootstrapBefore.statusCode).toBe(200);
 
       await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/begin-closing`, headers: authHeaders() });
-      await setDeviceSyncState(deviceSessionId, { online: true, pendingCount: 0 });
-      await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      await confirmDrainForClosing(event.id, deviceSessionId, `${deviceCookie.name}=${deviceCookie.value}`);
+      const closeRes = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/close`, headers: authHeaders() });
+      expect(closeRes.statusCode).toBe(200);
 
       const archiveRes = await app.inject({ method: 'POST', url: `/api/v1/events/${event.id}/archive`, headers: authHeaders() });
       expect(archiveRes.statusCode).toBe(200);

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
-import { localDb } from '../offline/db.js';
+import { beginPairingHandoff, persistBootstrap } from '../offline/snapshot.js';
 import { Loader2, AlertCircle, CheckCircle, Smartphone } from 'lucide-react';
 import { DeviceBootstrapResponse, DeviceSessionModel, ProblemDetails } from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
@@ -48,6 +48,15 @@ export const PairingPage: React.FC = () => {
         });
 
         if (res.success) {
+          // The cookie now names a different device session, so the stored
+          // configuration no longer describes this browser. Retire it
+          // immediately — before the bootstrap that would replace it — so a
+          // bootstrap that never succeeds cannot leave the previous
+          // identity running the counter. The outbox is untouched: those
+          // are real counts, and ownership parks them rather than deleting
+          // them.
+          await beginPairingHandoff(res.deviceSession.id);
+
           // Pre-fill the offline cache so the counter opens instantly. This
           // is an optimisation, not part of pairing: /counter fetches its
           // own bootstrap anyway, so a failure here must not turn a
@@ -55,12 +64,16 @@ export const PairingPage: React.FC = () => {
           // flow continues.
           try {
             const bootstrap = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
-            await localDb.device_cache.put({
-              key: 'bootstrap_config',
-              bootstrap,
-              lastState: bootstrap.state,
-              updatedAtMs: Date.now(),
-            });
+            // Through the same funnel as every other authoritative state,
+            // so this new pairing's identity and its state are stored
+            // together and can never describe two different pairings. The
+            // funnel refuses a response describing an identity this device
+            // is no longer waiting for — a bootstrap in flight when another
+            // pairing happens must not put the retired one back in charge.
+            const accepted = await persistBootstrap(bootstrap);
+            if (!accepted) {
+              console.debug('Bootstrap ignored: it does not describe the pairing this device awaits');
+            }
           } catch (err) {
             console.debug('Bootstrap cache pre-fill failed; the counter will fetch it itself:', err);
           }

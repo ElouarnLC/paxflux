@@ -221,3 +221,48 @@ export async function getEventCheckpoints(session: AdminSession, eventId: string
 export async function getEventPreflight(session: AdminSession, eventId: string): Promise<any> {
   return adminApi(session, 'GET', `/api/v1/events/${eventId}/preflight`);
 }
+
+/**
+ * Drives a leaf space to an exact occupancy through the supervisor
+ * adjustment endpoint. Used by the offline specs to move the authoritative
+ * state away from the value a device cached at bootstrap time, without
+ * needing a second paired device.
+ */
+export async function adjustSpaceOccupancy(
+  session: AdminSession,
+  eventId: string,
+  spaceId: string,
+  observedCount: number,
+  reason = 'Recalage E2E'
+): Promise<void> {
+  await adminApi(session, 'POST', `/api/v1/events/${eventId}/adjustments`, {
+    spaceId,
+    observedCount,
+    reason,
+  });
+}
+
+export async function closeEvent(session: AdminSession, eventId: string) {
+  return adminApi(session, 'POST', `/api/v1/events/${eventId}/close`);
+}
+
+/** `/close` without throwing, so a spec can assert on the refusal itself. */
+export async function tryCloseEvent(
+  session: AdminSession,
+  eventId: string
+): Promise<{ status: number; body: unknown }> {
+  const res = await session.api.fetch(`/api/v1/events/${eventId}/close`, {
+    method: 'POST',
+    headers: { [CSRF_HEADER_NAME]: session.csrfToken },
+  });
+  const text = await res.text();
+  return { status: res.status(), body: text ? JSON.parse(text) : undefined };
+}
+
+export async function forceCloseEvent(session: AdminSession, eventId: string, reason = 'Fermeture forcée E2E') {
+  return adminApi(session, 'POST', `/api/v1/events/${eventId}/force-close`, { reason });
+}
+
+export async function reopenEvent(session: AdminSession, eventId: string, reason = 'Réouverture E2E') {
+  return adminApi(session, 'POST', `/api/v1/events/${eventId}/reopen`, { reason });
+}

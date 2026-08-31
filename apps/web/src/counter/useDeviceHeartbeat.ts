@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEVICE_HEARTBEAT_INTERVAL_MS } from '@paxflux/shared';
 import { apiFetch } from '../api/client.js';
-import { getPendingActionsCount } from '../offline/outbox.js';
+import { getOwnerUnresolvedActionsCount } from '../offline/outbox.js';
+import { currentOwner, observedClosingEpoch } from '../offline/snapshot.js';
 import { CLIENT_APP_VERSION } from '../version.js';
 
 export type HeartbeatState = 'idle' | 'running' | 'session-invalid';
@@ -41,20 +42,52 @@ export function useDeviceHeartbeat(enabled: boolean): HeartbeatState {
 
     const beat = async () => {
       try {
-        const pendingCount = await getPendingActionsCount();
+        // Unresolved, not retryable: a device still holding a refused count
+        // is not drained, and reporting only what the engine can still send
+        // would tell the supervisor otherwise — and let a normal `/close`
+        // through. Scoped to the identity currently paired, so a previous
+        // pairing's stranded queue (visible locally, and a real problem)
+        // cannot block the closing of an event this session has drained.
+        const owner = await currentOwner();
+        if (!owner) {
+          // Nothing is paired — or a pairing is in flight and its
+          // configuration has not arrived. There is no identity to report
+          // as, and reporting as the previous one is exactly the mistake
+          // this guards against.
+          if (!cancelled) timer = setTimeout(beat, DEVICE_HEARTBEAT_INTERVAL_MS);
+          return;
+        }
+
+        const pendingCount = await getOwnerUnresolvedActionsCount(owner);
         // `lastClientSequence` is intentionally omitted: the local model
         // tracks the next sequence to assign, not the last one the server
         // acknowledged, and reporting the former as the latter would tell
         // the supervisor something the client cannot actually vouch for.
         await apiFetch('/api/v1/device/heartbeat', {
           method: 'POST',
-          body: JSON.stringify({ pendingCount, appVersion: CLIENT_APP_VERSION }),
+          body: JSON.stringify({
+            pendingCount,
+            // The cookie authenticates a session; this names the one this
+            // report is about. In a re-pairing window they disagree, and
+            // the server refuses rather than writing one device's pending
+            // count onto another's session.
+            expectedDeviceSessionId: owner.deviceSessionId,
+            // Same fail-closed rule as the batch endpoint: a device that
+            // has not seen the closing transition names nothing, and so
+            // confirms nothing.
+            observedClosingStartedAtMs: await observedClosingEpoch(),
+            appVersion: CLIENT_APP_VERSION,
+          }),
         });
       } catch (err) {
-        const status = typeof err === 'object' && err !== null && 'status' in err ? (err as { status: number }).status : 0;
-        if (status === 401) {
-          // Revoked or expired session: this device is no longer allowed to
-          // report. Stop beating and let the counter lock itself.
+        const problem = typeof err === 'object' && err !== null ? (err as { status?: number; code?: string }) : {};
+        const isRevoked = problem.status === 401;
+        // A 409 on session identity means this device is reporting as a
+        // session the cookie no longer authenticates — a re-pairing whose
+        // configuration never arrived. Continuing to count would build up
+        // taps under an identity the server has already disowned.
+        const isWrongSession = problem.status === 409 && problem.code === 'DEVICE_SESSION_MISMATCH';
+        if (isRevoked || isWrongSession) {
           sessionInvalidRef.current = true;
           if (!cancelled) setState('session-invalid');
           return;

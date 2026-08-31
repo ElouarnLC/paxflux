@@ -5,43 +5,140 @@ import {
   enqueueCountAction,
   enqueueReversalAction,
   getLastCountAction,
-  calculatePendingDelta,
-  triggerFlush,
+  retryRejectedAction,
+  UndoCandidate,
 } from '../offline/outbox.js';
+import {
+  LifecycleMarker,
+  persistAuthoritativeState,
+  persistBootstrap,
+  persistLifecycleStatus,
+  resolveEffectiveStatus,
+} from '../offline/snapshot.js';
+import {
+  forgetConfirmedActionsOfOtherOwners,
+  getConfirmedActions,
+} from '../offline/confirmed-actions.js';
+import { projectPendingActions, projectedSpaceOccupancy } from '../offline/projection.js';
+import {
+  describeOutboxError,
+  isRetryable,
+  needsReconciliation,
+  sameOwner,
+} from '../offline/outbox-state.js';
 import { useSSE } from '../sse/useSSE.js';
 import { useDeviceHeartbeat } from './useDeviceHeartbeat.js';
 import { apiFetch } from '../api/client.js';
 import {
   DeviceBootstrapResponse,
-  CompactEventState,
   Direction,
   EventStatus,
+  ConfirmedActionRecord,
+  OutboxActionOwner,
   OutboxActionRecord,
 } from '@paxflux/shared';
 import {
-  Wifi,
   WifiOff,
   RefreshCw,
   RotateCcw,
   AlertTriangle,
   Lock,
-  Smartphone,
-  ChevronRight,
+  CheckCircle2,
 } from 'lucide-react';
 
+/**
+ * What the operator is actually being told, kept distinct from "the browser
+ * says it has an interface". A device can be `navigator.onLine` and still
+ * hold counts the server has never seen.
+ */
+type SyncStatus = 'revoked' | 'reconciliation' | 'offline' | 'syncing' | 'synced';
+
+/**
+ * Minimal shape of the Screen Wake Lock API, which the configured DOM lib
+ * does not declare. Narrow on purpose: only what this component uses.
+ */
+interface WakeLockSentinelLike {
+  release(): Promise<void>;
+}
+
+function wakeLockApi(): { request(type: 'screen'): Promise<WakeLockSentinelLike> } | null {
+  const candidate = (navigator as Navigator & {
+    wakeLock?: { request(type: 'screen'): Promise<WakeLockSentinelLike> };
+  }).wakeLock;
+  return candidate ?? null;
+}
+
+/**
+ * Names a blocked action for the operator.
+ *
+ * A count made under a previous pairing must NOT be labelled with the
+ * current checkpoint's wording: "ENTRÉE +1" and "→ VIP" describe a specific
+ * door, and a direction only means something relative to the door it was
+ * made at. Showing this door's label on another door's count would misstate
+ * what is waiting to be reconciled.
+ */
+function describeBlockedAction(
+  action: OutboxActionRecord,
+  bootstrap: DeviceBootstrapResponse,
+  owner: OutboxActionOwner | null
+): string {
+  if (action.type === 'reversal') return 'Annulation';
+
+  const isThisPairing = owner !== null && sameOwner(action.owner, owner);
+  if (!isThisPairing) {
+    return action.owner?.checkpointId === bootstrap.checkpoint.id
+      ? 'Comptage d’un appairage précédent de cet appareil'
+      : 'Comptage effectué à une autre porte';
+  }
+
+  return action.direction === 'a_to_b' ? bootstrap.checkpoint.labelAToB : bootstrap.checkpoint.labelBToA;
+}
+
+/**
+ * Haptic confirmation for a tap (SPEC §10.4). Failing is inconsequential —
+ * the count is already recorded — and logging on every tap would be noise,
+ * so the outcome is deliberately not surfaced.
+ */
+function vibrate(pattern: number | number[]): void {
+  if (typeof navigator === 'undefined' || !navigator.vibrate) return;
+  try {
+    navigator.vibrate(pattern);
+  } catch {
+    // Some browsers throw when vibration is disabled by the user.
+  }
+}
+
 export const CounterView: React.FC = () => {
-  const [bootstrap, setBootstrap] = useState<DeviceBootstrapResponse | null>(null);
-  const [serverState, setServerState] = useState<CompactEventState | null>(null);
-  // Most recent lifecycle status pushed over SSE (event-status), so
-  // draft -> live, live -> closing and closing -> closed take effect
-  // immediately without requiring a reload.
-  const [liveStatus, setLiveStatus] = useState<EventStatus | null>(null);
-  const [lastAction, setLastAction] = useState<OutboxActionRecord | null>(null);
+  // The pairing configuration is read live from storage, not held in
+  // component state. Two reasons, both load-bearing: a re-pairing retires
+  // the previous configuration the instant the cookie changes, and every
+  // open tab must stop acting as the old device at that moment — including
+  // one the operator left open on another screen.
+  const storedConfig = useLiveQuery(() => localDb.device_config.get('current'), []);
+  const bootstrap: DeviceBootstrapResponse | null = storedConfig?.bootstrap ?? null;
+  const awaitingConfigurationFor = storedConfig?.bootstrap ? null : (storedConfig?.pendingSessionId ?? null);
+  // The authoritative state and the lifecycle marker are read live from
+  // storage rather than mirrored into React state.
+  //
+  // Every writer — bootstrap, batch response, SSE frame — goes through the
+  // same persistence funnel, so reading the result back is the only way the
+  // screen cannot disagree with what the device actually holds. Mirroring
+  // it into component state is how a stale `live`, restored at startup,
+  // came to shadow a `closing` learnt later from a batch response.
+  const storedSnapshot = useLiveQuery(() => localDb.event_state.get('current'), []);
+  const [lastAction, setLastAction] = useState<UndoCandidate | null>(null);
+  const [confirmedActions, setConfirmedActions] = useState<ConfirmedActionRecord[]>([]);
   const [isUndoing, setIsUndoing] = useState(false);
+  const [undoNotice, setUndoNotice] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-  // Live Dexie query for pending outbox actions count
-  const pendingCount = useLiveQuery(() => localDb.outbox_actions.count(), []) ?? 0;
+  // One live query over the whole outbox: every count the screen needs is
+  // derived from it, so they can never disagree with each other.
+  const outboxActions =
+    useLiveQuery(() => localDb.outbox_actions.orderBy('sequence').toArray(), []) ?? [];
+  const unresolvedCount = outboxActions.length;
+  const retryableCount = outboxActions.filter(isRetryable).length;
+  const blockedActions = outboxActions.filter(needsReconciliation);
 
   // Track online/offline browser state
   useEffect(() => {
@@ -57,14 +154,17 @@ export const CounterView: React.FC = () => {
 
   // Request Screen Wake Lock (Progressive enhancement per SPEC §10.8)
   useEffect(() => {
-    let wakeLock: any = null;
+    let wakeLock: WakeLockSentinelLike | null = null;
     async function requestWakeLock() {
-      if ('wakeLock' in navigator) {
-        try {
-          wakeLock = await (navigator as any).wakeLock.request('screen');
-        } catch {
-          // ignore
-        }
+      const api = wakeLockApi();
+      if (!api) return;
+      try {
+        wakeLock = await api.request('screen');
+      } catch (err) {
+        // Denied by the browser (unsupported, battery saver, no user
+        // gesture). The counter works fine with the screen sleeping, so
+        // this stays a best-effort enhancement rather than an error.
+        console.debug('Screen wake lock refused:', err);
       }
     }
     requestWakeLock();
@@ -78,40 +178,48 @@ export const CounterView: React.FC = () => {
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
-      if (wakeLock) wakeLock.release().catch(() => {});
+      if (wakeLock) {
+        wakeLock.release().catch((err) => console.debug('Wake lock release failed:', err));
+      }
     };
   }, []);
 
-  // Load bootstrap config from cache or server
+  // Startup: the local snapshot first, then the server if it answers.
+  //
+  // The snapshot is one config plus the newest authoritative state this
+  // device ever received, from whichever channel carried it. Restarting
+  // from the state captured at pairing time — as this used to — threw away
+  // everything SSE had said since.
   useEffect(() => {
     async function init() {
-      // Check cache first
-      const cached = await localDb.device_cache.get('bootstrap_config');
-      if (cached?.bootstrap) {
-        setBootstrap(cached.bootstrap);
-        setServerState(cached.lastState || cached.bootstrap.state);
-      }
-
-      // Refresh from server if online
-      if (navigator.onLine) {
-        try {
-          const fresh = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
-          setBootstrap(fresh);
-          setServerState(fresh.state);
-          await localDb.device_cache.put({
-            key: 'bootstrap_config',
-            bootstrap: fresh,
-            lastState: fresh.state,
-            updatedAtMs: Date.now(),
-          });
-        } catch (err) {
-          console.debug('Failed to refresh bootstrap from server:', err);
+      // Always attempt the refresh: `navigator.onLine` says the interface is
+      // up, not that this server is reachable, so gating on it would skip a
+      // refresh that would have worked. A failure just leaves the snapshot
+      // in place, which is exactly the offline behaviour we want.
+      try {
+        const fresh = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
+        // Refused when the response describes an identity this device is no
+        // longer waiting for: a request in flight when a re-pairing happens
+        // comes back describing the *previous* session, and committing it
+        // would undo the handoff.
+        const accepted = await persistBootstrap(fresh);
+        if (!accepted) {
+          console.debug('Bootstrap ignored: it does not describe the pairing this device awaits');
+          return;
         }
+        // A pairing change makes the previous session's remembered counts
+        // none of this device's business: offering to undo one would build
+        // a reversal under the wrong identity.
+        await forgetConfirmedActionsOfOtherOwners({
+          deviceSessionId: fresh.deviceSession.id,
+          eventId: fresh.event.id,
+          checkpointId: fresh.checkpoint.id,
+        });
+        // Nothing to mirror: the live query above picks the refreshed
+        // snapshot up as soon as `persistBootstrap` has written it.
+      } catch (err) {
+        console.debug('Bootstrap refresh failed; running on the local snapshot:', err);
       }
-
-      // Fetch last action for undo
-      const last = await getLastCountAction();
-      setLastAction(last);
     }
 
     init();
@@ -130,39 +238,108 @@ export const CounterView: React.FC = () => {
     // is no longer entitled to.
     enabled: isOnline && !isSessionRevoked,
     onState: (state) => {
-      setServerState(state);
-      localDb.device_cache.put({
-        key: 'last_server_state',
-        lastState: state,
-        updatedAtMs: Date.now(),
-      });
+      // Same persistence funnel as bootstrap and batch responses, so the
+      // stored snapshot is always the newest state whatever delivered it —
+      // and the live query re-renders from it.
+      if (bootstrap) {
+        void persistAuthoritativeState(bootstrap.event.id, state, 'sse').catch((err) => {
+          console.debug('Could not persist the SSE state locally:', err);
+        });
+      }
     },
     onMessage: (message) => {
       if (message.type === 'event-status') {
-        setLiveStatus(message.data.status);
+        // Persisted, so the transition outlives this tab. Carrying its own
+        // server timestamp is what lets it win over a state frame minted
+        // before it but delivered after — they share the same version.
+        void persistLifecycleStatus(
+          message.data.eventId,
+          message.data.status,
+          message.data.timestampMs
+        ).catch((err) => console.debug('Could not persist the lifecycle transition:', err));
       }
     },
   });
 
-  // Calculate optimistic occupancy
-  const [pendingDelta, setPendingDelta] = useState(0);
+  const owner: OutboxActionOwner | null = useMemo(
+    () =>
+      bootstrap
+        ? {
+            deviceSessionId: bootstrap.deviceSession.id,
+            eventId: bootstrap.event.id,
+            checkpointId: bootstrap.checkpoint.id,
+          }
+        : null,
+    [bootstrap]
+  );
 
-  useEffect(() => {
-    async function updateDelta() {
-      if (!bootstrap) return;
-      const isSpaceBLeaf = true; // In our topology, spaceB is typically the counted internal leaf
-      const d = await calculatePendingDelta(bootstrap.checkpoint.spaceAId, bootstrap.checkpoint.spaceBId, isSpaceBLeaf);
-      setPendingDelta(d);
-    }
-    updateDelta();
-  }, [bootstrap, pendingCount]);
+  // Optimistic projection, computed from the real topology rather than an
+  // assumption about it: the endpoints' `kind` comes from the authoritative
+  // state, so a boundary crossing moves the global gauge and an internal
+  // transfer does not.
+  // A stored state belonging to another event describes spaces this
+  // pairing does not have, so it is never read back under it.
+  const snapshotMatchesPairing =
+    storedSnapshot !== undefined &&
+    storedSnapshot !== null &&
+    bootstrap !== null &&
+    storedSnapshot.eventId === bootstrap.event.id;
+  const authoritativeState = snapshotMatchesPairing
+    ? storedSnapshot.state
+    : (bootstrap?.state ?? null);
+  const lifecycle: LifecycleMarker | null =
+    snapshotMatchesPairing &&
+    storedSnapshot.lifecycleStatus !== undefined &&
+    storedSnapshot.lifecycleAtMs !== undefined
+      ? { status: storedSnapshot.lifecycleStatus, atMs: storedSnapshot.lifecycleAtMs }
+      : null;
+  const projection = useMemo(() => {
+    if (!authoritativeState || !bootstrap) return null;
+    // Only actions that can still become server truth are projected.
+    //
+    // A quarantined one belongs to a previous identity and will never be
+    // applied under this checkpoint. A *rejected* one is a refusal the
+    // server has already pronounced: adding it to the gauge would show an
+    // occupancy the server has explicitly declined to record, and it would
+    // stay there indefinitely since nothing retries it. Both are surfaced
+    // in the reconciliation panel instead, where the operator sees the
+    // counting intent without it being mixed into the main figure.
+    const projectable = outboxActions.filter(
+      (a) =>
+        a.sendState !== 'quarantined' &&
+        a.sendState !== 'rejected' &&
+        a.owner?.deviceSessionId === bootstrap.deviceSession.id
+    );
+    return projectPendingActions(
+      authoritativeState,
+      { spaceAId: bootstrap.checkpoint.spaceAId, spaceBId: bootstrap.checkpoint.spaceBId },
+      projectable,
+      confirmedActions
+    );
+    // `outboxActions` is a fresh array on every live-query emission, so the
+    // projection recomputes whenever the outbox actually changes.
+  }, [authoritativeState, bootstrap, outboxActions, confirmedActions]);
 
-  const baseOccupancy = serverState?.eventOccupancy ?? bootstrap?.state.eventOccupancy ?? 0;
-  const displayedOccupancy = baseOccupancy + pendingDelta;
-  const capacity = serverState?.eventCapacity ?? bootstrap?.event.capacity ?? 0;
+  const displayedOccupancy = projection?.projectedEventOccupancy ?? authoritativeState?.eventOccupancy ?? 0;
+  const capacity = authoritativeState?.eventCapacity ?? bootstrap?.event.capacity ?? 0;
   const remaining = capacity - displayedOccupancy;
 
-  const eventStatus = liveStatus ?? serverState?.eventStatus ?? bootstrap?.event.status ?? 'draft';
+  const spaceAOccupancy =
+    authoritativeState && projection && bootstrap
+      ? projectedSpaceOccupancy(authoritativeState, bootstrap.checkpoint.spaceAId, projection)
+      : null;
+  const spaceBOccupancy =
+    authoritativeState && projection && bootstrap
+      ? projectedSpaceOccupancy(authoritativeState, bootstrap.checkpoint.spaceBId, projection)
+      : null;
+
+  // The marker wins only while it is more recent than the state frame in
+  // hand. A device that was offline through `begin-closing` never saw the
+  // transition, and learns of it from the very next state frame instead —
+  // which must not be overridden by the stale `live` marker it restored.
+  const eventStatus: EventStatus = authoritativeState
+    ? resolveEffectiveStatus(authoritativeState, lifecycle)
+    : ((bootstrap?.event.status as EventStatus | undefined) ?? 'draft');
   // Only a `live` event accepts new taps. `closing` still lets a device
   // drain actions already queued in its outbox from before the closing
   // transition (see offline/outbox.ts flushOutbox) — this gate only
@@ -175,21 +352,18 @@ export const CounterView: React.FC = () => {
   // Handle Tap Count
   const handleTap = useCallback(
     async (direction: Direction) => {
-      if (!isCountingAllowed) return;
+      if (!isCountingAllowed || !owner) return;
 
-      // Haptic feedback (SPEC §10.4)
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        try {
-          navigator.vibrate(25);
-        } catch {
-          // ignore
-        }
-      }
-
-      const action = await enqueueCountAction(direction);
-      setLastAction(action);
+      vibrate(25);
+      const action = await enqueueCountAction(direction, owner);
+      setLastAction({
+        source: 'outbox',
+        clientActionId: action.clientActionId,
+        direction,
+        clientCreatedAtMs: action.clientCreatedAtMs,
+      });
     },
-    [isCountingAllowed]
+    [isCountingAllowed, owner]
   );
 
   // Handle Undo
@@ -198,21 +372,67 @@ export const CounterView: React.FC = () => {
 
     setIsUndoing(true);
     try {
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        try {
-          navigator.vibrate([15, 30, 15]);
-        } catch {
-          // ignore
-        }
-      }
+      if (!owner) return;
+      vibrate([15, 30, 15]);
 
-      await enqueueReversalAction(lastAction.clientActionId);
-      const nextLast = await getLastCountAction();
+      const outcome = await enqueueReversalAction(lastAction.clientActionId, owner);
+      if (outcome.kind !== 'refused') {
+        setConfirmedActions(await getConfirmedActions(owner));
+      }
+      if (outcome.kind === 'refused') {
+        // The target is parked for reconciliation: its original will not be
+        // sent under this identity, so a reversal would have nothing valid
+        // to compensate.
+        setUndoNotice(
+          'Ce comptage attend une réconciliation : il ne peut pas être annulé depuis cet appareil.'
+        );
+      } else {
+        setUndoNotice(null);
+      }
+      const nextLast = await getLastCountAction(owner);
       setLastAction(nextLast);
     } finally {
       setIsUndoing(false);
     }
-  }, [lastAction, isUndoing]);
+  }, [lastAction, isUndoing, owner]);
+
+  // Refresh the undo candidate whenever the outbox or the pairing changes,
+  // so the button never offers an action that is gone or no longer ours.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getLastCountAction(owner), getConfirmedActions(owner)])
+      .then(([last, confirmed]) => {
+        if (cancelled) return;
+        setLastAction(last);
+        setConfirmedActions(confirmed);
+      })
+      .catch((err) => console.debug('Could not read the last undoable action:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [owner, unresolvedCount]);
+
+  // Re-queueing notifies the sync engine on its own, so there is nothing to
+  // trigger here beyond the state change itself.
+  const handleRetryBlocked = useCallback(
+    (clientActionId: string) => retryRejectedAction(clientActionId),
+    []
+  );
+
+  // A revoked session outranks everything: nothing this device holds can
+  // move until it is re-paired. Reconciliation comes next, because a
+  // refused count is a standing problem rather than a transient one. Only
+  // then do transport states matter — and "synced" requires an empty
+  // outbox, not merely a browser that thinks it has an interface.
+  const syncStatus: SyncStatus = isSessionRevoked
+    ? 'revoked'
+    : blockedActions.length > 0
+      ? 'reconciliation'
+      : !isOnline || !isConnected
+        ? 'offline'
+        : retryableCount > 0
+          ? 'syncing'
+          : 'synced';
 
   // Capacity Warning Color Calculation
   const capacityPercentage = capacity > 0 ? (displayedOccupancy / capacity) * 100 : 0;
@@ -224,11 +444,28 @@ export const CounterView: React.FC = () => {
   }, [displayedOccupancy, capacity, capacityPercentage]);
 
   if (!bootstrap) {
+    // Deliberately non-operational. When a pairing is in flight but its
+    // configuration has not arrived, the counter says so rather than
+    // falling back to the identity it had before — that identity no longer
+    // matches the cookie this browser holds, and any tap or heartbeat made
+    // under it would be attributed to the wrong device.
     return (
-      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400">
-        <div className="flex flex-col items-center gap-3">
+      <div className="min-h-full flex items-center justify-center bg-slate-950 text-slate-400 p-6">
+        <div className="flex flex-col items-center gap-3 text-center max-w-sm">
           <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
-          <span className="text-sm font-medium">Chargement du compteur...</span>
+          {awaitingConfigurationFor ? (
+            <>
+              <span className="text-sm font-semibold text-slate-200">
+                Appairage en cours — configuration en attente
+              </span>
+              <span className="text-xs text-slate-400 leading-snug">
+                Cet appareil vient d’être appairé mais n’a pas encore reçu sa configuration. Le comptage
+                reprendra dès qu’elle sera disponible. Les comptages déjà enregistrés sont conservés.
+              </span>
+            </>
+          ) : (
+            <span className="text-sm font-medium">Chargement du compteur...</span>
+          )}
         </div>
       </div>
     );
@@ -248,27 +485,33 @@ export const CounterView: React.FC = () => {
             </h1>
           </div>
 
-          {/* Connection / Sync Badge */}
+          {/* Sync badge. Five distinct states, none of them conflating
+              "the browser has an interface" with "the server has my counts". */}
           <div className="flex items-center gap-1.5">
-            {isSessionRevoked ? (
+            {syncStatus === 'revoked' ? (
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-950 border border-rose-500/40 text-rose-300">
                 <Lock className="w-3 h-3" />
                 RÉVOQUÉ
               </span>
-            ) : isOnline && isConnected && pendingCount === 0 ? (
+            ) : syncStatus === 'reconciliation' ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-orange-950 border border-orange-500/50 text-orange-300">
+                <AlertTriangle className="w-3 h-3" />
+                À RÉGULARISER ({blockedActions.length})
+              </span>
+            ) : syncStatus === 'offline' ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-950 border border-rose-500/40 text-rose-300">
+                <WifiOff className="w-3 h-3" />
+                HORS LIGNE{unresolvedCount > 0 ? ` (${unresolvedCount})` : ''}
+              </span>
+            ) : syncStatus === 'syncing' ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-950 border border-amber-500/40 text-amber-300 animate-pulse">
+                <RefreshCw className="w-3 h-3 animate-spin" />
+                SYNC ({retryableCount})
+              </span>
+            ) : (
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
                 <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                 EN LIGNE
-              </span>
-            ) : isOnline && pendingCount > 0 ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-950 border border-amber-500/40 text-amber-300 animate-pulse">
-                <RefreshCw className="w-3 h-3 animate-spin" />
-                SYNC ({pendingCount})
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-950 border border-rose-500/40 text-rose-300">
-                <WifiOff className="w-3 h-3" />
-                HORS LIGNE
               </span>
             )}
           </div>
@@ -289,6 +532,66 @@ export const CounterView: React.FC = () => {
                 d'appairage à un responsable.
               </p>
             </div>
+          </div>
+        ) : null}
+
+        {/* Counts the server refused, or that belong to a previous pairing.
+            They are listed, never dropped: a field counting intent does not
+            disappear to make a badge turn green. There is deliberately no
+            "forget" button — discarding a real count is a supervisor
+            decision with an audit trail, not a tap on a phone. */}
+        {blockedActions.length > 0 ? (
+          <div className="mt-3 p-3 rounded-2xl bg-orange-950/80 border border-orange-500/50 text-orange-100 text-xs">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5" />
+              <div className="min-w-0 flex-1">
+                <p className="font-bold text-orange-50">
+                  {blockedActions.length === 1
+                    ? '1 comptage n’a pas été accepté par le serveur'
+                    : `${blockedActions.length} comptages n’ont pas été acceptés par le serveur`}
+                  {' '}— intervention requise
+                </p>
+                <ul className="mt-2 space-y-1.5">
+                  {blockedActions.map((action) => (
+                    <li
+                      key={action.clientActionId}
+                      className="flex items-start justify-between gap-2 rounded-xl bg-orange-950/60 border border-orange-500/30 px-2.5 py-2"
+                    >
+                      <span className="min-w-0">
+                        <strong className="block text-orange-50">
+                          {describeBlockedAction(action, bootstrap, owner)}
+                        </strong>
+                        <span className="text-orange-200/90 text-[11px] leading-snug">
+                          {describeOutboxError(action.lastErrorCode)}
+                        </span>
+                      </span>
+                      {action.sendState === 'rejected' ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleRetryBlocked(action.clientActionId)}
+                          className="flex-shrink-0 px-2.5 py-1.5 rounded-lg bg-orange-900 hover:bg-orange-800 border border-orange-500/40 text-orange-100 font-bold text-[11px]"
+                        >
+                          Réessayer
+                        </button>
+                      ) : (
+                        // Retrying a quarantined action would send it under
+                        // the identity paired now, which is exactly what the
+                        // quarantine exists to prevent.
+                        <span className="flex-shrink-0 text-[10px] uppercase tracking-wide text-orange-300/80 font-bold">
+                          Superviseur
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {undoNotice ? (
+          <div className="mt-3 p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-200 text-xs">
+            {undoNotice}
           </div>
         ) : null}
 
@@ -338,6 +641,29 @@ export const CounterView: React.FC = () => {
           <span className={`px-2.5 py-0.5 rounded-full ${capacityColor}`}>
             {remaining >= 0 ? `${remaining.toLocaleString('fr-FR')} places restantes` : `Dépassement de ${Math.abs(remaining).toLocaleString('fr-FR')}`}
           </span>
+        </div>
+
+        {/* This door's own two zones, projected the same way. An internal
+            transfer leaves the global gauge above untouched while these two
+            move by −1 and +1, which is the only place that is visible. An
+            `external` endpoint holds no occupancy and is not shown. */}
+        <div className="mt-3 flex items-center justify-center gap-2 text-xs">
+          {spaceAOccupancy !== null ? (
+            <span
+              data-testid="space-a-occupancy"
+              className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono"
+            >
+              {bootstrap.checkpoint.spaceAName} : <strong className="text-white">{spaceAOccupancy}</strong>
+            </span>
+          ) : null}
+          {spaceBOccupancy !== null ? (
+            <span
+              data-testid="space-b-occupancy"
+              className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono"
+            >
+              {bootstrap.checkpoint.spaceBName} : <strong className="text-white">{spaceBOccupancy}</strong>
+            </span>
+          ) : null}
         </div>
       </section>
 
@@ -391,12 +717,13 @@ export const CounterView: React.FC = () => {
               <span>
                 Dernière saisie :{' '}
                 <strong className="text-white">
-                  {lastAction.type === 'count'
-                    ? lastAction.direction === 'a_to_b'
-                      ? bootstrap.checkpoint.labelAToB
-                      : bootstrap.checkpoint.labelBToA
-                    : 'Annulation'}
+                  {lastAction.direction === 'a_to_b'
+                    ? bootstrap.checkpoint.labelAToB
+                    : bootstrap.checkpoint.labelBToA}
                 </strong>
+                {lastAction.source === 'confirmed' ? (
+                  <span className="text-slate-400"> (synchronisée)</span>
+                ) : null}
               </span>
             </>
           ) : (

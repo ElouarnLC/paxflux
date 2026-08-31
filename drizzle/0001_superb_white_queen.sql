@@ -1,0 +1,1 @@
+ALTER TABLE `device_sessions` ADD `drained_for_closing_at_ms` integer;

@@ -133,6 +133,17 @@ export const deviceSessions = sqliteTable('device_sessions', {
   lastPendingCount: integer('last_pending_count').notNull().default(0),
   lastClientSequence: integer('last_client_sequence'),
   appVersion: text('app_version'),
+  /**
+   * The closing epoch (`events.closing_started_at_ms`) this session has
+   * explicitly acknowledged with nothing unresolved left.
+   *
+   * A timestamp comparison would not do: a report prepared before the
+   * transition can arrive after it, and `last_seen_at_ms >=
+   * closing_started_at_ms` would then read it as confirming an epoch the
+   * device knew nothing about. Storing the epoch the device actually named
+   * makes the acknowledgment unambiguous.
+   */
+  drainedForClosingAtMs: integer('drained_for_closing_at_ms'),
 }, (table) => [
   index('idx_device_sessions_event_last_seen').on(table.eventId, table.lastSeenAtMs),
 ]);
