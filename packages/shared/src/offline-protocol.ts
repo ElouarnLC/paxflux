@@ -43,6 +43,16 @@ export const BatchSyncRequestSchema = z.object({
    * the expectation lets the server refuse the whole batch instead.
    */
   expectedDeviceSessionId: z.string().uuid(),
+  /**
+   * The closing epoch this device has seen, echoed back from the last
+   * authoritative state it holds.
+   *
+   * Optional and fail-closed on purpose: absence never confirms anything,
+   * so an older client — or one whose report was prepared before the
+   * transition — simply leaves the event blocked rather than being read as
+   * an acknowledgment of an epoch it knew nothing about.
+   */
+  observedClosingStartedAtMs: z.number().int().positive().nullable().optional(),
   lastSeenEventVersion: z.number().int().optional(),
   pendingCount: z.number().int().nonnegative().optional(),
   appVersion: z.string().max(50).optional(),
@@ -92,13 +102,39 @@ export const CompactEventStateSchema = z.object({
   eventCapacity: z.number().int(),
   spaces: z.array(CompactSpaceStateSchema),
   serverTimeMs: z.number().int().positive(),
+  /**
+   * When the current `closing` phase began, or null outside it.
+   *
+   * Carried in every state frame so a device that was away through the
+   * transition still learns which epoch it must acknowledge before a
+   * normal close can pass.
+   */
+  closingStartedAtMs: z.number().int().positive().nullable(),
 });
 export type CompactEventState = z.infer<typeof CompactEventStateSchema>;
 
-export const BatchSyncResponseSchema = z.object({
-  acknowledged: z.array(ActionAcknowledgmentSchema),
-  state: CompactEventStateSchema,
-});
+export const BatchSyncResponseSchema = z
+  .object({
+    acknowledged: z.array(ActionAcknowledgmentSchema),
+    state: CompactEventStateSchema,
+  })
+  .superRefine((response, ctx) => {
+    // Two verdicts for one action is not an answer, it is a contradiction:
+    // whichever the client applied would be arbitrary, and one of them
+    // could delete a count the other refused.
+    const seen = new Set<string>();
+    for (const ack of response.acknowledged) {
+      if (seen.has(ack.clientActionId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['acknowledged'],
+          message: `Duplicate acknowledgment for ${ack.clientActionId}`,
+        });
+        return;
+      }
+      seen.add(ack.clientActionId);
+    }
+  });
 export type BatchSyncResponse = z.infer<typeof BatchSyncResponseSchema>;
 
 /**

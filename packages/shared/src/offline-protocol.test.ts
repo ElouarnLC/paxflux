@@ -20,6 +20,7 @@ function validState() {
       { id: SPACE_B, name: 'Site', kind: 'leaf', occupancy: 3, capacity: 400 },
     ],
     serverTimeMs: 1_700_000_000_000,
+    closingStartedAtMs: null,
   };
 }
 
@@ -51,6 +52,34 @@ describe('BatchSyncResponseSchema', () => {
     expect(
       BatchSyncResponseSchema.safeParse({ acknowledged: 'applied', state: validState() }).success
     ).toBe(false);
+  });
+
+  it('rejects two verdicts for the same action', () => {
+    // Two answers for one action is a contradiction, not an answer:
+    // whichever the client applied would be arbitrary, and one of them
+    // could delete a count the other refused.
+    const result = BatchSyncResponseSchema.safeParse({
+      acknowledged: [
+        { clientActionId: ACTION_ID, status: 'applied', movementId: 4 },
+        { clientActionId: ACTION_ID, status: 'rejected', errorCode: 'EVENT_NOT_LIVE' },
+      ],
+      state: validState(),
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts distinct acknowledgments in the same response', () => {
+    const other = '44444444-4444-4444-8444-444444444444';
+    const result = BatchSyncResponseSchema.safeParse({
+      acknowledged: [
+        { clientActionId: ACTION_ID, status: 'applied', movementId: 4 },
+        { clientActionId: other, status: 'duplicate' },
+      ],
+      state: validState(),
+    });
+
+    expect(result.success).toBe(true);
   });
 });
 
@@ -91,6 +120,17 @@ describe('CompactEventStateSchema', () => {
   it('rejects an unknown event status', () => {
     expect(CompactEventStateSchema.safeParse({ ...validState(), eventStatus: 'paused' }).success).toBe(
       false
+    );
+  });
+
+  it('requires the closing epoch field, so a device can always name it', () => {
+    // Absent rather than null would leave a device unable to distinguish
+    // "not closing" from "the server did not say", and it must never
+    // confirm a drain on a guess.
+    const { closingStartedAtMs: _omitted, ...withoutEpoch } = validState();
+    expect(CompactEventStateSchema.safeParse(withoutEpoch).success).toBe(false);
+    expect(CompactEventStateSchema.safeParse({ ...validState(), closingStartedAtMs: 1_700_000_000_000 }).success).toBe(
+      true
     );
   });
 

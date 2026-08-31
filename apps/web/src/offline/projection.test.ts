@@ -33,6 +33,7 @@ function stateWith(occupancies: Partial<Record<string, number>> = {}): CompactEv
       { id: TOTAL, name: 'Total', kind: 'aggregate', occupancy: site + vip, capacity: null },
     ],
     serverTimeMs: 1_700_000_000_000,
+    closingStartedAtMs: null,
   };
 }
 

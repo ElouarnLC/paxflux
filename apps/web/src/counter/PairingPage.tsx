@@ -66,8 +66,14 @@ export const PairingPage: React.FC = () => {
             const bootstrap = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
             // Through the same funnel as every other authoritative state,
             // so this new pairing's identity and its state are stored
-            // together and can never describe two different pairings.
-            await persistBootstrap(bootstrap);
+            // together and can never describe two different pairings. The
+            // funnel refuses a response describing an identity this device
+            // is no longer waiting for — a bootstrap in flight when another
+            // pairing happens must not put the retired one back in charge.
+            const accepted = await persistBootstrap(bootstrap);
+            if (!accepted) {
+              console.debug('Bootstrap ignored: it does not describe the pairing this device awaits');
+            }
           } catch (err) {
             console.debug('Bootstrap cache pre-fill failed; the counter will fetch it itself:', err);
           }

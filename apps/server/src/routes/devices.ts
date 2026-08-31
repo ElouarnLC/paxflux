@@ -34,6 +34,7 @@ import {
   ExchangeDeviceInviteError,
 } from '../auth/pairing.js';
 import { requireStaffAuth } from '../auth/staff-sessions.js';
+import { resolveDrainAcknowledgment } from '../domain/events.js';
 
 export async function registerDeviceRoutes(app: FastifyInstance, sqlite: DatabaseSync, db: AppDb, env: Env) {
   // POST /api/v1/device/pair
@@ -138,6 +139,7 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
       eventCapacity: eventRecord.capacity,
       spaces: spacesPayload,
       serverTimeMs: Date.now(),
+      closingStartedAtMs: eventRecord.closingStartedAtMs ?? null,
     };
 
     const response: DeviceBootstrapResponse = {
@@ -221,6 +223,12 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
 
     const now = Date.now();
 
+    const eventRecord = await db
+      .select()
+      .from(events)
+      .where(eq(events.id, deviceSession.eventId))
+      .get();
+
     await db
       .update(deviceSessions)
       .set({
@@ -228,6 +236,11 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
         lastPendingCount: body.pendingCount,
         lastClientSequence: body.lastClientSequence ?? deviceSession.lastClientSequence,
         appVersion: body.appVersion ?? deviceSession.appVersion,
+        // Written with the count it is based on, never separately: a
+        // confirmation that outlived its number would be worse than none.
+        drainedForClosingAtMs: eventRecord
+          ? resolveDrainAcknowledgment(eventRecord, body.observedClosingStartedAtMs, body.pendingCount)
+          : null,
       })
       .where(eq(deviceSessions.id, deviceSession.id));
 

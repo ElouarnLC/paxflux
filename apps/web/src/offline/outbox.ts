@@ -9,7 +9,7 @@ import {
   OUTBOX_LOCAL_ERROR_CODES,
 } from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
-import { currentPairing, persistAuthoritativeState } from './snapshot.js';
+import { currentPairing, observedClosingEpoch, persistAuthoritativeState } from './snapshot.js';
 import { getConfirmedActions, recordConfirmedAction } from './confirmed-actions.js';
 import {
   OutboxTransition,
@@ -164,6 +164,19 @@ export type ReversalOutcome =
  *    Its original will not be sent under this identity, so a reversal would
  *    either target a movement that does not exist or, worse, one made at a
  *    different door.
+ *
+ * Three rules hold for *every* target, queued or confirmed:
+ *
+ *  - the target must belong to the identity asking. Ownership was checked
+ *    for confirmed counts only, which left a queued count made under a
+ *    previous pairing deletable — and deleting one is losing a real count;
+ *  - a target already reversed is refused, whether the existing reversal is
+ *    still queued or the confirmed record is stamped. Two compensating
+ *    movements for one original would take the gauge below the truth;
+ *  - a target that is neither queued nor remembered as confirmed is
+ *    refused. Inventing a reversal towards something unknown produces
+ *    `ORIGINAL_MOVEMENT_NOT_FOUND` at best, and at worst compensates a
+ *    movement this device cannot vouch for.
  */
 export async function enqueueReversalAction(
   targetClientActionId: string,
@@ -187,10 +200,24 @@ export async function enqueueReversalAction(
     localDb.meta,
     localDb.outbox_actions,
     async (): Promise<ReversalOutcome> => {
+      const refused: ReversalOutcome = { kind: 'refused', reason: 'target_not_reconcilable' };
+
+      // Already reversed? Read inside the transaction, so two undos racing
+      // for the same target cannot both find it un-reversed.
+      const existingReversal = await localDb.outbox_actions
+        .filter((row) => row.type === 'reversal' && row.targetClientActionId === targetClientActionId)
+        .first();
+      if (existingReversal) return refused;
+
       const target = await localDb.outbox_actions.get(targetClientActionId);
 
-      if (target && (target.sendState === 'quarantined' || target.sendState === 'rejected')) {
-        return { kind: 'refused', reason: 'target_not_reconcilable' };
+      if (target) {
+        // Ownership first, before anything is deleted or compensated: a
+        // count queued under a previous pairing is not this identity's to
+        // remove, and removing one loses a real count.
+        if (!sameOwner(target.owner, owner)) return refused;
+        if (target.sendState === 'quarantined' || target.sendState === 'rejected') return refused;
+        if (target.type !== 'count') return refused;
       }
 
       // A tap that never left the device: nothing on the server to
@@ -201,18 +228,15 @@ export async function enqueueReversalAction(
       }
 
       // The target may have been acknowledged and deleted already — the
-      // ordinary online case, which must stay undoable (SPEC §11.2). A
-      // confirmed count made under a different identity is refused: its
-      // reversal would be sent as ours.
+      // ordinary online case, which must stay undoable (SPEC §11.2).
       let confirmedToMark: string | null = null;
       if (!target) {
         const confirmed = await localDb.confirmed_actions.get(targetClientActionId);
-        if (confirmed) {
-          if (!sameOwner(confirmed.owner, owner) || confirmed.reversedAtMs !== undefined) {
-            return { kind: 'refused', reason: 'target_not_reconcilable' };
-          }
-          confirmedToMark = targetClientActionId;
-        }
+        // Neither queued nor confirmed: this device has no basis for a
+        // compensating movement, so it does not invent one.
+        if (!confirmed) return refused;
+        if (!sameOwner(confirmed.owner, owner) || confirmed.reversedAtMs !== undefined) return refused;
+        confirmedToMark = targetClientActionId;
       }
 
       const record: OutboxActionRecord = {
@@ -469,6 +493,11 @@ export async function flushOutbox(): Promise<FlushOutcome> {
           // two can disagree, and the server refuses the batch rather than
           // applying one device's counts as another's.
           expectedDeviceSessionId: pairing.owner.deviceSessionId,
+          // The closing epoch this device has seen. A normal close needs
+          // every active session to have named the current one while
+          // reporting nothing unresolved; naming nothing simply never
+          // confirms, which is the safe direction.
+          observedClosingStartedAtMs: await observedClosingEpoch(),
           pendingCount: unresolvedAfterBatch,
           appVersion: CLIENT_APP_VERSION,
         }),

@@ -146,13 +146,36 @@ export function resolveEffectiveStatus(
  * Stores the stable pairing configuration and its state in one step, so a
  * fresh bootstrap can never leave the two describing different pairings.
  */
-export async function persistBootstrap(bootstrap: DeviceBootstrapResponse): Promise<void> {
-  await localDb.device_config.put({
-    key: 'current',
-    bootstrap,
-    updatedAtMs: Date.now(),
+export async function persistBootstrap(bootstrap: DeviceBootstrapResponse): Promise<boolean> {
+  // A bootstrap request in flight when a re-pairing happens comes back
+  // describing the *previous* device session. Committing it would undo the
+  // handoff and put the retired identity back in charge — the very thing
+  // `beginPairingHandoff` exists to prevent — so the commit is conditional
+  // on the response describing the identity this device is currently
+  // waiting for (or already has).
+  const accepted = await localDb.transaction('rw', localDb.device_config, async () => {
+    const config = await localDb.device_config.get('current');
+    const expectedSessionId = config?.pendingSessionId ?? config?.bootstrap?.deviceSession.id ?? null;
+
+    if (expectedSessionId !== null && expectedSessionId !== bootstrap.deviceSession.id) {
+      console.debug(
+        `Ignoring a bootstrap for session ${bootstrap.deviceSession.id}; this device expects ${expectedSessionId}`
+      );
+      return false;
+    }
+
+    await localDb.device_config.put({
+      key: 'current',
+      bootstrap,
+      updatedAtMs: Date.now(),
+    });
+    return true;
   });
-  await persistAuthoritativeState(bootstrap.event.id, bootstrap.state, 'bootstrap');
+
+  if (accepted) {
+    await persistAuthoritativeState(bootstrap.event.id, bootstrap.state, 'bootstrap');
+  }
+  return accepted;
 }
 
 /**
@@ -243,6 +266,18 @@ export async function currentPairing(): Promise<CurrentPairing | null> {
     spaceAId: bootstrap.checkpoint.spaceAId,
     spaceBId: bootstrap.checkpoint.spaceBId,
   };
+}
+
+/**
+ * The closing epoch this device has seen, from the newest authoritative
+ * state it holds, or null if the event is not closing as far as it knows.
+ *
+ * Echoed back on every report. A device that has not seen the transition
+ * names nothing, and so confirms nothing — which is the safe direction.
+ */
+export async function observedClosingEpoch(): Promise<number | null> {
+  const stored = await localDb.event_state.get('current');
+  return stored?.state.closingStartedAtMs ?? null;
 }
 
 /** The identity currently paired on this device, or null if none is. */

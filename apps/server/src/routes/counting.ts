@@ -28,7 +28,7 @@ import {
   applySupervisorAdjustment,
   MovementResult,
 } from '../domain/movements.js';
-import { getCompactEventState } from '../domain/events.js';
+import { getCompactEventState, resolveDrainAcknowledgment } from '../domain/events.js';
 import { calculateAggregateOccupancy } from '../domain/spaces.js';
 import { broadcaster } from '../realtime/broadcaster.js';
 
@@ -78,7 +78,13 @@ export async function registerCountingRoutes(
         );
     }
 
-    const { actions, expectedDeviceSessionId, pendingCount = 0, appVersion } = parseResult.data;
+    const {
+      actions,
+      expectedDeviceSessionId,
+      observedClosingStartedAtMs,
+      pendingCount = 0,
+      appVersion,
+    } = parseResult.data;
 
     // The cookie alone is not proof that this batch belongs to the session
     // now authenticated. During a re-pairing the browser can already hold
@@ -158,13 +164,23 @@ export async function registerCountingRoutes(
     const rejectedCount = acknowledgments.filter((a) => a.status === 'rejected').length;
     const effectivePendingCount = pendingCount + rejectedCount;
 
-    // Update device session status
+    // Re-read the event: applying the batch above may have been the very
+    // thing that drained this device, and the acknowledgment below must be
+    // decided against the state that now holds.
+    const eventAfterBatch = await db.select().from(events).where(eq(events.id, eventId)).get();
+
+    // Update device session status, including the drain acknowledgment this
+    // report earns — written in the same update as the count it is based
+    // on, so a confirmation can never outlive the number behind it.
     await db
       .update(deviceSessions)
       .set({
         lastSeenAtMs: now,
         lastPendingCount: effectivePendingCount,
         appVersion: appVersion || deviceSession.appVersion,
+        drainedForClosingAtMs: eventAfterBatch
+          ? resolveDrainAcknowledgment(eventAfterBatch, observedClosingStartedAtMs, effectivePendingCount)
+          : null,
       })
       .where(eq(deviceSessions.id, deviceSession.id));
 
@@ -183,6 +199,7 @@ export async function registerCountingRoutes(
         eventCapacity: 0,
         spaces: [],
         serverTimeMs: now,
+        closingStartedAtMs: null,
       },
     };
 

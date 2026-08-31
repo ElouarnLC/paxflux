@@ -11,15 +11,33 @@ export interface UnsyncedDevice {
   label: string;
   isOnline: boolean;
   pendingCount: number;
+  /** True when this session has acknowledged the current closing epoch. */
+  confirmedDrainForEpoch: boolean;
 }
 
 /**
- * Active (non-revoked) devices that are either offline or still have
- * unsent actions — SPEC §5.4: a normal `closing -> closed` transition is
- * only allowed once every active device has synced.
+ * Active (non-revoked) devices that have not confirmed being drained for
+ * the closing epoch currently in progress.
+ *
+ * SPEC §5.4 allows a normal `closing -> closed` transition only once every
+ * active device has synced, and "has synced" has to mean something a device
+ * actually said about *this* epoch. Deriving it from the last report — a
+ * device that looked online with nothing pending — is not enough: that
+ * report may predate the closing transition, and everything the device did
+ * afterwards (a last count, a network cut) is invisible in it. A report
+ * that arrives late but was prepared before the transition is the same
+ * problem wearing a fresh `lastSeenAtMs`.
+ *
+ * So the gate reads an acknowledgment the device named explicitly: the
+ * epoch value it echoed back while reporting nothing unresolved. Anything
+ * else — silence, an older epoch, a non-zero count — leaves the device
+ * blocking, and `force-close` remains the deliberate way past it.
  */
 export async function getUnsyncedActiveDevices(db: AppDb, eventId: string): Promise<UnsyncedDevice[]> {
   const now = Date.now();
+  const eventRecord = await db.select().from(events).where(eq(events.id, eventId)).get();
+  const closingStartedAtMs = eventRecord?.closingStartedAtMs ?? null;
+
   const rows = await db
     .select({ device: deviceSessions, checkpoint: checkpoints })
     .from(deviceSessions)
@@ -34,8 +52,33 @@ export async function getUnsyncedActiveDevices(db: AppDb, eventId: string): Prom
       label: device.label,
       isOnline: device.lastSeenAtMs !== null && now - device.lastSeenAtMs <= DEVICE_OFFLINE_THRESHOLD_MS,
       pendingCount: device.lastPendingCount,
+      confirmedDrainForEpoch:
+        closingStartedAtMs !== null && device.drainedForClosingAtMs === closingStartedAtMs,
     }))
-    .filter((d) => !d.isOnline || d.pendingCount > 0);
+    .filter((d) => !d.confirmedDrainForEpoch);
+}
+
+/**
+ * The drain acknowledgment a device report earns, if any.
+ *
+ * Returned rather than written here so the caller can apply it in the same
+ * update as the rest of the report: a confirmation and the count it is
+ * based on must never be stored apart.
+ *
+ * Every report either grants the acknowledgment or clears it. That is
+ * deliberate — a device saying "I still hold something" revokes an earlier
+ * confirmation, and a report that names no epoch (an older client, or one
+ * prepared before the transition) never grants one.
+ */
+export function resolveDrainAcknowledgment(
+  event: { status: string; closingStartedAtMs: number | null },
+  observedClosingStartedAtMs: number | null | undefined,
+  unresolvedCount: number
+): number | null {
+  if (event.status !== 'closing' || event.closingStartedAtMs === null) return null;
+  if (observedClosingStartedAtMs !== event.closingStartedAtMs) return null;
+  if (unresolvedCount !== 0) return null;
+  return event.closingStartedAtMs;
 }
 
 export interface LifecycleValidationError {
@@ -160,5 +203,8 @@ export async function getCompactEventState(db: AppDb, eventId: string): Promise<
     eventCapacity: eventRecord.capacity,
     spaces: spacesPayload,
     serverTimeMs: Date.now(),
+    // Carried in every frame so a device that was away through the
+    // transition still learns which epoch it has to acknowledge.
+    closingStartedAtMs: eventRecord.closingStartedAtMs ?? null,
   };
 }

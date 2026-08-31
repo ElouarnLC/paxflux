@@ -198,7 +198,15 @@ export const CounterView: React.FC = () => {
       // in place, which is exactly the offline behaviour we want.
       try {
         const fresh = await apiFetch<DeviceBootstrapResponse>('/api/v1/device/bootstrap');
-        await persistBootstrap(fresh);
+        // Refused when the response describes an identity this device is no
+        // longer waiting for: a request in flight when a re-pairing happens
+        // comes back describing the *previous* session, and committing it
+        // would undo the handoff.
+        const accepted = await persistBootstrap(fresh);
+        if (!accepted) {
+          console.debug('Bootstrap ignored: it does not describe the pairing this device awaits');
+          return;
+        }
         // A pairing change makes the previous session's remembered counts
         // none of this device's business: offering to undo one would build
         // a reversal under the wrong identity.

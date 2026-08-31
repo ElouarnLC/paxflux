@@ -197,6 +197,73 @@ describe('enqueueReversalAction — confirmed target', () => {
   });
 });
 
+describe('enqueueReversalAction — queued target', () => {
+  it('refuses to touch a queued count made under another identity', async () => {
+    const foreign: OutboxActionOwner = { ...OWNER, deviceSessionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' };
+    const tap = await enqueueCountAction('a_to_b', foreign);
+
+    // Deleting it would lose a real count made at another door, under
+    // another session. Ownership is checked before anything is removed.
+    expect(await enqueueReversalAction(tap.clientActionId, OWNER)).toEqual({
+      kind: 'refused',
+      reason: 'target_not_reconcilable',
+    });
+    expect(await localDb.outbox_actions.get(tap.clientActionId)).toBeDefined();
+    expect(await localDb.outbox_actions.count()).toBe(1);
+  });
+
+  it('deletes an unsent count once and only once under two concurrent undos', async () => {
+    const tap = await enqueueCountAction('a_to_b', OWNER);
+
+    const [a, b] = await Promise.all([
+      enqueueReversalAction(tap.clientActionId, OWNER),
+      enqueueReversalAction(tap.clientActionId, OWNER),
+    ]);
+
+    // It never reached the server, so there is nothing to compensate: the
+    // outcome is a local deletion and no reversal at all.
+    const outcomes = [a.kind, b.kind].sort();
+    expect(outcomes).toEqual(['deleted_locally', 'refused']);
+    expect(await localDb.outbox_actions.count()).toBe(0);
+  });
+
+  it('queues exactly one reversal for an already-attempted count under two concurrent undos', async () => {
+    const tap = await enqueueCountAction('a_to_b', OWNER);
+    // Attempted at least once: the server may hold it, so undo has to be a
+    // compensating movement rather than a local deletion.
+    await localDb.outbox_actions.update(tap.clientActionId, { attempts: 1 });
+
+    const [a, b] = await Promise.all([
+      enqueueReversalAction(tap.clientActionId, OWNER),
+      enqueueReversalAction(tap.clientActionId, OWNER),
+    ]);
+
+    expect([a, b].filter((outcome) => outcome.kind === 'queued')).toHaveLength(1);
+    const reversals = (await localDb.outbox_actions.toArray()).filter((row) => row.type === 'reversal');
+    expect(reversals).toHaveLength(1);
+    expect(reversals[0].type === 'reversal' && reversals[0].targetClientActionId).toBe(tap.clientActionId);
+  });
+
+  it('refuses a second undo of an already-reversed queued count', async () => {
+    const tap = await enqueueCountAction('a_to_b', OWNER);
+    await localDb.outbox_actions.update(tap.clientActionId, { attempts: 1 });
+
+    expect((await enqueueReversalAction(tap.clientActionId, OWNER)).kind).toBe('queued');
+    expect(await enqueueReversalAction(tap.clientActionId, OWNER)).toEqual({
+      kind: 'refused',
+      reason: 'target_not_reconcilable',
+    });
+  });
+
+  it('refuses a target that is neither queued nor confirmed, rather than inventing one', async () => {
+    expect(await enqueueReversalAction('bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb', OWNER)).toEqual({
+      kind: 'refused',
+      reason: 'target_not_reconcilable',
+    });
+    expect(await localDb.outbox_actions.count()).toBe(0);
+  });
+});
+
 describe('getLastCountAction', () => {
   it('offers a queued tap, then stops offering it once undone', async () => {
     const tap = await enqueueCountAction('a_to_b', OWNER);

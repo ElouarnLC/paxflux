@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { DEVICE_HEARTBEAT_INTERVAL_MS } from '@paxflux/shared';
 import { apiFetch } from '../api/client.js';
 import { getOwnerUnresolvedActionsCount } from '../offline/outbox.js';
-import { currentOwner } from '../offline/snapshot.js';
+import { currentOwner, observedClosingEpoch } from '../offline/snapshot.js';
 import { CLIENT_APP_VERSION } from '../version.js';
 
 export type HeartbeatState = 'idle' | 'running' | 'session-invalid';
@@ -72,14 +72,22 @@ export function useDeviceHeartbeat(enabled: boolean): HeartbeatState {
             // the server refuses rather than writing one device's pending
             // count onto another's session.
             expectedDeviceSessionId: owner.deviceSessionId,
+            // Same fail-closed rule as the batch endpoint: a device that
+            // has not seen the closing transition names nothing, and so
+            // confirms nothing.
+            observedClosingStartedAtMs: await observedClosingEpoch(),
             appVersion: CLIENT_APP_VERSION,
           }),
         });
       } catch (err) {
-        const status = typeof err === 'object' && err !== null && 'status' in err ? (err as { status: number }).status : 0;
-        if (status === 401) {
-          // Revoked or expired session: this device is no longer allowed to
-          // report. Stop beating and let the counter lock itself.
+        const problem = typeof err === 'object' && err !== null ? (err as { status?: number; code?: string }) : {};
+        const isRevoked = problem.status === 401;
+        // A 409 on session identity means this device is reporting as a
+        // session the cookie no longer authenticates — a re-pairing whose
+        // configuration never arrived. Continuing to count would build up
+        // taps under an identity the server has already disowned.
+        const isWrongSession = problem.status === 409 && problem.code === 'DEVICE_SESSION_MISMATCH';
+        if (isRevoked || isWrongSession) {
           sessionInvalidRef.current = true;
           if (!cancelled) setState('session-invalid');
           return;

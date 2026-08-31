@@ -246,6 +246,19 @@ export async function closeEvent(session: AdminSession, eventId: string) {
   return adminApi(session, 'POST', `/api/v1/events/${eventId}/close`);
 }
 
+/** `/close` without throwing, so a spec can assert on the refusal itself. */
+export async function tryCloseEvent(
+  session: AdminSession,
+  eventId: string
+): Promise<{ status: number; body: unknown }> {
+  const res = await session.api.fetch(`/api/v1/events/${eventId}/close`, {
+    method: 'POST',
+    headers: { [CSRF_HEADER_NAME]: session.csrfToken },
+  });
+  const text = await res.text();
+  return { status: res.status(), body: text ? JSON.parse(text) : undefined };
+}
+
 export async function forceCloseEvent(session: AdminSession, eventId: string, reason = 'Fermeture forcée E2E') {
   return adminApi(session, 'POST', `/api/v1/events/${eventId}/force-close`, { reason });
 }

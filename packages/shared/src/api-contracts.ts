@@ -209,6 +209,11 @@ export const DeviceHeartbeatRequestSchema = z.object({
    * supervisor the new device is holding counts it never made.
    */
   expectedDeviceSessionId: z.string().uuid(),
+  /**
+   * The closing epoch this device has seen. Same fail-closed rule as the
+   * batch endpoint: absence never confirms a drain.
+   */
+  observedClosingStartedAtMs: z.number().int().positive().nullable().optional(),
   lastClientSequence: z.number().int().nonnegative().optional(),
   appVersion: z.string().max(50).optional(),
 });
