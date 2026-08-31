@@ -174,14 +174,15 @@ export const EventWizard: React.FC = () => {
     checkpointDrafts.every((cp) => cp.name.trim().length > 0 && cp.labelAToB.trim().length > 0 && cp.labelBToA.trim().length > 0 && (cp.allowAToB || cp.allowBToA));
 
   return (
-    <div className="min-h-full bg-slate-950 text-slate-100 flex flex-col p-6 items-center justify-center">
-      <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl">
-        {/* Step Indicator */}
-        <div className="flex items-center justify-between mb-8">
+    <div className="min-h-full bg-slate-950 text-slate-100 flex flex-col p-4 sm:p-6 items-center justify-center">
+      <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-8 shadow-2xl">
+        {/* Step Indicator — the four markers must fit 320px on their own,
+            which is why the step names only appear from `sm` up. */}
+        <div className="flex items-center justify-between gap-1 mb-6 sm:mb-8">
           {[1, 2, 3, 4].map((s) => (
             <div key={s} className="flex items-center gap-2">
               <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
+                className={`w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${
                   step === s
                     ? 'bg-indigo-600 text-white'
                     : step > s
@@ -217,11 +218,13 @@ export const EventWizard: React.FC = () => {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-indigo-500"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* Two columns of ~120px at 320px leaves no room for a capacity
+                and a timezone; they stack until there is. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">Capacité maximale (jauge) *</label>
                 <input
@@ -229,7 +232,7 @@ export const EventWizard: React.FC = () => {
                   min="1"
                   value={capacity}
                   onChange={(e) => setCapacity(parseInt(e.target.value, 10) || 0)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm font-mono focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm font-mono focus:border-indigo-500"
                 />
               </div>
 
@@ -239,7 +242,7 @@ export const EventWizard: React.FC = () => {
                   type="text"
                   value={timezone}
                   onChange={(e) => setTimezone(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
                 />
               </div>
             </div>
@@ -248,7 +251,7 @@ export const EventWizard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setStep(2)}
-                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5"
+                className="min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5"
               >
                 Suivant <ArrowRight className="w-4 h-4" />
               </button>
@@ -271,14 +274,18 @@ export const EventWizard: React.FC = () => {
 
             <div className="space-y-2">
               {internalSpaces.map((s) => (
-                <div key={s.clientId} className="flex gap-2 items-center">
+                // Name, capacity and delete on one 320px row leaves the name
+                // field about 100px wide and pushes the row past the
+                // viewport. The name takes its own line below `sm`, and the
+                // capacity shares the second one with the delete button.
+                <div key={s.clientId} className="flex flex-wrap gap-2 items-center">
                   <input
                     type="text"
                     aria-label="Nom de l'espace intérieur"
                     placeholder="Nom de la zone"
                     value={s.name}
                     onChange={(e) => updateInternalSpace(s.clientId, { name: e.target.value })}
-                    className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                    className="w-full sm:flex-1 min-w-0 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-base md:text-sm text-white"
                   />
                   <input
                     type="number"
@@ -286,14 +293,14 @@ export const EventWizard: React.FC = () => {
                     placeholder="Capacité"
                     value={s.capacity}
                     onChange={(e) => updateInternalSpace(s.clientId, { capacity: e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0 })}
-                    className="w-28 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-mono"
+                    className="flex-1 sm:flex-none sm:w-28 min-w-0 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-base md:text-sm text-white font-mono"
                   />
                   <button
                     type="button"
                     aria-label="Supprimer cet espace"
                     disabled={internalSpaces.length <= 1}
                     onClick={() => removeInternalSpace(s.clientId)}
-                    className="p-2 rounded-xl text-rose-400 hover:bg-rose-950/40 disabled:opacity-30 disabled:cursor-not-allowed"
+                    className="flex-shrink-0 min-h-11 min-w-11 flex items-center justify-center rounded-xl text-rose-400 hover:bg-rose-950/40 disabled:opacity-30 disabled:cursor-not-allowed"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -304,7 +311,7 @@ export const EventWizard: React.FC = () => {
             <button
               type="button"
               onClick={addInternalSpace}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
+              className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
             >
               <Plus className="w-3.5 h-3.5" /> Ajouter un espace intérieur
             </button>
@@ -313,7 +320,7 @@ export const EventWizard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setStep(1)}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
+                className="min-h-11 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
               >
                 <ArrowLeft className="w-4 h-4" /> Retour
               </button>
@@ -321,7 +328,7 @@ export const EventWizard: React.FC = () => {
                 type="button"
                 disabled={!canGoToCheckpoints}
                 onClick={() => setStep(3)}
-                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5"
+                className="min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5"
               >
                 Suivant <ArrowRight className="w-4 h-4" />
               </button>
@@ -339,34 +346,37 @@ export const EventWizard: React.FC = () => {
 
             <div className="space-y-3">
               {checkpointDrafts.map((cp) => (
-                <div key={cp.key} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div key={cp.key} className="p-3 sm:p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
                   <div className="flex gap-2 items-center">
                     <input
                       type="text"
                       aria-label="Nom de la porte"
                       value={cp.name}
                       onChange={(e) => updateCheckpoint(cp.key, { name: e.target.value })}
-                      className="flex-1 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-sm"
+                      className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base md:text-sm"
                     />
                     <button
                       type="button"
                       aria-label="Supprimer cette porte"
                       disabled={checkpointDrafts.length <= 1}
                       onClick={() => removeCheckpoint(cp.key)}
-                      className="p-2 rounded-xl text-rose-400 hover:bg-rose-950/40 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="flex-shrink-0 min-h-11 min-w-11 flex items-center justify-center rounded-xl text-rose-400 hover:bg-rose-950/40 disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
+                  {/* Two endpoint selectors, then two direction labels: each
+                      pair collapses to one column when two would be too
+                      narrow to read the space names in. */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[10px] font-semibold text-slate-500 mb-1">Espace A</label>
                       <select
                         aria-label="Espace A"
                         value={cp.spaceAClientId}
                         onChange={(e) => updateCheckpoint(cp.key, { spaceAClientId: e.target.value })}
-                        className="w-full px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs"
+                        className="w-full min-w-0 min-h-11 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base md:text-xs"
                       >
                         {allSpaceOptions.map((opt) => (
                           <option key={opt.clientId} value={opt.clientId}>
@@ -381,7 +391,7 @@ export const EventWizard: React.FC = () => {
                         aria-label="Espace B"
                         value={cp.spaceBClientId}
                         onChange={(e) => updateCheckpoint(cp.key, { spaceBClientId: e.target.value })}
-                        className="w-full px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs"
+                        className="w-full min-w-0 min-h-11 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-base md:text-xs"
                       >
                         {allSpaceOptions.map((opt) => (
                           <option key={opt.clientId} value={opt.clientId}>
@@ -392,10 +402,11 @@ export const EventWizard: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="flex items-center gap-1.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="flex items-center gap-2">
                       <input
                         type="checkbox"
+                        className="w-5 h-5 flex-shrink-0"
                         aria-label="Sens A vers B activé"
                         checked={cp.allowAToB}
                         onChange={(e) => updateCheckpoint(cp.key, { allowAToB: e.target.checked })}
@@ -406,12 +417,13 @@ export const EventWizard: React.FC = () => {
                         value={cp.labelAToB}
                         onChange={(e) => updateCheckpoint(cp.key, { labelAToB: e.target.value })}
                         placeholder={`${spaceName(cp.spaceAClientId)} → ${spaceName(cp.spaceBClientId)}`}
-                        className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs"
+                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-base md:text-xs"
                       />
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-2">
                       <input
                         type="checkbox"
+                        className="w-5 h-5 flex-shrink-0"
                         aria-label="Sens B vers A activé"
                         checked={cp.allowBToA}
                         onChange={(e) => updateCheckpoint(cp.key, { allowBToA: e.target.checked })}
@@ -422,7 +434,7 @@ export const EventWizard: React.FC = () => {
                         value={cp.labelBToA}
                         onChange={(e) => updateCheckpoint(cp.key, { labelBToA: e.target.value })}
                         placeholder={`${spaceName(cp.spaceBClientId)} → ${spaceName(cp.spaceAClientId)}`}
-                        className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs"
+                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-base md:text-xs"
                       />
                     </div>
                   </div>
@@ -433,7 +445,7 @@ export const EventWizard: React.FC = () => {
             <button
               type="button"
               onClick={addCheckpoint}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
+              className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
             >
               <Plus className="w-3.5 h-3.5" /> Ajouter une porte
             </button>
@@ -442,7 +454,7 @@ export const EventWizard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setStep(2)}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
+                className="min-h-11 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
               >
                 <ArrowLeft className="w-4 h-4" /> Retour
               </button>
@@ -450,7 +462,7 @@ export const EventWizard: React.FC = () => {
                 type="button"
                 disabled={!canCreate}
                 onClick={() => setStep(4)}
-                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5"
+                className="min-h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5"
               >
                 Suivant <ArrowRight className="w-4 h-4" />
               </button>
@@ -469,14 +481,14 @@ export const EventWizard: React.FC = () => {
 
             <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-3">
               <p>
-                Événement : <strong className="text-white">{name}</strong> (Capacité : {capacity})
+                Événement : <strong className="text-white break-words">{name}</strong> (Capacité : {capacity})
               </p>
 
               <div>
                 <p className="text-emerald-400 font-semibold mb-1">Espaces ({allSpaceOptions.length})</p>
                 <ul className="space-y-0.5">
                   {allSpaceOptions.map((s) => (
-                    <li key={s.clientId} className="text-slate-300">
+                    <li key={s.clientId} className="text-slate-300 break-words">
                       • {s.name}
                     </li>
                   ))}
@@ -487,7 +499,7 @@ export const EventWizard: React.FC = () => {
                 <p className="text-indigo-400 font-semibold mb-1">Checkpoints ({checkpointDrafts.length})</p>
                 <ul className="space-y-0.5">
                   {checkpointDrafts.map((cp) => (
-                    <li key={cp.key} className="text-slate-300">
+                    <li key={cp.key} className="text-slate-300 break-words">
                       • {cp.name} — {spaceName(cp.spaceAClientId)} ⇄ {spaceName(cp.spaceBClientId)}
                       {cp.allowAToB ? ` (${cp.labelAToB})` : ''}
                       {cp.allowBToA ? ` / (${cp.labelBToA})` : ''}
@@ -501,7 +513,7 @@ export const EventWizard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setStep(3)}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
+                className="min-h-11 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
               >
                 <ArrowLeft className="w-4 h-4" /> Retour
               </button>
@@ -509,7 +521,7 @@ export const EventWizard: React.FC = () => {
                 type="button"
                 disabled={loading}
                 onClick={handleCreateEvent}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-950/60"
+                className="min-h-11 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-950/60"
               >
                 <CheckCircle className="w-4 h-4" />
                 Créer l'événement (brouillon)

@@ -304,7 +304,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
       .poll(async () => spaceOccupancy(session, topo.eventId, topo.siteSpaceId), { timeout: 30_000 })
       .toBe(1);
     await waitForOutbox(page, (rows) => rows.length === 0);
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('1');
+    await expect(page.getByTestId('global-occupancy')).toHaveText('1');
 
     // SPEC §11.2: the operator can still take it back. Before this, the
     // acknowledgment that removed the action also removed the undo.
@@ -316,11 +316,11 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
       .poll(async () => spaceOccupancy(session, topo.eventId, topo.siteSpaceId), { timeout: 30_000 })
       .toBe(0);
     await waitForOutbox(page, (rows) => rows.length === 0);
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('0', { timeout: 15_000 });
+    await expect(page.getByTestId('global-occupancy')).toHaveText('0', { timeout: 15_000 });
 
     // And exactly once: the gauge settles at 0 rather than oscillating.
     await page.waitForTimeout(3_000);
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('0');
+    await expect(page.getByTestId('global-occupancy')).toHaveText('0');
     expect(await readOutbox(page)).toHaveLength(0);
   });
 
@@ -511,13 +511,13 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     expect((record?.state as { eventOccupancy: number }).eventOccupancy).toBe(0);
 
     // And nothing of A's is on screen.
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('0', { timeout: 15_000 });
+    await expect(page.getByTestId('global-occupancy')).toHaveText('0', { timeout: 15_000 });
 
     await page.unroute('**/api/v1/**');
     // The real pairing still works afterwards.
     await page.goto(`/pair#${tokenB}`);
     await page.waitForURL('**/counter');
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('0');
+    await expect(page.getByTestId('global-occupancy')).toHaveText('0');
   });
 
   test('le shell est réellement servi hors ligne par le service worker enregistré', async ({ page }) => {
@@ -561,6 +561,6 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
 
     // The shell boots from the precache and the counter restarts from its
     // local snapshot.
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('1', { timeout: 20_000 });
+    await expect(page.getByTestId('global-occupancy')).toHaveText('1', { timeout: 20_000 });
   });
 });

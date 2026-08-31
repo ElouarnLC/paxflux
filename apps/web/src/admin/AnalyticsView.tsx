@@ -41,63 +41,66 @@ export const AnalyticsView: React.FC = () => {
   }
 
   return (
-    <div className="min-h-full bg-slate-950 text-slate-100 p-6 max-w-6xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="min-h-full bg-slate-950 text-slate-100 p-4 sm:p-6 w-full max-w-6xl mx-auto space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row-reverse sm:items-center sm:justify-between gap-1 sm:gap-3">
+        <h1 className="text-lg sm:text-xl font-bold text-white break-words">Statistiques & Analyse de Flux</h1>
         <Link
           to="/admin"
-          className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+          className="inline-flex items-center gap-2 self-start min-h-11 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" /> Retour au tableau de bord
+          <ArrowLeft className="w-4 h-4 flex-shrink-0" /> Retour au tableau de bord
         </Link>
-        <h1 className="text-xl font-bold text-white">Statistiques & Analyse de Flux</h1>
       </div>
 
-      {/* 1. Key Performance Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
+      {/* 1. Key Performance Stats Cards. Two columns at 320px gives each
+          card about 130px, which is not enough for "Pic de Fréquentation"
+          above a five-figure number — so the pair only forms once there is
+          room for it. */}
+      <div className="grid grid-cols-1 min-[400px]:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+        <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">
             Jauge Actuelle
           </span>
-          <span className="text-3xl font-black font-mono text-white">
+          <span className="text-2xl sm:text-3xl font-black font-mono break-words text-white">
             {data.currentOccupancy} <span className="text-sm font-normal text-slate-500">/ {data.capacity}</span>
           </span>
         </div>
 
-        <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
+        <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">
             Pic de Fréquentation
           </span>
-          <span className="text-3xl font-black font-mono text-indigo-400">{data.peakOccupancy}</span>
+          <span className="text-2xl sm:text-3xl font-black font-mono break-words text-indigo-400">{data.peakOccupancy}</span>
           <span className="text-[11px] text-slate-500 block mt-0.5">
             {data.peakOccupancyTimeMs ? new Date(data.peakOccupancyTimeMs).toLocaleTimeString('fr-FR') : '—'}
           </span>
         </div>
 
-        <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
+        <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">
             Entrées Cumulées
           </span>
-          <span className="text-3xl font-black font-mono text-emerald-400">+{data.totalEntries}</span>
+          <span className="text-2xl sm:text-3xl font-black font-mono break-words text-emerald-400">+{data.totalEntries}</span>
           <span className="text-[11px] text-slate-500 block mt-0.5">depuis l'extérieur</span>
         </div>
 
-        <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
+        <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">
             Sorties Cumulées
           </span>
-          <span className="text-3xl font-black font-mono text-rose-400">−{data.totalExits}</span>
+          <span className="text-2xl sm:text-3xl font-black font-mono break-words text-rose-400">−{data.totalExits}</span>
           <span className="text-[11px] text-slate-500 block mt-0.5">vers l'extérieur</span>
         </div>
       </div>
 
       {/* 2. Checkpoint Breakdown Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
         <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">
           Flux Cumulés par Porte
         </h2>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
+          <table className="w-full min-w-[30rem] text-left text-xs text-slate-300">
             <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
               <tr>
                 <th className="py-3 px-4">Porte</th>

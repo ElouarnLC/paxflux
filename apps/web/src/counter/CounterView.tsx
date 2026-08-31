@@ -472,22 +472,36 @@ export const CounterView: React.FC = () => {
   }
 
   return (
-    <div className="min-h-full flex flex-col bg-slate-950 text-slate-100 select-none pb-safe">
+    // `min-h-dvh`, not `min-h-full`: a percentage height chains up to the
+    // initial containing block, which on mobile is the viewport *without*
+    // the browser chrome — so the counter was taller than the screen for as
+    // long as the address bar was showing, which is exactly when the
+    // operator arrives. `select-none` lives on the tap surfaces below now,
+    // not on the document, and `safe-x` keeps the layout clear of a
+    // landscape cutout.
+    <div className="min-h-dvh flex flex-col bg-slate-950 text-slate-100 safe-x">
       {/* 1. Header: Event, Checkpoint, Connection State */}
-      <header className="px-5 pt-4 pb-3 border-b border-slate-900 bg-slate-950/80 backdrop-blur sticky top-0 z-20">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">
+      <header className="px-4 pb-3 safe-top border-b border-slate-900 bg-slate-950/80 backdrop-blur sticky top-0 z-20">
+        {/* The top padding lives here rather than on <header> so `safe-top`
+            can add the display-cutout inset on top of it instead of
+            replacing it. */}
+        <div className="pt-3 flex items-start justify-between gap-2">
+          {/* `min-w-0` is what lets the two clamps below actually clamp: a
+              flex item defaults to its content's minimum width, so a long
+              door name would otherwise push the sync badge off the screen
+              rather than wrap. */}
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold truncate">
               {bootstrap.event.name}
             </p>
-            <h1 className="text-xl font-black text-white tracking-tight">
+            <h1 className="text-base sm:text-xl font-black text-white tracking-tight leading-tight line-clamp-2">
               {bootstrap.checkpoint.name}
             </h1>
           </div>
 
           {/* Sync badge. Five distinct states, none of them conflating
               "the browser has an interface" with "the server has my counts". */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-shrink-0">
             {syncStatus === 'revoked' ? (
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-950 border border-rose-500/40 text-rose-300">
                 <Lock className="w-3 h-3" />
@@ -569,7 +583,7 @@ export const CounterView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => void handleRetryBlocked(action.clientActionId)}
-                          className="flex-shrink-0 px-2.5 py-1.5 rounded-lg bg-orange-900 hover:bg-orange-800 border border-orange-500/40 text-orange-100 font-bold text-[11px]"
+                          className="flex-shrink-0 min-h-11 min-w-11 px-3 py-1.5 rounded-lg bg-orange-900 hover:bg-orange-800 border border-orange-500/40 text-orange-100 font-bold text-[11px]"
                         >
                           Réessayer
                         </button>
@@ -624,21 +638,26 @@ export const CounterView: React.FC = () => {
       </header>
 
       {/* 2. Global Occupancy Readout */}
-      <section className="px-5 py-4 text-center">
-        <div className="text-xs uppercase tracking-widest text-slate-400 font-bold mb-1">
+      <section className="px-4 py-3 text-center">
+        <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-0.5">
           Jauge Globale
         </div>
-        <div className="flex items-baseline justify-center gap-2 font-mono">
-          <span className="text-5xl font-black text-white tracking-tight">
+        {/* Six-figure gauges exist. The pair wraps rather than widening the
+            document, and the capacity drops to its own line if it must. */}
+        <div className="flex flex-wrap items-baseline justify-center gap-x-2 font-mono leading-none">
+          <span
+            data-testid="global-occupancy"
+            className="text-4xl sm:text-5xl font-black text-white tracking-tight"
+          >
             {displayedOccupancy.toLocaleString('fr-FR')}
           </span>
-          <span className="text-xl font-bold text-slate-400">
+          <span className="text-lg sm:text-xl font-bold text-slate-400">
             / {capacity.toLocaleString('fr-FR')}
           </span>
         </div>
 
-        <div className="mt-2 inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border transition-colors duration-300">
-          <span className={`px-2.5 py-0.5 rounded-full ${capacityColor}`}>
+        <div className="mt-2 flex justify-center">
+          <span className={`inline-block max-w-full px-2.5 py-0.5 rounded-full border text-xs font-semibold ${capacityColor}`}>
             {remaining >= 0 ? `${remaining.toLocaleString('fr-FR')} places restantes` : `Dépassement de ${Math.abs(remaining).toLocaleString('fr-FR')}`}
           </span>
         </div>
@@ -646,36 +665,53 @@ export const CounterView: React.FC = () => {
         {/* This door's own two zones, projected the same way. An internal
             transfer leaves the global gauge above untouched while these two
             move by −1 and +1, which is the only place that is visible. An
-            `external` endpoint holds no occupancy and is not shown. */}
-        <div className="mt-3 flex items-center justify-center gap-2 text-xs">
+            `external` endpoint holds no occupancy and is not shown.
+
+            Zone names are as long as staff make them, so each badge takes
+            at most half the row and truncates its name — the number, which
+            is the point of the badge, always stays readable. */}
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
           {spaceAOccupancy !== null ? (
             <span
               data-testid="space-a-occupancy"
-              className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono"
+              className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono inline-flex items-baseline gap-1"
             >
-              {bootstrap.checkpoint.spaceAName} : <strong className="text-white">{spaceAOccupancy}</strong>
+              {/* Only the zone name gives way. The occupancy is the reason
+                  the badge exists, so it never truncates. */}
+              <span className="min-w-0 truncate">{bootstrap.checkpoint.spaceAName}</span>
+              <strong className="flex-shrink-0 text-white">{spaceAOccupancy}</strong>
             </span>
           ) : null}
           {spaceBOccupancy !== null ? (
             <span
               data-testid="space-b-occupancy"
-              className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono"
+              className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono inline-flex items-baseline gap-1"
             >
-              {bootstrap.checkpoint.spaceBName} : <strong className="text-white">{spaceBOccupancy}</strong>
+              {/* Only the zone name gives way. The occupancy is the reason
+                  the badge exists, so it never truncates. */}
+              <span className="min-w-0 truncate">{bootstrap.checkpoint.spaceBName}</span>
+              <strong className="flex-shrink-0 text-white">{spaceBOccupancy}</strong>
             </span>
           ) : null}
         </div>
       </section>
 
-      {/* 3. Primary Count Action Buttons (120–180px height per SPEC §10.3) */}
-      <main className="flex-1 px-5 flex flex-col gap-4 justify-center">
+      {/* 3. Primary Count Action Buttons (120–180px height per SPEC §10.3).
+          The buttons grow into whatever height is left rather than being
+          fixed: 120px is the floor the SPEC sets, 180px the ceiling that
+          keeps a tablet from showing two slabs, and between the two they
+          absorb the difference between a 568px screen and a 915px one — so
+          both actions stay on screen at the small end without shrinking
+          below the size a thumb needs. */}
+      <main className="flex-1 px-4 pb-3 flex flex-col gap-3 justify-center">
         {/* Entry / A -> B Button */}
         {bootstrap.checkpoint.allowAToB ? (
           <button
             type="button"
+            data-testid="count-a-to-b"
             disabled={!isCountingAllowed}
             onClick={() => handleTap('a_to_b')}
-            className={`w-full h-36 md:h-44 rounded-3xl font-black text-3xl tracking-wide flex flex-col items-center justify-center gap-1 shadow-2xl transition-transform active:scale-95 touch-manipulation select-none ${
+            className={`w-full flex-1 min-h-[120px] max-h-[180px] px-3 rounded-3xl font-black text-2xl sm:text-3xl tracking-wide flex flex-col items-center justify-center gap-1 text-center break-words shadow-2xl transition-transform active:scale-95 touch-manipulation select-none ${
               isCountingAllowed
                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/60 border-2 border-emerald-400/40 active:bg-emerald-700'
                 : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
@@ -692,9 +728,10 @@ export const CounterView: React.FC = () => {
         {bootstrap.checkpoint.allowBToA ? (
           <button
             type="button"
+            data-testid="count-b-to-a"
             disabled={!isCountingAllowed}
             onClick={() => handleTap('b_to_a')}
-            className={`w-full h-36 md:h-44 rounded-3xl font-black text-3xl tracking-wide flex flex-col items-center justify-center gap-1 shadow-2xl transition-transform active:scale-95 touch-manipulation select-none ${
+            className={`w-full flex-1 min-h-[120px] max-h-[180px] px-3 rounded-3xl font-black text-2xl sm:text-3xl tracking-wide flex flex-col items-center justify-center gap-1 text-center break-words shadow-2xl transition-transform active:scale-95 touch-manipulation select-none ${
               isCountingAllowed
                 ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-950/60 border-2 border-rose-400/40 active:bg-rose-700'
                 : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
@@ -708,40 +745,44 @@ export const CounterView: React.FC = () => {
         ) : null}
       </main>
 
-      {/* 4. Footer: Last Action Feedback & Undo */}
-      <footer className="px-5 py-4 border-t border-slate-900 bg-slate-950/90 flex items-center justify-between">
-        <div className="text-xs text-slate-300 flex items-center gap-2">
-          {lastAction ? (
-            <>
-              <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping"></span>
-              <span>
-                Dernière saisie :{' '}
-                <strong className="text-white">
-                  {lastAction.direction === 'a_to_b'
-                    ? bootstrap.checkpoint.labelAToB
-                    : bootstrap.checkpoint.labelBToA}
-                </strong>
-                {lastAction.source === 'confirmed' ? (
-                  <span className="text-slate-400"> (synchronisée)</span>
-                ) : null}
-              </span>
-            </>
-          ) : (
-            <span className="text-slate-400">Aucune saisie récente</span>
-          )}
-        </div>
+      {/* 4. Footer: Last Action Feedback & Undo. `safe-bottom` adds the
+          home-indicator inset underneath the footer's own padding, which is
+          why that padding sits on the inner row rather than on <footer>. */}
+      <footer className="px-4 pt-3 safe-bottom border-t border-slate-900 bg-slate-950/90">
+        <div className="pb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0 flex-1 text-xs text-slate-300 flex items-center gap-2">
+            {lastAction ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping flex-shrink-0"></span>
+                <span className="min-w-0 break-words">
+                  Dernière saisie :{' '}
+                  <strong className="text-white">
+                    {lastAction.direction === 'a_to_b'
+                      ? bootstrap.checkpoint.labelAToB
+                      : bootstrap.checkpoint.labelBToA}
+                  </strong>
+                  {lastAction.source === 'confirmed' ? (
+                    <span className="text-slate-400"> (synchronisée)</span>
+                  ) : null}
+                </span>
+              </>
+            ) : (
+              <span className="text-slate-400">Aucune saisie récente</span>
+            )}
+          </div>
 
-        {lastAction && isCountingAllowed ? (
-          <button
-            type="button"
-            disabled={isUndoing}
-            onClick={handleUndo}
-            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-slate-700 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-lg active:scale-95 transition-all"
-          >
-            <RotateCcw className={`w-3.5 h-3.5 ${isUndoing ? 'animate-spin' : ''}`} />
-            ANNULER
-          </button>
-        ) : null}
+          {lastAction && isCountingAllowed ? (
+            <button
+              type="button"
+              disabled={isUndoing}
+              onClick={handleUndo}
+              className="flex-shrink-0 min-h-11 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-slate-700 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-lg active:scale-95 transition-all"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isUndoing ? 'animate-spin' : ''}`} />
+              ANNULER
+            </button>
+          ) : null}
+        </div>
       </footer>
     </div>
   );

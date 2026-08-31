@@ -84,7 +84,7 @@ test.describe('Wizard de création d\'événement', () => {
     // page-wide text search would also match the old one inside the
     // <select> options) — and its lifecycle controls must offer the
     // draft -> live "Démarrer" action, not "Débuter la fermeture".
-    await expect(page.locator('p.text-2xl.font-black')).toHaveText('Nouveau Brouillon À Revoir');
+    await expect(page.getByTestId('dashboard-event-name')).toHaveText('Nouveau Brouillon À Revoir');
     await expect(page.getByRole('button', { name: /Démarrer l'événement/i })).toBeVisible();
   });
 
@@ -125,7 +125,7 @@ test.describe('Wizard de création d\'événement', () => {
     await page.getByRole('button', { name: /Créer l'événement/i }).click();
 
     await page.waitForURL(/\/admin\?event=/);
-    await expect(page.locator('p.text-2xl.font-black')).toHaveText('Festival Test');
+    await expect(page.getByTestId('dashboard-event-name')).toHaveText('Festival Test');
     await expect(page.getByRole('button', { name: /Démarrer l'événement/i })).toBeVisible();
 
     const eventId = new URL(page.url()).searchParams.get('event')!;

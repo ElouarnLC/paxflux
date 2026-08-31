@@ -4,4 +4,45 @@
   * {
     -webkit-tap-highlight-color: transparent;
   }
+
+  /*
+   * One visible keyboard indicator for the whole application.
+   *
+   * Several controls used to carry `focus:outline-none` with nothing in its
+   * place, which makes the interface unusable without a pointer. The rule
+   * lives here rather than being repeated per component so a control cannot
+   * be added without one; `:focus-visible` means a mouse click on a button
+   * still does not draw a ring, while Tab always does.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-indigo-400);
+    outline-offset: 2px;
+  }
+}
+
+/*
+ * Display-cutout padding, paired with `viewport-fit=cover` in index.html.
+ *
+ * These are the whole of the safe-area implementation: before them the
+ * counter carried a `pb-safe` class that no rule ever defined, so it looked
+ * like the home indicator was accounted for while nothing was.
+ *
+ * They set padding outright, so they go on wrappers that declare no padding
+ * of their own — the counter root, its header, its footer — and the inner
+ * content keeps its own spacing. Combining one of them with `p*-4` on the
+ * same element would silently drop that spacing instead of adding to it.
+ */
+@layer utilities {
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .safe-x {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
 }

@@ -62,12 +62,12 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     await page.waitForURL('**/counter');
 
     // The device bootstraps at occupancy 0 and caches that snapshot.
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('0');
+    await expect(page.getByTestId('global-occupancy')).toHaveText('0');
 
     // The authoritative state then moves to 5 through a supervisor
     // adjustment, which reaches this device over SSE only.
     await adjustSpaceOccupancy(session, topo.eventId, topo.siteSpaceId, 5);
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('5', { timeout: 10_000 });
+    await expect(page.getByTestId('global-occupancy')).toHaveText('5', { timeout: 10_000 });
 
     // Restart with the API unreachable. Cutting the API rather than the
     // whole network keeps this test on its subject — which local snapshot
@@ -81,7 +81,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     // which was written once at bootstrap time and never refreshed: SSE
     // persists its state under a *different* key (`last_server_state`).
     // So the screen restarts from the stale 0 instead of the latest 5.
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('5', { timeout: 10_000 });
+    await expect(page.getByTestId('global-occupancy')).toHaveText('5', { timeout: 10_000 });
   });
 
   test('une action rejetée n’est pas renvoyée en boucle au serveur', async ({ page }) => {
@@ -245,7 +245,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
 
     await page.goto(`/pair#${token}`);
     await page.waitForURL('**/counter');
-    await expect(page.locator('span.text-5xl.font-black')).toHaveText('0');
+    await expect(page.getByTestId('global-occupancy')).toHaveText('0');
 
     const owner = await page.evaluate(async () => {
       const res = await fetch('/api/v1/device/bootstrap', { credentials: 'include' });

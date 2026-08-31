@@ -48,8 +48,8 @@ export const SetupPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-full flex items-center justify-center p-6 bg-slate-950 text-slate-100">
-      <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl">
+    <div className="min-h-full flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100">
+      <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
         <div className="w-14 h-14 rounded-2xl bg-indigo-950/80 border border-indigo-500/30 flex items-center justify-center mx-auto mb-6 text-indigo-400">
           <ShieldCheck className="w-8 h-8" />
         </div>
@@ -75,7 +75,7 @@ export const SetupPage: React.FC = () => {
               value={setupToken}
               onChange={(e) => setSetupToken(e.target.value)}
               placeholder="f5aa4d232bc..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-base md:text-sm focus:border-indigo-500 transition-colors"
             />
           </div>
 
@@ -85,7 +85,7 @@ export const SetupPage: React.FC = () => {
               type="text"
               value={instanceName}
               onChange={(e) => setInstanceName(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-indigo-500"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
             />
           </div>
 
@@ -96,7 +96,7 @@ export const SetupPage: React.FC = () => {
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-indigo-500"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
             />
           </div>
 
@@ -108,7 +108,7 @@ export const SetupPage: React.FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-indigo-500"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
             />
           </div>
 
@@ -120,14 +120,14 @@ export const SetupPage: React.FC = () => {
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-indigo-500"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-base md:text-sm focus:border-indigo-500"
             />
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-6 py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold text-sm shadow-lg shadow-indigo-950/60 transition-all flex items-center justify-center gap-2"
+            className="w-full min-h-11 mt-6 py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold text-sm shadow-lg shadow-indigo-950/60 transition-all flex items-center justify-center gap-2"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
             Créer le compte et démarrer

@@ -2,105 +2,138 @@ import { test, expect, Page } from '@playwright/test';
 import {
   ADMIN_USERNAME,
   ADMIN_PASSWORD,
+  AdminSession,
   getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
+  createLongNamedTopology,
   createDeviceInviteToken,
+  startEvent,
+  LongNamedTopology,
+  LONG_FIXTURE_NAMES,
 } from './helpers.js';
-
-async function assertNoHorizontalOverflow(page: Page, label: string) {
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-
-  expect(
-    scrollWidth,
-    `${label}: document.documentElement.scrollWidth (${scrollWidth}) exceeds clientWidth (${clientWidth}) — horizontal overflow at this viewport`
-  ).toBeLessThanOrEqual(clientWidth + 1);
-}
+import { assertScreenFitsViewport } from './responsive-helpers.js';
 
 /**
- * document.documentElement.scrollWidth alone can be gamed: slapping
- * `overflow-x: hidden` on the root or body clips scrollWidth back down to
- * the viewport width without fixing anything — the oversized layout is
- * still there, just visually cut off, and any interactive element caught
- * in it becomes partially or fully unreachable. This walks real
- * interactive elements and flags any whose bounding box actually extends
- * past the viewport, ignoring elements deliberately placed inside their
- * own horizontally-scrollable container (e.g. a table wrapped in
- * `overflow-x-auto`), where overflowing that container's box is by design.
+ * Every screen an operator can actually reach, at every viewport in the
+ * matrix, holding content of the length a real event produces.
+ *
+ * The fixtures matter as much as the assertions: an interface that only
+ * works with "Site", "Porte" and "Festival" has not been asked the
+ * question. Names here are the length the shared contract allows, which is
+ * the length staff will use.
  */
-async function assertNoInteractiveElementOverflows(page: Page, label: string) {
-  const overflowing = await page.evaluate(() => {
-    const viewportWidth = document.documentElement.clientWidth;
-    const selector = 'button, a[href], input, select, textarea, [role="button"], [role="link"], [tabindex]';
 
-    function hasScrollableAncestor(el: Element): boolean {
-      let node = el.parentElement;
-      while (node) {
-        const style = getComputedStyle(node);
-        if (
-          (style.overflowX === 'auto' || style.overflowX === 'scroll') &&
-          node.scrollWidth > node.clientWidth
-        ) {
-          return true;
-        }
-        node = node.parentElement;
-      }
-      return false;
-    }
+let session: AdminSession;
+let topo: LongNamedTopology;
 
-    return Array.from(document.querySelectorAll(selector))
-      .filter((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0; // skip hidden/collapsed elements
-      })
-      .filter((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.right > viewportWidth + 1 || rect.left < -1;
-      })
-      .filter((el) => !hasScrollableAncestor(el))
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        return {
-          tag: el.tagName.toLowerCase(),
-          text: (el.textContent || '').trim().slice(0, 40),
-          left: Math.round(rect.left),
-          right: Math.round(rect.right),
-        };
-      });
-  });
-
-  expect(
-    overflowing,
-    `${label}: ${overflowing.length} interactive element(s) actually extend past the viewport (not inside a deliberate horizontal-scroll container):\n${JSON.stringify(overflowing, null, 2)}`
-  ).toEqual([]);
-}
-
-test('aucun overflow horizontal sur les écrans clés à ce viewport mobile', async ({ page }) => {
-  const session = await getAdminSession();
-  const topo = await createDraftEventWithMainCheckpoint(session, {
-    name: `Repro Mobile Overflow ${test.info().project.name}`,
-    capacity: 30,
-  });
+test.beforeAll(async () => {
+  session = await getAdminSession();
+  topo = await createLongNamedTopology(session, { suffix: test.info().project.name });
   await startEvent(session, topo.eventId);
-  const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
+});
 
+async function loginAsAdmin(page: Page) {
   await page.goto('/login');
   await page.getByPlaceholder('admin').fill(ADMIN_USERNAME);
   await page.getByPlaceholder('••••••••••••').fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: 'Connexion' }).click();
   await page.waitForURL('**/admin');
-  await assertNoHorizontalOverflow(page, '/admin (Dashboard)');
-  await assertNoInteractiveElementOverflows(page, '/admin (Dashboard)');
+}
 
+test('les écrans d’entrée tiennent dans le viewport', async ({ page }) => {
+  await page.goto('/login');
+  await expect(page.getByRole('button', { name: 'Connexion' })).toBeVisible();
+  await assertScreenFitsViewport(page, '/login');
+
+  await page.goto('/setup');
+  await expect(page.getByRole('button', { name: 'Créer le compte et démarrer' })).toBeVisible();
+  await assertScreenFitsViewport(page, '/setup');
+
+  // No token in the fragment: the pairing page must render its refusal
+  // inside the viewport, not push it off the side of a phone.
+  await page.goto('/pair');
+  await expect(page.getByText('Erreur d’appairage')).toBeVisible();
+  await assertScreenFitsViewport(page, '/pair (sans token)');
+});
+
+test('le tableau de bord tient dans le viewport avec un événement au nom long', async ({ page }) => {
+  await loginAsAdmin(page);
+  await page.goto(`/admin?event=${topo.eventId}`);
+
+  // The long name is on screen — otherwise this would be measuring an
+  // empty dashboard and proving nothing.
+  await expect(page.getByText(LONG_FIXTURE_NAMES.siteSpace).first()).toBeVisible();
+  await assertScreenFitsViewport(page, '/admin (Dashboard)');
+});
+
+test('les quatre étapes du wizard tiennent dans le viewport', async ({ page }) => {
+  await loginAsAdmin(page);
   await page.goto('/admin/events/new');
-  await assertNoHorizontalOverflow(page, '/admin/events/new (EventWizard)');
-  await assertNoInteractiveElementOverflows(page, '/admin/events/new (EventWizard)');
 
+  // Step 1 — general. A long event name and a wide capacity, side by side
+  // with the timezone.
+  await expect(page.getByRole('heading', { name: '1. Informations Générales' })).toBeVisible();
+  await page.locator('input[type="text"]').first().fill(LONG_FIXTURE_NAMES.event);
+  await page.locator('input[type="number"]').first().fill('12500');
+  await assertScreenFitsViewport(page, '/admin/events/new — étape 1 (Général)');
+
+  // Step 2 — spaces: name, capacity and delete on one row, twice.
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  await expect(page.getByRole('heading', { name: '2. Espaces' })).toBeVisible();
+  await page.getByLabel("Nom de l'espace intérieur").first().fill(LONG_FIXTURE_NAMES.siteSpace);
+  await page.getByLabel("Capacité de l'espace").first().fill('12500');
+  await page.getByRole('button', { name: 'Ajouter un espace intérieur' }).click();
+  await page.getByLabel("Nom de l'espace intérieur").nth(1).fill(LONG_FIXTURE_NAMES.vipSpace);
+  await page.getByLabel("Capacité de l'espace").nth(1).fill('850');
+  await assertScreenFitsViewport(page, '/admin/events/new — étape 2 (Espaces)');
+
+  // Step 3 — doors: two endpoints and two directional labels per door.
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  await expect(page.getByRole('heading', { name: '3. Portes & Checkpoints' })).toBeVisible();
+  await page.getByLabel('Nom de la porte').first().fill(LONG_FIXTURE_NAMES.mainCheckpoint);
+  await page.getByLabel('Libellé A vers B').first().fill(LONG_FIXTURE_NAMES.labelAToB);
+  await page.getByLabel('Libellé B vers A').first().fill(LONG_FIXTURE_NAMES.labelBToA);
+  await page.getByRole('button', { name: 'Ajouter une porte' }).click();
+  await page.getByLabel('Nom de la porte').nth(1).fill(LONG_FIXTURE_NAMES.innerCheckpoint);
+  await page.getByLabel('Libellé A vers B').nth(1).fill(LONG_FIXTURE_NAMES.innerLabelAToB);
+  await page.getByLabel('Libellé B vers A').nth(1).fill(LONG_FIXTURE_NAMES.innerLabelBToA);
+  await assertScreenFitsViewport(page, '/admin/events/new — étape 3 (Portes)');
+
+  // Step 4 — the topology summary, where every long string appears at once.
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  await expect(page.getByRole('heading', { name: '4. Validation de la Topologie' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Créer l'événement/ })).toBeVisible();
+  await assertScreenFitsViewport(page, '/admin/events/new — étape 4 (Validation)');
+});
+
+test('la gestion des appareils et le QR généré tiennent dans le viewport', async ({ page }) => {
+  await loginAsAdmin(page);
+  await page.goto(`/admin/events/${topo.eventId}/devices`);
+  await expect(page.getByRole('heading', { name: 'Gestion des Appareils et QR Codes' })).toBeVisible();
+  await assertScreenFitsViewport(page, '/admin/events/:id/devices');
+
+  // The generated QR panel: a 180px code, a badge, explanatory copy and a
+  // full pairing URL — the densest block in the admin interface.
+  await page.getByRole('button', { name: /Générer le QR Code/ }).click();
+  await expect(page.getByText('QR Code Prêt pour scan')).toBeVisible();
+  await assertScreenFitsViewport(page, '/admin/events/:id/devices — panneau QR généré');
+});
+
+test('les statistiques et l’état système tiennent dans le viewport', async ({ page }) => {
+  await loginAsAdmin(page);
+
+  await page.goto(`/admin/events/${topo.eventId}/analytics`);
+  await expect(page.getByRole('heading', { name: 'Statistiques & Analyse de Flux' })).toBeVisible();
+  await assertScreenFitsViewport(page, '/admin/events/:id/analytics');
+
+  await page.goto('/admin/system');
+  await expect(page.getByRole('heading', { name: 'État Système & Sauvegardes' })).toBeVisible();
+  await assertScreenFitsViewport(page, '/admin/system');
+});
+
+test('le compteur tient dans le viewport', async ({ page }) => {
+  const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
   await page.goto(`/pair#${token}`);
   await page.waitForURL('**/counter');
-  await assertNoHorizontalOverflow(page, '/counter (CounterView)');
-  await assertNoInteractiveElementOverflows(page, '/counter (CounterView)');
+  await expect(page.getByTestId('count-a-to-b')).toBeVisible();
+  await assertScreenFitsViewport(page, '/counter (CounterView)');
 });

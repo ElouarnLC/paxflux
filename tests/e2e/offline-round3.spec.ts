@@ -175,7 +175,7 @@ test.describe('Phase 6 round 3 — identité de l’appairage et taxonomie des r
       expect(rows[0].lastErrorCode, label).toBe('INVALID_BATCH_RESPONSE');
       // No invalid snapshot was persisted either: the projection still
       // stands on the last authoritative state the device can trust.
-      await expect(page.locator('span.text-5xl.font-black')).toHaveText('1');
+      await expect(page.getByTestId('global-occupancy')).toHaveText('1');
     }
 
     // 1. The empty shell a truncated body produces. Parses as JSON, says
