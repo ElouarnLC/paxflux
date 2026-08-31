@@ -60,6 +60,16 @@ export async function assertNoDocumentOverflow(page: Page, label: string): Promi
  */
 export async function assertRootDoesNotClipHorizontally(page: Page, label: string): Promise<void> {
   const clipping = await page.evaluate(() => {
+    // A modal locks the page behind it: Radix sets `overflow: hidden` on
+    // <body> for exactly as long as the dialog is open, so the frozen page
+    // cannot be scrolled out from under it. That is the opposite of the
+    // technique this assertion forbids — it is temporary, it is on both
+    // axes, and it exists only while something owns the viewport. The
+    // exemption is therefore conditional on a modal actually being open;
+    // a stylesheet-level clip with no dialog on screen still fails.
+    const modalOpen = document.querySelector('[role="dialog"], [role="alertdialog"]') !== null;
+    if (modalOpen) return [];
+
     const roots: Array<{ name: string; el: Element | null }> = [
       { name: 'html', el: document.documentElement },
       { name: 'body', el: document.body },
@@ -551,4 +561,70 @@ export async function assertSafeAreaContract(page: Page, label: string): Promise
     insets.stickyElements.filter((el) => !el.safeOffset),
     `${label}: sticky element(s) offset from the scrollport without clearing the status bar: ${JSON.stringify(insets.stickyElements)}`
   ).toEqual([]);
+}
+
+/**
+ * The portal half of the safe-area contract.
+ *
+ * A Radix Dialog renders into <body>, outside #root, so it inherits none of
+ * `.safe-area-root`'s padding. That makes it the one place where applying
+ * the insets a second time is correct rather than doubled — and the one
+ * place where forgetting them puts a confirmation button under the home
+ * indicator.
+ *
+ * With no cutout in this browser every inset resolves to 0, so no measured
+ * geometry can tell a correct implementation from a missing one. What can:
+ * the rule that matches the open panel must consult
+ * `env(safe-area-inset-*)`, and it must budget its height in `dvh` rather
+ * than assuming a fixed viewport.
+ */
+export async function assertPortalSafeArea(page: Page, label: string): Promise<void> {
+  const found = await page.evaluate(() => {
+    const panel =
+      document.querySelector('[role="alertdialog"]') || document.querySelector('[role="dialog"]');
+    if (!panel) return null;
+
+    const matching: Array<{ selector: string; declaration: string }> = [];
+
+    function walk(rules: CSSRuleList) {
+      for (const rule of Array.from(rules)) {
+        const styleRule = rule as CSSStyleRule;
+        if (
+          styleRule.selectorText &&
+          styleRule.cssText.includes('safe-area-inset') &&
+          panel!.matches(styleRule.selectorText)
+        ) {
+          matching.push({ selector: styleRule.selectorText, declaration: styleRule.style.cssText });
+        }
+        const nested = (rule as CSSGroupingRule).cssRules;
+        if (nested && nested.length > 0) walk(nested);
+      }
+    }
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        walk(sheet.cssRules);
+      } catch {
+        continue; // not one of ours
+      }
+    }
+
+    return {
+      matching,
+      usesDynamicViewport: matching.some((m) => /\d+dvh/.test(m.declaration)),
+      overflowY: getComputedStyle(panel).overflowY,
+    };
+  });
+
+  expect(found, `${label}: no dialog is open, so this assertion would be vacuous`).not.toBeNull();
+
+  expect(
+    found!.matching.length,
+    `${label}: the portalled dialog is matched by no rule consulting env(safe-area-inset-*) — outside #root, it is inset by nothing`
+  ).toBeGreaterThan(0);
+
+  expect(
+    found!.usesDynamicViewport,
+    `${label}: the dialog's height budget does not use dvh (${JSON.stringify(found!.matching)}), so it assumes a viewport the browser chrome does not leave it`
+  ).toBe(true);
 }

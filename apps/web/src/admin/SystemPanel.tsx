@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { SystemStatusResponse } from '@paxflux/shared';
+import { RefreshCw, Plus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import {
-  HardDrive,
-  Database,
-  CheckCircle,
-  AlertTriangle,
-  ArrowLeft,
-  RefreshCw,
-  Download,
-  Plus,
-} from 'lucide-react';
+  Table,
+  TableBody,
+  TableCell,
+  TableEmpty,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableScroller,
+} from '@/components/ui/table';
+import { MetricCard } from '@/components/paxflux/metric-card';
+import { PageHeader, Section } from '@/components/paxflux/layout';
 
 export const SystemPanel: React.FC = () => {
   const [status, setStatus] = useState<SystemStatusResponse | null>(null);
@@ -55,111 +58,91 @@ export const SystemPanel: React.FC = () => {
 
   if (loading || !status) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400">
-        <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
+      <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <RefreshCw className="size-8 animate-spin text-primary-accent" />
       </div>
     );
   }
 
   return (
-    <div className="flex-1 bg-slate-950 text-slate-100 p-4 sm:p-6 w-full max-w-5xl mx-auto space-y-4 sm:space-y-6">
-      <div className="flex flex-col sm:flex-row-reverse sm:items-center sm:justify-between gap-1 sm:gap-3">
-        <h1 className="text-lg sm:text-xl font-bold text-white break-words">État Système & Sauvegardes</h1>
-        <Link
-          to="/admin"
-          className="inline-flex items-center gap-2 self-start min-h-11 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4 flex-shrink-0" /> Retour au tableau de bord
-        </Link>
+    <div className="mx-auto w-full max-w-5xl flex-1 space-y-4 p-4 sm:space-y-6 sm:p-6">
+      <PageHeader title="État Système & Sauvegardes" />
+
+      {/* Same breakpoint reasoning as the analytics stats: two columns only
+          once they can be read. */}
+      <div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 sm:gap-4 md:grid-cols-4">
+        <MetricCard label="Version" value={status.version} hint={status.nodeVersion} />
+        <MetricCard
+          label="Intégrité DB"
+          tone={status.database.quickCheckOk ? 'success' : 'danger'}
+          value={status.database.quickCheckOk ? 'OK' : 'ATTENTION'}
+          hint="PRAGMA quick_check"
+        />
+        <MetricCard
+          label="Taille Base"
+          value={
+            <>
+              {(status.database.sizeBytes / 1024).toFixed(1)}{' '}
+              <span className="text-sm font-normal text-muted-foreground">KB</span>
+            </>
+          }
+          hint={`WAL: ${(status.database.walSizeBytes / 1024).toFixed(1)} KB`}
+        />
+        <MetricCard
+          label="Uptime"
+          tone="primary"
+          value={
+            <>
+              {Math.floor(status.uptimeSeconds / 60)}{' '}
+              <span className="text-sm font-normal text-muted-foreground">min</span>
+            </>
+          }
+          hint={`${status.connectedSSECount} flux SSE actifs`}
+        />
       </div>
 
-      {/* 1. System Health Cards — same breakpoint reasoning as the
-          analytics stats: two columns only once they can be read. */}
-      <div className="grid grid-cols-1 min-[400px]:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-        <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">Version</span>
-          <span className="text-2xl font-black font-mono break-words text-white">{status.version}</span>
-          <span className="text-[11px] text-slate-500 block mt-0.5">{status.nodeVersion}</span>
-        </div>
-
-        <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">Intégrité DB</span>
-          <span className="text-2xl font-black font-mono break-words text-emerald-400">
-            {status.database.quickCheckOk ? 'OK' : 'ATTENTION'}
-          </span>
-          <span className="text-[11px] text-slate-500 block mt-0.5">PRAGMA quick_check</span>
-        </div>
-
-        <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">Taille Base</span>
-          <span className="text-2xl font-black font-mono break-words text-white">
-            {(status.database.sizeBytes / 1024).toFixed(1)} <span className="text-sm font-normal text-slate-500">KB</span>
-          </span>
-          <span className="text-[11px] text-slate-500 block mt-0.5">
-            WAL: {(status.database.walSizeBytes / 1024).toFixed(1)} KB
-          </span>
-        </div>
-
-        <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">Uptime</span>
-          <span className="text-2xl font-black font-mono break-words text-indigo-400">
-            {Math.floor(status.uptimeSeconds / 60)} <span className="text-sm font-normal text-slate-500">min</span>
-          </span>
-          <span className="text-[11px] text-slate-500 block mt-0.5">{status.connectedSSECount} flux SSE actifs</span>
-        </div>
-      </div>
-
-      {/* 2. Backups Management */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">
-            Historique des Sauvegardes SQLite
-          </h2>
-          <button
-            type="button"
-            disabled={backingUp}
-            onClick={handleManualBackup}
-            className="w-full sm:w-auto min-h-11 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg"
-          >
-            {backingUp ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+      <Section
+        title="Historique des Sauvegardes SQLite"
+        contentClassName="p-0 sm:p-0"
+        actions={
+          <Button size="sm" disabled={backingUp} onClick={handleManualBackup}>
+            {backingUp ? <RefreshCw className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
             Créer une sauvegarde maintenant
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[38rem] text-left text-xs text-slate-300">
-            <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
-              <tr>
-                <th className="py-3 px-4">Fichier</th>
-                <th className="py-3 px-4">Motif</th>
-                <th className="py-3 px-4">Taille</th>
-                <th className="py-3 px-4">SHA-256</th>
-                <th className="py-3 px-4">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800 font-mono">
+          </Button>
+        }
+      >
+        <TableScroller className="px-1 pb-4" minWidth="38rem">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Fichier</TableHead>
+                <TableHead>Motif</TableHead>
+                <TableHead>Taille</TableHead>
+                <TableHead>SHA-256</TableHead>
+                <TableHead>Date</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {backups.map((b) => (
-                <tr key={b.id}>
-                  <td className="py-3 px-4 font-sans font-medium text-white">{b.filename}</td>
-                  <td className="py-3 px-4 font-sans text-slate-400">{b.reason}</td>
-                  <td className="py-3 px-4 text-slate-300">{(b.sizeBytes / 1024).toFixed(1)} KB</td>
-                  <td className="py-3 px-4 text-slate-500 truncate max-w-xs">{b.sha256.substring(0, 16)}...</td>
-                  <td className="py-3 px-4 text-slate-400">
+                <TableRow key={b.id}>
+                  <TableCell className="font-medium text-foreground">{b.filename}</TableCell>
+                  <TableCell className="text-muted-foreground">{b.reason}</TableCell>
+                  <TableCell className="font-mono">{(b.sizeBytes / 1024).toFixed(1)} KB</TableCell>
+                  <TableCell className="max-w-xs truncate font-mono text-muted-foreground">
+                    {b.sha256.substring(0, 16)}...
+                  </TableCell>
+                  <TableCell className="font-mono text-muted-foreground">
                     {new Date(b.createdAtMs).toLocaleString('fr-FR')}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
               {backups.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-6 text-center text-slate-500 font-sans">
-                    Aucune sauvegarde enregistrée.
-                  </td>
-                </tr>
+                <TableEmpty colSpan={5}>Aucune sauvegarde enregistrée.</TableEmpty>
               ) : null}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            </TableBody>
+          </Table>
+        </TableScroller>
+      </Section>
     </div>
   );
 };

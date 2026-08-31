@@ -45,6 +45,9 @@ import {
   Lock,
   CheckCircle2,
 } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 
 /**
  * What the operator is actually being told, kept distinct from "the browser
@@ -437,10 +440,10 @@ export const CounterView: React.FC = () => {
   // Capacity Warning Color Calculation
   const capacityPercentage = capacity > 0 ? (displayedOccupancy / capacity) * 100 : 0;
   const capacityColor = useMemo(() => {
-    if (displayedOccupancy > capacity && capacity > 0) return 'text-purple-400 bg-purple-950/60 border-purple-500/40';
-    if (capacityPercentage >= 90) return 'text-rose-400 bg-rose-950/60 border-rose-500/40';
-    if (capacityPercentage >= 80) return 'text-amber-400 bg-amber-950/60 border-amber-500/40';
-    return 'text-emerald-400 bg-emerald-950/60 border-emerald-500/40';
+    if (displayedOccupancy > capacity && capacity > 0) return 'text-over-capacity bg-over-capacity/15 border-over-capacity/40';
+    if (capacityPercentage >= 90) return 'text-danger bg-danger/15 border-danger/40';
+    if (capacityPercentage >= 80) return 'text-warning bg-warning/15 border-warning/40';
+    return 'text-success bg-success/15 border-success/40';
   }, [displayedOccupancy, capacity, capacityPercentage]);
 
   if (!bootstrap) {
@@ -450,15 +453,15 @@ export const CounterView: React.FC = () => {
     // matches the cookie this browser holds, and any tap or heartbeat made
     // under it would be attributed to the wrong device.
     return (
-      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400 p-6">
+      <div className="flex-1 flex items-center justify-center text-muted-foreground p-6">
         <div className="flex flex-col items-center gap-3 text-center max-w-sm">
-          <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
+          <RefreshCw className="w-8 h-8 animate-spin text-primary-accent" />
           {awaitingConfigurationFor ? (
             <>
-              <span className="text-sm font-semibold text-slate-200">
+              <span className="text-sm font-semibold text-foreground/90">
                 Appairage en cours — configuration en attente
               </span>
-              <span className="text-xs text-slate-400 leading-snug">
+              <span className="text-xs text-muted-foreground leading-snug">
                 Cet appareil vient d’être appairé mais n’a pas encore reçu sa configuration. Le comptage
                 reprendra dès qu’elle sera disponible. Les comptages déjà enregistrés sont conservés.
               </span>
@@ -480,54 +483,60 @@ export const CounterView: React.FC = () => {
     // No safe-area class either: #root already insets every route, and a
     // second inset here would be double-counted. `select-none` lives on the
     // tap surfaces below now, not on the document.
-    <div className="flex-1 flex flex-col bg-slate-950 text-slate-100">
+    <div className="flex-1 flex flex-col">
       {/* 1. Header: Event, Checkpoint, Connection State */}
       {/* `sticky-safe-top` replaces `top-0`: a sticky element offsets from
           the scrollport, not from #root, so at `top: 0` it would slide under
           the status bar as soon as the operator scrolls a banner state. */}
-      <header className="px-4 py-3 border-b border-slate-900 bg-slate-950/80 backdrop-blur sticky sticky-safe-top z-20">
+      <header className="px-4 py-3 border-b border-border bg-card/80 backdrop-blur sticky sticky-safe-top z-20">
         <div className="flex items-start justify-between gap-2">
           {/* `min-w-0` is what lets the two clamps below actually clamp: a
               flex item defaults to its content's minimum width, so a long
               door name would otherwise push the sync badge off the screen
               rather than wrap. */}
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold truncate">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold truncate">
               {bootstrap.event.name}
             </p>
-            <h1 className="text-base sm:text-xl font-black text-white tracking-tight leading-tight line-clamp-2">
+            <h1 className="text-base sm:text-xl font-black text-foreground tracking-tight leading-tight line-clamp-2">
               {bootstrap.checkpoint.name}
             </h1>
           </div>
 
           {/* Sync badge. Five distinct states, none of them conflating
-              "the browser has an interface" with "the server has my counts". */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+              "the browser has an interface" with "the server has my counts".
+
+              The pill is the shared Badge primitive, so the counter's tones
+              are the same tones the admin uses. The wording stays the
+              counter's own and stays upper case *in the DOM*, not by CSS:
+              on the field surface these five words are the signal, and an
+              operator glancing at a phone in the dark reads the shape of
+              "HORS LIGNE" before they read the colour. */}
+          <div className="flex flex-shrink-0 items-center gap-1.5">
             {syncStatus === 'revoked' ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-950 border border-rose-500/40 text-rose-300">
-                <Lock className="w-3 h-3" />
+              <Badge tone="danger">
+                <Lock />
                 RÉVOQUÉ
-              </span>
+              </Badge>
             ) : syncStatus === 'reconciliation' ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-orange-950 border border-orange-500/50 text-orange-300">
-                <AlertTriangle className="w-3 h-3" />
-                À RÉGULARISER ({blockedActions.length})
-              </span>
+              <Badge tone="closing">
+                <AlertTriangle />À RÉGULARISER ({blockedActions.length})
+              </Badge>
             ) : syncStatus === 'offline' ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-950 border border-rose-500/40 text-rose-300">
-                <WifiOff className="w-3 h-3" />
+              <Badge tone="danger">
+                <WifiOff />
                 HORS LIGNE{unresolvedCount > 0 ? ` (${unresolvedCount})` : ''}
-              </span>
+              </Badge>
             ) : syncStatus === 'syncing' ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-950 border border-amber-500/40 text-amber-300 animate-pulse">
-                <RefreshCw className="w-3 h-3 animate-spin" />
+              <Badge tone="warning">
+                <RefreshCw className="animate-spin" />
                 SYNC ({retryableCount})
-              </span>
+              </Badge>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <Badge tone="success">
+                <span className="size-2 shrink-0 rounded-full bg-success" />
                 EN LIGNE
-              </span>
+              </Badge>
             )}
           </div>
         </div>
@@ -538,16 +547,16 @@ export const CounterView: React.FC = () => {
             the revocation belongs to Phase 6, and silently dropping them
             would destroy counts nobody has reconciled yet. */}
         {isSessionRevoked ? (
-          <div className="mt-3 p-3 rounded-2xl bg-rose-950/80 border border-rose-500/50 text-rose-200 text-xs flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-bold text-rose-100">Appareil révoqué</p>
-              <p className="text-rose-200/90 text-[11px] mt-0.5 leading-snug">
-                Cette session appareil n'est plus valide. Le comptage est arrêté. Demandez un nouveau QR code
-                d'appairage à un responsable.
-              </p>
+          <Alert tone="danger" className="mt-3">
+            <AlertTriangle />
+            <div className="min-w-0">
+              <AlertTitle>Appareil révoqué</AlertTitle>
+              <AlertDescription className="text-[11px]">
+                Cette session appareil n'est plus valide. Le comptage est arrêté. Demandez un nouveau QR
+                code d'appairage à un responsable.
+              </AlertDescription>
             </div>
-          </div>
+          </Alert>
         ) : null}
 
         {/* Counts the server refused, or that belong to a previous pairing.
@@ -556,11 +565,11 @@ export const CounterView: React.FC = () => {
             "forget" button — discarding a real count is a supervisor
             decision with an audit trail, not a tap on a phone. */}
         {blockedActions.length > 0 ? (
-          <div className="mt-3 p-3 rounded-2xl bg-orange-950/80 border border-orange-500/50 text-orange-100 text-xs">
+          <div className="mt-3 p-3 rounded-2xl bg-closing/10 border border-closing/40 text-foreground/90 text-xs">
             <div className="flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className="w-4 h-4 text-closing flex-shrink-0 mt-0.5" />
               <div className="min-w-0 flex-1">
-                <p className="font-bold text-orange-50">
+                <p className="font-bold text-foreground">
                   {blockedActions.length === 1
                     ? '1 comptage n’a pas été accepté par le serveur'
                     : `${blockedActions.length} comptages n’ont pas été acceptés par le serveur`}
@@ -570,29 +579,30 @@ export const CounterView: React.FC = () => {
                   {blockedActions.map((action) => (
                     <li
                       key={action.clientActionId}
-                      className="flex items-start justify-between gap-2 rounded-xl bg-orange-950/60 border border-orange-500/30 px-2.5 py-2"
+                      className="flex items-start justify-between gap-2 rounded-xl bg-closing/10 border border-closing/30 px-2.5 py-2"
                     >
                       <span className="min-w-0">
-                        <strong className="block text-orange-50">
+                        <strong className="block text-foreground">
                           {describeBlockedAction(action, bootstrap, owner)}
                         </strong>
-                        <span className="text-orange-200/90 text-[11px] leading-snug">
+                        <span className="text-muted-foreground text-[11px] leading-snug">
                           {describeOutboxError(action.lastErrorCode)}
                         </span>
                       </span>
                       {action.sendState === 'rejected' ? (
-                        <button
-                          type="button"
+                        <Button
+                          variant="outline"
+                          size="sm"
                           onClick={() => void handleRetryBlocked(action.clientActionId)}
-                          className="flex-shrink-0 min-h-11 min-w-11 px-3 py-1.5 rounded-lg bg-orange-900 hover:bg-orange-800 border border-orange-500/40 text-orange-100 font-bold text-[11px]"
+                          className="flex-shrink-0 border-closing/50 text-closing hover:bg-closing/15 hover:text-closing"
                         >
                           Réessayer
-                        </button>
+                        </Button>
                       ) : (
                         // Retrying a quarantined action would send it under
                         // the identity paired now, which is exactly what the
                         // quarantine exists to prevent.
-                        <span className="flex-shrink-0 text-[10px] uppercase tracking-wide text-orange-300/80 font-bold">
+                        <span className="flex-shrink-0 text-[10px] uppercase tracking-wide text-closing/90 font-bold">
                           Superviseur
                         </span>
                       )}
@@ -605,42 +615,48 @@ export const CounterView: React.FC = () => {
         ) : null}
 
         {undoNotice ? (
-          <div className="mt-3 p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-200 text-xs">
-            {undoNotice}
-          </div>
+          <Alert tone="neutral" className="mt-3">
+            <CheckCircle2 />
+            <span>{undoNotice}</span>
+          </Alert>
         ) : null}
 
         {/* Explicit Offline Banner per SPEC §10.5 */}
         {!isOnline && !isSessionRevoked ? (
-          <div className="mt-3 p-3 rounded-2xl bg-amber-950/80 border border-amber-500/50 text-amber-200 text-xs flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-bold text-amber-100">Mode Hors Ligne Actif</p>
-              <p className="text-amber-200/90 text-[11px] mt-0.5 leading-snug">
-                Le comptage continue sur cet appareil. La jauge globale peut être incomplète tant que la synchronisation n'est pas rétablie.
-              </p>
+          <Alert tone="warning" className="mt-3">
+            <AlertTriangle />
+            <div className="min-w-0">
+              <AlertTitle>Mode Hors Ligne Actif</AlertTitle>
+              <AlertDescription className="text-[11px]">
+                Le comptage continue sur cet appareil. La jauge globale peut être incomplète tant que la
+                synchronisation n'est pas rétablie.
+              </AlertDescription>
             </div>
-          </div>
+          </Alert>
         ) : null}
 
         {eventStatus === 'draft' ? (
-          <div className="mt-3 p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-200 text-xs flex items-center gap-2">
-            <Lock className="w-4 h-4 text-slate-400 flex-shrink-0" />
-            <span className="font-medium">Cet événement n'a pas encore démarré. Le comptage sera activé dès son passage en direct.</span>
-          </div>
+          <Alert tone="neutral" className="mt-3">
+            <Lock />
+            <span className="font-medium">
+              Cet événement n'a pas encore démarré. Le comptage sera activé dès son passage en direct.
+            </span>
+          </Alert>
         ) : null}
 
         {eventStatus === 'closing' ? (
-          <div className="mt-3 p-2.5 rounded-xl bg-orange-950/80 border border-orange-500/40 text-orange-200 text-xs flex items-center gap-2">
-            <Lock className="w-4 h-4 text-orange-400 flex-shrink-0" />
-            <span className="font-medium">Événement en cours de fermeture. Nouveaux comptages désactivés.</span>
-          </div>
+          <Alert tone="closing" className="mt-3">
+            <Lock />
+            <span className="font-medium">
+              Événement en cours de fermeture. Nouveaux comptages désactivés.
+            </span>
+          </Alert>
         ) : null}
       </header>
 
       {/* 2. Global Occupancy Readout */}
       <section className="px-4 py-3 text-center">
-        <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-0.5">
+        <div className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-0.5">
           Jauge Globale
         </div>
         {/* Six-figure gauges exist. The pair wraps rather than widening the
@@ -648,11 +664,11 @@ export const CounterView: React.FC = () => {
         <div className="flex flex-wrap items-baseline justify-center gap-x-2 font-mono leading-none">
           <span
             data-testid="global-occupancy"
-            className="text-4xl sm:text-5xl font-black text-white tracking-tight"
+            className="text-4xl sm:text-5xl font-black text-foreground tracking-tight"
           >
             {displayedOccupancy.toLocaleString('fr-FR')}
           </span>
-          <span className="text-lg sm:text-xl font-bold text-slate-400">
+          <span className="text-lg sm:text-xl font-bold text-muted-foreground">
             / {capacity.toLocaleString('fr-FR')}
           </span>
         </div>
@@ -675,23 +691,23 @@ export const CounterView: React.FC = () => {
           {spaceAOccupancy !== null ? (
             <span
               data-testid="space-a-occupancy"
-              className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono inline-flex items-baseline gap-1"
+              className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg border border-border bg-card text-foreground/90 font-mono inline-flex items-baseline gap-1"
             >
               {/* Only the zone name gives way. The occupancy is the reason
                   the badge exists, so it never truncates. */}
               <span className="min-w-0 truncate">{bootstrap.checkpoint.spaceAName}</span>
-              <strong className="flex-shrink-0 text-white">{spaceAOccupancy}</strong>
+              <strong className="flex-shrink-0 text-foreground">{spaceAOccupancy}</strong>
             </span>
           ) : null}
           {spaceBOccupancy !== null ? (
             <span
               data-testid="space-b-occupancy"
-              className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono inline-flex items-baseline gap-1"
+              className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg border border-border bg-card text-foreground/90 font-mono inline-flex items-baseline gap-1"
             >
               {/* Only the zone name gives way. The occupancy is the reason
                   the badge exists, so it never truncates. */}
               <span className="min-w-0 truncate">{bootstrap.checkpoint.spaceBName}</span>
-              <strong className="flex-shrink-0 text-white">{spaceBOccupancy}</strong>
+              <strong className="flex-shrink-0 text-foreground">{spaceBOccupancy}</strong>
             </span>
           ) : null}
         </div>
@@ -714,12 +730,12 @@ export const CounterView: React.FC = () => {
             onClick={() => handleTap('a_to_b')}
             className={`w-full flex-1 min-h-[120px] max-h-[180px] px-3 rounded-3xl font-black text-2xl sm:text-3xl tracking-wide flex flex-col items-center justify-center gap-1 text-center break-words shadow-2xl transition-transform active:scale-95 touch-manipulation select-none ${
               isCountingAllowed
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/60 border-2 border-emerald-400/40 active:bg-emerald-700'
-                : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                ? 'bg-entry text-entry-foreground hover:bg-entry/90 border-2 border-entry/60 active:bg-entry/80'
+                : 'bg-muted text-muted-foreground cursor-not-allowed border border-border'
             }`}
           >
             <span>{bootstrap.checkpoint.labelAToB || 'ENTRÉE +1'}</span>
-            <span className="text-xs font-medium text-emerald-200/80 tracking-normal uppercase">
+            <span className="text-xs font-medium text-entry-foreground/80 tracking-normal uppercase">
               Vers {bootstrap.checkpoint.spaceBName}
             </span>
           </button>
@@ -734,12 +750,12 @@ export const CounterView: React.FC = () => {
             onClick={() => handleTap('b_to_a')}
             className={`w-full flex-1 min-h-[120px] max-h-[180px] px-3 rounded-3xl font-black text-2xl sm:text-3xl tracking-wide flex flex-col items-center justify-center gap-1 text-center break-words shadow-2xl transition-transform active:scale-95 touch-manipulation select-none ${
               isCountingAllowed
-                ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-950/60 border-2 border-rose-400/40 active:bg-rose-700'
-                : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                ? 'bg-exit text-exit-foreground hover:bg-exit/90 border-2 border-exit/60 active:bg-exit/80'
+                : 'bg-muted text-muted-foreground cursor-not-allowed border border-border'
             }`}
           >
             <span>{bootstrap.checkpoint.labelBToA || 'SORTIE −1'}</span>
-            <span className="text-xs font-medium text-rose-200/80 tracking-normal uppercase">
+            <span className="text-xs font-medium text-exit-foreground/80 tracking-normal uppercase">
               Vers {bootstrap.checkpoint.spaceAName}
             </span>
           </button>
@@ -749,39 +765,40 @@ export const CounterView: React.FC = () => {
       {/* 4. Footer: Last Action Feedback & Undo. The home-indicator inset is
           #root's job, not this element's — see the safe-area contract in
           styles/index.css. */}
-      <footer className="px-4 py-3 border-t border-slate-900 bg-slate-950/90">
+      <footer className="px-4 py-3 border-t border-border bg-card/80">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="min-w-0 flex-1 text-xs text-slate-300 flex items-center gap-2">
+          <div className="min-w-0 flex-1 text-xs text-foreground/90 flex items-center gap-2">
             {lastAction ? (
               <>
-                <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping flex-shrink-0"></span>
+                <span className="w-2 h-2 rounded-full bg-primary-accent animate-ping flex-shrink-0"></span>
                 <span className="min-w-0 break-words">
                   Dernière saisie :{' '}
-                  <strong className="text-white">
+                  <strong className="text-foreground">
                     {lastAction.direction === 'a_to_b'
                       ? bootstrap.checkpoint.labelAToB
                       : bootstrap.checkpoint.labelBToA}
                   </strong>
                   {lastAction.source === 'confirmed' ? (
-                    <span className="text-slate-400"> (synchronisée)</span>
+                    <span className="text-muted-foreground"> (synchronisée)</span>
                   ) : null}
                 </span>
               </>
             ) : (
-              <span className="text-slate-400">Aucune saisie récente</span>
+              <span className="text-muted-foreground">Aucune saisie récente</span>
             )}
           </div>
 
           {lastAction && isCountingAllowed ? (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={isUndoing}
               onClick={handleUndo}
-              className="flex-shrink-0 min-h-11 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-slate-700 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-lg active:scale-95 transition-all"
+              className="flex-shrink-0 text-warning active:scale-95"
             >
-              <RotateCcw className={`w-3.5 h-3.5 ${isUndoing ? 'animate-spin' : ''}`} />
+              <RotateCcw className={isUndoing ? 'animate-spin' : undefined} />
               ANNULER
-            </button>
+            </Button>
           ) : null}
         </div>
       </footer>

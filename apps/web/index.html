@@ -19,7 +19,11 @@
       the page background and nothing else.
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f172a" />
+    <!-- The sRGB rendering of `--background` (oklch(0.165 0.020 258)). The
+         browser chrome and the PWA splash cannot read a CSS custom
+         property, so this literal and the manifest in vite.config.ts have
+         to be kept in step with the token by hand. -->
+    <meta name="theme-color" content="#090f17" />
     <meta name="description" content="PaxFlux — Self-hosted realtime crowd flow & occupancy management" />
     <title>PaxFlux</title>
   </head>

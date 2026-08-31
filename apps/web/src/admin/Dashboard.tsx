@@ -11,22 +11,50 @@ import {
 } from '@paxflux/shared';
 import {
   Users,
-  TrendingUp,
-  TrendingDown,
   Activity,
-  ShieldCheck,
-  AlertTriangle,
-  Radio,
-  Sliders,
   QrCode,
   Download,
-  Lock,
   Plus,
   RefreshCw,
-  Clock,
-  Smartphone,
   ExternalLink,
 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardPanel } from '@/components/ui/card';
+import { NativeSelect } from '@/components/ui/native-select';
+import { Progress } from '@/components/ui/progress';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableEmpty,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableScroller,
+} from '@/components/ui/table';
+import { EmptyState, Section } from '@/components/paxflux/layout';
+import {
+  STATUS,
+  StatusBadge,
+  StatusText,
+  eventStatusKey,
+  type StatusKey,
+} from '@/components/paxflux/status';
+
+/**
+ * Sync quality is a supervisor-facing status like any other.
+ *
+ * Keyed by the wire value, which calls the worst case `uncertain`; the
+ * status vocabulary calls it `unreliable`. The mapping lives here rather
+ * than renaming either side, because the wire name is the server's contract
+ * and the vocabulary name is the operator's.
+ */
+const SYNC_QUALITY_COPY: Record<SyncQuality, { status: StatusKey; detail: string }> = {
+  reliable: { status: 'reliable', detail: 'Tous les appareils sont connectés et à jour.' },
+  degraded: { status: 'degraded', detail: 'Un ou plusieurs appareils ont des actions en attente.' },
+  uncertain: { status: 'unreliable', detail: 'Plusieurs appareils déconnectés. Jauge globale incertaine.' },
+};
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -106,29 +134,30 @@ export const Dashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-slate-950 text-slate-400">
-        <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
+      <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <RefreshCw className="size-8 animate-spin text-primary-accent" />
       </div>
     );
   }
 
   if (eventsList.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-slate-950 text-slate-100">
-        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl">
-          <Users className="w-12 h-12 text-indigo-400 mx-auto mb-4" />
-          <h2 className="text-xl font-bold mb-2">Aucun événement configuré</h2>
-          <p className="text-slate-400 text-sm mb-6">
-            Créez votre premier événement pour commencer le comptage de jauge en direct.
-          </p>
-          <Link
-            to="/admin/events/new"
-            className="inline-flex items-center gap-2 min-h-11 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-bold text-sm text-white shadow-lg transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            Créer un événement
-          </Link>
-        </div>
+      <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6">
+        <Card className="w-full max-w-md">
+          <EmptyState
+            icon={Users}
+            title="Aucun événement configuré"
+            description="Créez votre premier événement pour commencer le comptage de jauge en direct."
+            action={
+              <Button asChild className="mt-2">
+                <Link to="/admin/events/new">
+                  <Plus />
+                  Créer un événement
+                </Link>
+              </Button>
+            }
+          />
+        </Card>
       </div>
     );
   }
@@ -140,208 +169,189 @@ export const Dashboard: React.FC = () => {
   const remaining = capacity - globalOccupancy;
 
   const syncQuality: SyncQuality = eventDetail?.syncQuality || 'reliable';
+  const sync = SYNC_QUALITY_COPY[syncQuality];
+
+  // The bar's colour is information, so it is derived from the gauge — and
+  // always shown next to the written percentage, never instead of it.
+  const gaugeIndicator =
+    globalOccupancy > capacity && capacity > 0
+      ? 'bg-over-capacity'
+      : capacityPercentage >= 90
+        ? 'bg-danger'
+        : capacityPercentage >= 80
+          ? 'bg-warning'
+          : 'bg-success';
 
   return (
-    <div className="flex-1 bg-slate-950 text-slate-100 flex flex-col">
-      {/* Top Navbar */}
-      {/* The brand, the shortcut to Système and the event control used to
-          share one non-wrapping row. On a phone that row was simply wider
-          than the screen, taking `Nouvel événement` off it. It now folds:
-          brand and Système on the first line, the selector and the create
-          action on the second, back to a single row from `sm` up. */}
-      {/* `sticky-safe-top` replaces `top-0`: a sticky element offsets from
-          the scrollport rather than from #root, so at `top: 0` this bar —
-          which carries the event selector and both shortcuts — would sit
-          under the status bar as soon as the page is scrolled in a
-          standalone PWA. See the safe-area contract in styles/index.css. */}
-      <header className="px-4 sm:px-6 py-3 border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky sticky-safe-top z-20 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="font-black text-lg sm:text-xl tracking-tight text-white">PaxFlux</span>
-          <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-950 border border-indigo-500/30 text-indigo-300 font-medium">
-            Supervision
-          </span>
+    <div className="flex-1 flex flex-col">
+      {/* Top bar. `sticky-safe-top` rather than `top-0`: a sticky element
+          offsets from the scrollport, not from #root, so at `top: 0` this
+          bar would sit under the status bar in a standalone PWA. */}
+      <header className="sticky sticky-safe-top z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-card/80 px-4 py-3 backdrop-blur sm:px-6">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-lg font-black tracking-tight text-foreground sm:text-xl">PaxFlux</span>
+          <Badge tone="primary">Supervision</Badge>
         </div>
 
-        <Link
-          to="/admin/system"
-          className="ml-auto inline-flex items-center min-h-11 px-2 text-xs font-medium text-slate-400 hover:text-white transition-colors"
-        >
-          Système
-        </Link>
+        <Button asChild variant="ghost" size="sm" className="ml-auto">
+          <Link to="/admin/system">Système</Link>
+        </Button>
 
-        <div className="w-full sm:w-auto flex items-center gap-2 min-w-0">
-          {/* `min-w-0` is the whole reason this selector can be narrow: a
-              form control's default minimum width is its content, so an
-              event named at full length would otherwise stretch the header
-              past the viewport rather than shrink. */}
-          <select
+        {/* At 320px a selector sharing a row with "Nouvel événement" is
+            about 110px wide — too narrow to tell two events apart. Each
+            gets its own full-width row on a phone, and they return to one
+            row from `sm` up. */}
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
+          {/* `min-w-0` is what lets this selector be narrow: a form
+              control's default minimum width is its content, so an event
+              named at full length would otherwise stretch the header past
+              the viewport rather than shrink. */}
+          <NativeSelect
+            aria-label="Événement supervisé"
             value={selectedEventId || ''}
             onChange={(e) => setSelectedEventId(e.target.value)}
-            className="flex-1 sm:flex-none sm:max-w-64 min-w-0 min-h-11 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-base lg:text-xs font-semibold text-white"
+            className="w-full sm:w-64"
           >
             {eventsList.map((ev) => (
               <option key={ev.id} value={ev.id}>
-                {ev.name} ({ev.status.toUpperCase()})
+                {ev.name} ({STATUS[eventStatusKey(ev.status)].label})
               </option>
             ))}
-          </select>
+          </NativeSelect>
 
-          <Link
-            to="/admin/events/new"
-            className="flex-shrink-0 flex items-center gap-1 min-h-11 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Nouvel événement
-          </Link>
+          <Button asChild size="sm" className="w-full sm:w-auto sm:shrink-0">
+            <Link to="/admin/events/new">
+              <Plus className="size-3.5" />
+              Nouvel événement
+            </Link>
+          </Button>
         </div>
       </header>
 
-      {/* Main Dashboard Content */}
-      <main className="flex-1 p-4 sm:p-6 max-w-7xl mx-auto w-full space-y-4 sm:space-y-6">
-        {/* 1. Global Metrics & Sync Health Card */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
-          {/* Main Occupancy Card */}
-          <div className="md:col-span-2 bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl flex flex-col justify-between">
-            <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
+      <main className="mx-auto w-full max-w-7xl flex-1 space-y-4 p-4 sm:space-y-6 sm:p-6">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 md:grid-cols-3">
+          {/* Live gauge */}
+          <Card className="flex flex-col justify-between p-4 sm:p-5 md:col-span-2">
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
-                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">Jauge en Direct</h2>
+                <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                  Jauge en Direct
+                </h2>
                 <p
                   data-testid="dashboard-event-name"
-                  className="text-xl sm:text-2xl font-black text-white mt-1 break-words"
+                  className="mt-1 break-words text-xl font-black text-foreground sm:text-2xl"
                 >
                   {currentEvent?.name}
                 </p>
               </div>
-
-              {/* Status Badge */}
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${
-                  currentEvent?.status === 'live'
-                    ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300'
-                    : currentEvent?.status === 'closing'
-                    ? 'bg-orange-950/80 border-orange-500/40 text-orange-300'
-                    : 'bg-slate-800 border-slate-700 text-slate-300'
-                }`}>
-                  <Radio className={`w-3.5 h-3.5 ${currentEvent?.status === 'live' ? 'animate-pulse text-emerald-400' : ''}`} />
-                  {currentEvent?.status}
-                </span>
-              </div>
+              <StatusBadge
+                data-testid="event-status"
+                status={eventStatusKey(currentEvent?.status)}
+                className="shrink-0"
+              />
             </div>
 
             {/* Occupancy, capacity and percentage wrap instead of forcing
                 the card wider: a six-figure gauge next to a six-figure
                 capacity does not fit on one line at 320px. */}
             <div className="my-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono">
-              <span className="text-4xl sm:text-6xl font-black text-white tracking-tight">
+              <span className="text-4xl font-black tracking-tight text-foreground sm:text-6xl">
                 {globalOccupancy.toLocaleString('fr-FR')}
               </span>
-              <span className="text-xl sm:text-2xl font-bold text-slate-400">
+              <span className="text-xl font-bold text-muted-foreground sm:text-2xl">
                 / {capacity.toLocaleString('fr-FR')}
               </span>
-              <span className="text-sm font-semibold text-slate-400 font-sans ml-auto">
+              <span className="ml-auto font-sans text-sm font-semibold text-muted-foreground">
                 {capacityPercentage.toFixed(1)} %
               </span>
             </div>
 
-            {/* Progress Bar */}
-            <div className="w-full h-3.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800 relative mb-3">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${
-                  globalOccupancy > capacity
-                    ? 'bg-purple-500'
-                    : capacityPercentage >= 90
-                    ? 'bg-rose-500'
-                    : capacityPercentage >= 80
-                    ? 'bg-amber-500'
-                    : 'bg-emerald-500'
-                }`}
-                style={{ width: `${Math.min(capacityPercentage, 100)}%` }}
-              ></div>
-            </div>
+            <Progress
+              className="mb-3"
+              value={Math.min(capacityPercentage, 100)}
+              indicatorClassName={gaugeIndicator}
+              aria-label="Taux de remplissage"
+            />
 
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs font-semibold">
-              <span className="text-slate-400">
-                {remaining >= 0 ? `${remaining.toLocaleString('fr-FR')} places disponibles` : `Dépassement de ${Math.abs(remaining).toLocaleString('fr-FR')}`}
+              <span className="text-muted-foreground">
+                {remaining >= 0
+                  ? `${remaining.toLocaleString('fr-FR')} places disponibles`
+                  : `Dépassement de ${Math.abs(remaining).toLocaleString('fr-FR')}`}
               </span>
-              <span className="text-slate-400">Version du journal : #{currentEvent?.version}</span>
+              <span className="text-muted-foreground">
+                Version du journal : #{currentEvent?.version}
+              </span>
             </div>
-          </div>
+          </Card>
 
-          {/* Sync Health Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl flex flex-col justify-between">
+          {/* Sync health */}
+          <Card className="flex flex-col justify-between p-4 sm:p-5">
             <div>
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-2">Qualité de Synchronisation</h2>
-              <div className="mt-4 p-4 rounded-2xl border flex items-start gap-3 bg-slate-950/60">
-                {syncQuality === 'reliable' ? (
-                  <>
-                    <ShieldCheck className="w-6 h-6 text-emerald-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-bold text-emerald-300 text-sm">Synchronisation Fiable</p>
-                      <p className="text-slate-400 text-xs mt-1">Tous les appareils sont connectés et à jour.</p>
-                    </div>
-                  </>
-                ) : syncQuality === 'degraded' ? (
-                  <>
-                    <AlertTriangle className="w-6 h-6 text-amber-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-bold text-amber-300 text-sm">Synchronisation Dégradée</p>
-                      <p className="text-slate-400 text-xs mt-1">Un ou plusieurs appareils ont des actions en attente.</p>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle className="w-6 h-6 text-rose-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-bold text-rose-300 text-sm">Non Garantie</p>
-                      <p className="text-slate-400 text-xs mt-1">Plusieurs appareils déconnectés. Jauge globale incertaine.</p>
-                    </div>
-                  </>
-                )}
-              </div>
+              <h2 className="mb-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                Qualité de Synchronisation
+              </h2>
+              <CardPanel className="mt-4 space-y-2">
+                <StatusBadge status={sync.status} />
+                <p className="text-xs text-muted-foreground">{sync.detail}</p>
+              </CardPanel>
             </div>
 
+            {/* These two read as navigation rows rather than compact
+                buttons, so they opt out of the Button's `whitespace-nowrap`:
+                at exactly `md` the sync card is a third of the grid and
+                "Gérer les appareils & QR codes" needs 249px in a 182px
+                column. A button that keeps its label on one line is the
+                right default; a full-width row of text is the exception. */}
             <div className="mt-6 flex flex-col gap-2">
-              <Link
-                to={`/admin/events/${selectedEventId}/devices`}
-                className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-between gap-2 transition-all"
+              <Button
+                asChild
+                variant="secondary"
+                block
+                className="justify-between whitespace-normal py-2.5 text-left"
               >
-                <span className="flex items-center gap-2 min-w-0">
-                  <QrCode className="w-4 h-4 text-indigo-400 flex-shrink-0" />
-                  Gérer les appareils & QR codes
-                </span>
-                <ExternalLink className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-              </Link>
+                <Link to={`/admin/events/${selectedEventId}/devices`}>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <QrCode className="shrink-0 text-primary-accent" />
+                    Gérer les appareils &amp; QR codes
+                  </span>
+                  <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+                </Link>
+              </Button>
 
-              <Link
-                to={`/admin/events/${selectedEventId}/analytics`}
-                className="w-full min-h-11 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-between gap-2 transition-all"
+              <Button
+                asChild
+                variant="secondary"
+                block
+                className="justify-between whitespace-normal py-2.5 text-left"
               >
-                <span className="flex items-center gap-2 min-w-0">
-                  <Activity className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                  Statistiques détaillées
-                </span>
-                <ExternalLink className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-              </Link>
+                <Link to={`/admin/events/${selectedEventId}/analytics`}>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Activity className="shrink-0 text-success" />
+                    Statistiques détaillées
+                  </span>
+                  <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+                </Link>
+              </Button>
             </div>
-          </div>
+          </Card>
         </div>
 
-        {/* 1b. Lifecycle Controls */}
         {currentEvent ? (
-          <section className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">Cycle de vie de l'événement</h3>
+          <Section title="Cycle de vie de l'événement">
             <LifecycleControls event={currentEvent} onChanged={refreshDetails} />
-          </section>
+          </Section>
         ) : null}
 
-        {/* 2. Space Breakdown */}
-        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <h3 className="text-base font-bold text-white">Répartition par Zone</h3>
-            <span className="text-xs text-slate-400">Total zones : {eventDetail?.spaces.length || 0}</span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Section
+          title="Répartition par Zone"
+          actions={
+            <span className="text-xs text-muted-foreground">
+              Total zones : {eventDetail?.spaces.length || 0}
+            </span>
+          }
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             {eventDetail?.spaces
               .filter((s: any) => s.kind !== 'external')
               .map((sp: any) => {
@@ -350,111 +360,91 @@ export const Dashboard: React.FC = () => {
                 const pct = spCap > 0 ? (occ / spCap) * 100 : 0;
 
                 return (
-                  <div
-                    key={sp.id}
-                    className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between"
-                  >
+                  <CardPanel key={sp.id} className="flex flex-col justify-between">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <h4 className="font-bold text-white text-sm break-words">{sp.name}</h4>
-                        <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
+                        <h4 className="break-words text-sm font-bold text-foreground">{sp.name}</h4>
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                           {sp.kind === 'leaf' ? 'Zone Simple' : 'Agrégat'}
                         </span>
                       </div>
-                      <span className="text-lg font-mono font-bold text-white flex-shrink-0">
+                      <span className="shrink-0 font-mono text-lg font-bold text-foreground">
                         {occ} {spCap > 0 ? `/ ${spCap}` : ''}
                       </span>
                     </div>
 
                     {spCap > 0 ? (
                       <div className="mt-3">
-                        <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${pct >= 90 ? 'bg-rose-500' : 'bg-emerald-500'}`}
-                            style={{ width: `${Math.min(pct, 100)}%` }}
-                          ></div>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-semibold mt-1 block text-right">
+                        <Progress
+                          className="h-2"
+                          value={Math.min(pct, 100)}
+                          indicatorClassName={pct >= 90 ? 'bg-danger' : 'bg-success'}
+                          aria-label={`Remplissage ${sp.name}`}
+                        />
+                        <span className="mt-1 block text-right text-[10px] font-semibold text-muted-foreground">
                           {pct.toFixed(0)} %
                         </span>
                       </div>
                     ) : null}
-                  </div>
+                  </CardPanel>
                 );
               })}
           </div>
-        </section>
+        </Section>
 
-        {/* 3. Devices & Checkpoints Status */}
-        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <h3 className="text-base font-bold text-white">Appareils et Portes Actives</h3>
-            <a
-              href={`/api/v1/events/${selectedEventId}/export/movements.csv`}
-              download
-              className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" />
-              Exporter CSV
-            </a>
-          </div>
-
+        <Section
+          title="Appareils et Portes Actives"
+          contentClassName="p-0 sm:p-0"
+          actions={
+            <Button asChild variant="secondary" size="sm">
+              <a href={`/api/v1/events/${selectedEventId}/export/movements.csv`} download>
+                <Download className="size-3.5" />
+                Exporter CSV
+              </a>
+            </Button>
+          }
+        >
           {/* The table keeps its own horizontal scroll area rather than
-              widening the page: six columns of device state do not fit a
-              phone, and folding them into cards is a redesign this phase
-              does not do. */}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[36rem] text-left text-xs text-slate-300">
-              <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
-                <tr>
-                  <th className="py-3 px-4">Porte / Checkpoint</th>
-                  <th className="py-3 px-4">Appareil</th>
-                  <th className="py-3 px-4">Statut</th>
-                  <th className="py-3 px-4">Dernier Contact</th>
-                  <th className="py-3 px-4">En Attente</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
+              widening the page: five columns of device state do not fit a
+              phone, and folding them into cards is a redesign. */}
+          <TableScroller className="px-1 pb-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Porte / Checkpoint</TableHead>
+                  <TableHead>Appareil</TableHead>
+                  <TableHead>Statut</TableHead>
+                  <TableHead>Dernier Contact</TableHead>
+                  <TableHead>En Attente</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {eventDetail?.devices.map((dev: any) => (
-                  <tr key={dev.id} className="hover:bg-slate-950/40">
-                    <td className="py-3 px-4 font-sans font-medium text-white">{dev.checkpointName}</td>
-                    <td className="py-3 px-4 font-sans text-slate-300">{dev.label}</td>
-                    <td className="py-3 px-4">
-                      {dev.isOnline ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-500/30 text-[11px] font-sans font-semibold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                          Connecté
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-950 text-rose-400 border border-rose-500/30 text-[11px] font-sans font-semibold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
-                          Hors ligne
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-slate-400">
+                  <TableRow key={dev.id}>
+                    <TableCell className="font-medium text-foreground">{dev.checkpointName}</TableCell>
+                    <TableCell>{dev.label}</TableCell>
+                    <TableCell>
+                      <StatusText status={dev.isOnline ? 'online' : 'offline'} />
+                    </TableCell>
+                    <TableCell className="font-mono text-muted-foreground">
                       {dev.lastSeenAtMs ? new Date(dev.lastSeenAtMs).toLocaleTimeString('fr-FR') : '—'}
-                    </td>
-                    <td className="py-3 px-4">
+                    </TableCell>
+                    <TableCell className="font-mono">
                       {dev.lastPendingCount > 0 ? (
-                        <span className="text-amber-400 font-bold">{dev.lastPendingCount} actions</span>
+                        <span className="font-bold text-warning">{dev.lastPendingCount} actions</span>
                       ) : (
-                        <span className="text-slate-500">0</span>
+                        <span className="text-muted-foreground">0</span>
                       )}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
                 {eventDetail?.devices.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="py-6 text-center text-slate-500 font-sans">
-                      Aucun appareil appairé pour le moment.
-                    </td>
-                  </tr>
+                  <TableEmpty colSpan={5}>Aucun appareil appairé pour le moment.</TableEmpty>
                 ) : null}
-              </tbody>
-            </table>
-          </div>
-        </section>
+              </TableBody>
+            </Table>
+          </TableScroller>
+        </Section>
       </main>
     </div>
   );

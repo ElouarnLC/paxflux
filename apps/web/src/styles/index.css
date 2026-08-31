@@ -1,21 +1,173 @@
 @import "tailwindcss";
 
+/*
+ * ---------------------------------------------------------------------------
+ * PaxFlux design tokens — dark only
+ * ---------------------------------------------------------------------------
+ *
+ * PaxFlux is operated at night, outdoors, on a phone held in one hand. There
+ * is no light theme and no theme switch: a single, deliberately dark surface
+ * set is the product, not a default that a preference could flip.
+ *
+ * The shadcn primitives in `components/ui` are wired to the standard token
+ * names (background, card, primary, destructive, …) so a future
+ * `npx shadcn add` drops in without translation. The names are shadcn's; the
+ * values are PaxFlux's — the registry supplies primitives, not an identity.
+ *
+ * Every value below was chosen by measurement, not by eye. All are inside
+ * sRGB, and each pair that carries meaning clears its WCAG target:
+ *
+ *   foreground on every surface ............. 12.3 – 17.4  (AA, target 4.5)
+ *   muted-foreground on every surface ....... 7.2 – 8.2    (AA)
+ *   status text on card / background ........ 5.8 – 10.9   (AA)
+ *   white on primary / destructive .......... 4.57 / 4.59  (AA — the labels
+ *                                                           are 12px bold,
+ *                                                           so "large text"
+ *                                                           does not apply)
+ *   dark label on success / warning / closing 8.6 – 10.9   (AA)
+ *   white on entry / exit ................... 4.30 / 4.58  (the count buttons
+ *                                                           are 24–30px bold,
+ *                                                           i.e. large text,
+ *                                                           target 3.0)
+ *   input border, focus ring ................ 3.2 – 6.3    (WCAG 1.4.11)
+ *
+ * `--border` is deliberately *not* held to 3:1: it separates surfaces that
+ * already differ in fill, so it decorates a boundary rather than carrying
+ * it. `--input`, which is the only thing marking where a field begins, is.
+ */
+:root {
+  /* Surfaces, from the page floor upward. Each step is a real, visible
+     lift, so hierarchy comes from the surface itself rather than a shadow. */
+  --background: oklch(0.165 0.020 258);
+  --foreground: oklch(0.965 0.006 258);
+  --card: oklch(0.208 0.024 258);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.232 0.026 258);
+  --popover-foreground: var(--foreground);
+  --muted: oklch(0.262 0.024 258);
+  --muted-foreground: oklch(0.735 0.022 258);
+  --secondary: oklch(0.272 0.026 258);
+  --secondary-foreground: var(--foreground);
+  --accent: oklch(0.300 0.028 258);
+  --accent-foreground: var(--foreground);
+  --border: oklch(0.318 0.026 258);
+  --input: oklch(0.520 0.026 258);
+
+  /* PaxFlux indigo. Two values, because one cannot do both jobs: at the
+     lightness where white sits on it at AA, it is too dark to be read *as*
+     text on the page; at the lightness where it reads as text, white on it
+     drops to AA-large. `--primary` fills, `--primary-accent` speaks. */
+  --primary: oklch(0.575 0.196 276);
+  --primary-foreground: oklch(0.995 0 0);
+  --primary-accent: oklch(0.673 0.174 277);
+  --ring: oklch(0.673 0.174 277);
+
+  --destructive: oklch(0.585 0.207 24);
+  --destructive-foreground: oklch(0.995 0 0);
+
+  /* Business tokens. These name what the colour *means* in PaxFlux, so a
+     page never has to know that "closing" happens to be orange. Each is
+     light enough to be read as text on any surface above, which is how they
+     are mostly used — tinted badge, coloured label, never fill alone. */
+  --success: oklch(0.760 0.150 156);
+  --success-foreground: var(--background);
+  --warning: oklch(0.820 0.130 79);
+  --warning-foreground: var(--background);
+  --closing: oklch(0.760 0.160 53);
+  --closing-foreground: var(--background);
+  --danger: oklch(0.700 0.190 24);
+  --danger-foreground: var(--background);
+  --over-capacity: oklch(0.720 0.170 305);
+
+  /* The two count directions. Only ever used on the field counter, where
+     the label is 24–30px bold and the fill has to stay unmistakable at a
+     glance, in the dark, from arm's length. */
+  --entry: oklch(0.560 0.134 156);
+  --entry-foreground: oklch(0.995 0 0);
+  --exit: oklch(0.585 0.200 24);
+  --exit-foreground: oklch(0.995 0 0);
+
+  /* Geometry. Surfaces get progressively less rounded as they nest, so the
+     hierarchy reads without stacking shadows. */
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-accent: var(--primary-accent);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-closing: var(--closing);
+  --color-closing-foreground: var(--closing-foreground);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-over-capacity: var(--over-capacity);
+  --color-entry: var(--entry);
+  --color-entry-foreground: var(--entry-foreground);
+  --color-exit: var(--exit);
+  --color-exit-foreground: var(--exit-foreground);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
 @layer base {
   * {
     -webkit-tap-highlight-color: transparent;
+    border-color: var(--color-border);
   }
 
   /*
-   * One visible keyboard indicator for the whole application.
+   * The native controls PaxFlux deliberately keeps — <select>, checkboxes,
+   * scrollbars — are drawn by the OS, and only `color-scheme` tells it which
+   * way. Without this the event selector's dropdown opens white on a black
+   * page.
+   */
+  :root {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
+
+  /*
+   * One visible keyboard indicator for the whole application, as a floor.
    *
    * Several controls used to carry `focus:outline-none` with nothing in its
-   * place, which makes the interface unusable without a pointer. The rule
-   * lives here rather than being repeated per component so a control cannot
-   * be added without one; `:focus-visible` means a mouse click on a button
-   * still does not draw a ring, while Tab always does.
+   * place, which makes the interface unusable without a pointer.
+   *
+   * A primitive in `components/ui` may suppress this outline — but only if
+   * it draws its own ring, and only on itself. That keeps exactly one
+   * indicator on migrated controls and keeps this floor under everything
+   * not migrated yet.
    */
   :focus-visible {
-    outline: 2px solid var(--color-indigo-400);
+    outline: 2px solid var(--color-ring);
     outline-offset: 2px;
   }
 }
@@ -28,8 +180,6 @@
  * `viewport-fit=cover` (index.html) lets the page paint to the physical
  * edges of the screen. That is only acceptable if something actually keeps
  * content out of the display cutout, the status bar and the home indicator.
- * Before these rules a `pb-safe` class name existed with no rule behind it,
- * which looked like safe-area handling and did nothing.
  *
  * The contract is deliberately one rule in one place:
  *
@@ -38,15 +188,23 @@
  *      has to opt in and none can forget to. What reaches the cutout is the
  *      page background painted by <html>, and nothing else.
  *
- *   2. The only elements that escape #root's padding box are `position:
- *      sticky` headers, which offset from the scrollport rather than from
- *      their ancestor: a sticky header at `top: 0` slides under the notch
- *      as soon as the page is scrolled. `.sticky-safe-top` restates the top
- *      inset as that offset. It replaces `top-0`, it does not accompany it.
+ *   2. Two kinds of element escape #root's padding box, and only two:
  *
- *   3. Nothing else adds a safe-area padding of its own. A second inset on
- *      a descendant of #root would be double-counted, which is why the
- *      counter — the only full-bleed screen — carries none.
+ *      - `position: sticky` headers, which offset from the scrollport rather
+ *        than from their ancestor: a sticky header at `top: 0` slides under
+ *        the notch as soon as the page is scrolled. `.sticky-safe-top`
+ *        restates the top inset as that offset. It replaces `top-0`, it does
+ *        not accompany it.
+ *
+ *      - Radix portals. A Dialog or AlertDialog renders into <body>, outside
+ *        #root entirely, so it inherits none of #root's padding.
+ *        `.safe-area-portal` gives portalled content its own inset — the one
+ *        place where a second application is correct rather than doubled,
+ *        because the element was never inside the first.
+ *
+ *   3. Nothing else adds a safe-area padding of its own. A second inset on a
+ *      descendant of #root would be double-counted, which is why the counter
+ *      — the only full-bleed screen — carries none.
  */
 @layer utilities {
   .safe-area-root {
@@ -58,5 +216,21 @@
 
   .sticky-safe-top {
     top: env(safe-area-inset-top, 0px);
+  }
+
+  /*
+   * Portalled surfaces. The margins keep the panel clear of the cutout on
+   * every edge, and the height budget is the *dynamic* viewport minus those
+   * insets minus that margin — so a long dialog scrolls inside itself
+   * instead of running off the bottom of a phone.
+   */
+  .safe-area-portal {
+    margin-top: env(safe-area-inset-top, 0px);
+    margin-right: env(safe-area-inset-right, 0px);
+    margin-bottom: env(safe-area-inset-bottom, 0px);
+    margin-left: env(safe-area-inset-left, 0px);
+    max-height: calc(
+      100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 2rem
+    );
   }
 }
