@@ -137,10 +137,21 @@ describe('§6 — the static file server hands out the frontend and nothing else
 
   const hasBuiltFrontend = fs.existsSync(path.resolve(process.cwd(), 'apps/web/dist/index.html'));
 
-  it.runIf(hasBuiltFrontend)('serves the SPA shell at the root', async () => {
+  /**
+   * Both supported shapes are asserted, so this never skips depending on
+   * whether a build happened to have run: with the bundle present the root
+   * serves the SPA shell, and without it the server answers a problem-details
+   * 404 rather than something shaped like a half-served page.
+   */
+  it('serves the SPA shell at the root when the frontend is built, and refuses cleanly when it is not', async () => {
     const res = await app.inject({ method: 'GET', url: '/' });
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('<div id="root"');
+    if (hasBuiltFrontend) {
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain('<div id="root"');
+    } else {
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    }
   });
 
   /**
