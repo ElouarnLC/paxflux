@@ -28,6 +28,8 @@ coverage/
 # Playwright E2E
 /tests/e2e/.data/
 /tests/e2e/.backups/
+/tests/e2e/.acceptance-data/
+/tests/e2e/.acceptance-backups/
 /playwright-report/
 /test-results/
 /blob-report/

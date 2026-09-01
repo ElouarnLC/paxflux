@@ -22,7 +22,7 @@
     "test:watch": "vitest",
     "pretest:coverage": "npm run build:shared",
     "test:coverage": "vitest run --coverage",
-    "pretest:e2e": "rimraf tests/e2e/.data tests/e2e/.backups && npm run build",
+    "pretest:e2e": "rimraf tests/e2e/.data tests/e2e/.backups tests/e2e/.acceptance-data tests/e2e/.acceptance-backups && npm run build",
     "test:e2e": "playwright test",
     "predev:server": "npm run build:shared",
     "dev:server": "npm run dev -w @paxflux/server",
