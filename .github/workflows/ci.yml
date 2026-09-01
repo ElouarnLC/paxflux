@@ -6,30 +6,113 @@ on:
   pull_request:
     branches: [main]
 
+# Read-only by default: nothing in this workflow writes to the repository.
+permissions:
+  contents: read
+
+# A new push to a PR makes the previous run obsolete. Cancel it there, but
+# never on main, where every commit's result is a record worth keeping.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: '24.x'
+
 jobs:
-  test:
-    name: Lint, Build & Integration Suite
+  # Everything a developer can reproduce with `npm run check`.
+  quality:
+    name: typecheck + lint + vitest + build
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [24.x]
-
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Clean Install Dependencies
+      - name: Install dependencies (npm ci)
         run: npm ci
 
-      - name: Build All Workspaces
+      - name: Typecheck all workspaces (npm run typecheck)
+        run: npm run typecheck
+
+      - name: Lint (npm run lint)
+        run: npm run lint
+
+      - name: Vitest integration & load suite (npm test)
+        run: npm test
+
+      - name: Build all workspaces (npm run build)
         run: npm run build
 
-      - name: Run Vitest Integration & Load Suite
-        run: npx vitest run
+  # The full Playwright suite, on the real browser, at every viewport the
+  # config declares. `npm run test:e2e` runs `pretest:e2e` first, which wipes
+  # tests/e2e/.data + .backups and rebuilds, so the suite always starts from a
+  # clean database against freshly built artefacts.
+  e2e-chromium:
+    name: playwright chromium (all projects)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      - name: Install Chromium and its system dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the end-to-end suite (npm run test:e2e)
+        run: npm run test:e2e
+
+      # Only on failure: a green run produces a report nobody reads and the
+      # traces are retained-on-failure anyway, so there is nothing to collect.
+      - name: Upload the Playwright HTML report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-chromium
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload Playwright traces, screenshots and per-test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-and-screenshots-chromium
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Proves the *shipped* packaging works: the repository Dockerfile builds from
+  # the same source the other jobs test, and the resulting image boots from
+  # nothing on empty volumes. Independent of the two jobs above on purpose —
+  # a packaging break should be visible even when the test suites are red.
+  docker-smoke:
+    name: docker build + fresh-boot smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Builds the shipped Dockerfile, boots the image on brand-new volumes for
+      # /data and /backups, and asserts: the container stays up, the image's own
+      # HEALTHCHECK reaches healthy, /health/live and /health/ready answer 200,
+      # the frontend is served, and the server process runs as the non-root
+      # paxflux user. Container and volumes are removed on every exit path.
+      - name: Build the shipped image and smoke-test a fresh boot
+        run: ./scripts/docker-smoke.sh
