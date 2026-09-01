@@ -301,13 +301,33 @@ test('C. appairage de trois téléphones distincts sur trois portes', async ({ p
   await page.goto(`/admin/events/${scenario.eventId}/devices`);
 
   const pairUrls = {} as NonNullable<typeof scenario.pairUrls>;
+  const shown = page.locator('p.select-all');
+  let previousPairUrl = '';
+
   for (const door of ['Porte A', 'Porte B', 'Accès VIP'] as const) {
     await page.locator('#checkpoint-picker').selectOption({ label: door });
     await page.getByRole('button', { name: /Générer le QR Code d'appairage/i }).click();
-    const shown = page.locator('p.select-all');
     await expect(shown).toBeVisible({ timeout: 10_000 });
-    await expect.poll(async () => (await shown.innerText()).trim()).toMatch(/\/pair#[A-Za-z0-9_-]+$/);
-    pairUrls[door] = (await shown.innerText()).trim();
+
+    // From the second door on, the panel still shows the *previous*
+    // invitation until the new one comes back. Waiting for "something that
+    // looks like a pair URL" would therefore read the old one and hand two
+    // doors the same secret. Wait for the displayed URL to actually change.
+    await expect
+      .poll(
+        async () => {
+          const text = (await shown.innerText()).trim();
+          return text !== previousPairUrl && /\/pair#[A-Za-z0-9_-]+$/.test(text);
+        },
+        {
+          timeout: 15_000,
+          message: `the panel never showed a new pairing URL for ${door}`,
+        }
+      )
+      .toBe(true);
+
+    previousPairUrl = (await shown.innerText()).trim();
+    pairUrls[door] = previousPairUrl;
   }
   scenario.pairUrls = pairUrls;
 
