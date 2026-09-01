@@ -174,8 +174,9 @@ function quickCheck(dbPath: string, step: string, promoted = false): void {
  *  * the backup is validated *before* anything is replaced, so a corrupt
  *    snapshot cannot destroy a working instance;
  *  * the work happens on a temporary file beside the target and is promoted by
- *    a single rename, so the live database is never left half-restored — if
- *    any step fails, the instance still holds exactly what it held before;
+ *    a single rename; the live database is never left half-written; failures before
+ *    promotion leave the previous database untouched, while failures after promotion are
+ *    explicitly reported as such.
  *  * the sessions carried inside the snapshot are revoked before it becomes
  *    live, so a token issued after the snapshot cannot keep writing to the
  *    restored database (specification invariant 17);
