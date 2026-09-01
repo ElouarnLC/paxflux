@@ -5,6 +5,7 @@ import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Env } from './config/env.js';
 import { REDACT_PATHS } from './logging/redactor.js';
 import { API_PREFIX } from '@paxflux/shared';
@@ -28,6 +29,34 @@ export interface AppOptions {
   dbConnection?: DatabaseConnection;
 }
 
+/**
+ * Locates the committed SQL migrations.
+ *
+ * They live at the repository root (`drizzle/`), which the image copies next
+ * to the compiled server so the container sees `/app/drizzle`. Resolving them
+ * from `process.cwd()` alone only works when the process happens to be started
+ * from that root: `npm run dev -w @paxflux/server` runs with `apps/server` as
+ * its cwd and died at boot with "Migrations folder not found". Walking up from
+ * this module finds the same directory from every entry point — `npm start`,
+ * `tsx watch`, the container — and the cwd remains the last resort so an
+ * unusual layout still behaves as before.
+ */
+function resolveMigrationsFolder(): string {
+  const cwdCandidate = path.resolve(process.cwd(), 'drizzle');
+  const candidates: string[] = [];
+
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 6; depth += 1) {
+    candidates.push(path.join(dir, 'drizzle'));
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  candidates.push(cwdCandidate);
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? cwdCandidate;
+}
+
 export async function buildApp(options: AppOptions) {
   const { env } = options;
 
@@ -48,6 +77,7 @@ export async function buildApp(options: AppOptions) {
   const dbPath = path.resolve(env.DATA_DIR, 'app.db');
   runMigrations(sqlite, dbPath, {
     backupDir: path.resolve(env.BACKUP_DIR),
+    migrationsFolder: resolveMigrationsFolder(),
   });
 
   // Check and initialize setup token if no admin exists

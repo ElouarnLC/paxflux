@@ -1,7 +1,7 @@
 # PaxFlux
 
 [![CI Status](https://github.com/ElouarnLC/paxflux/actions/workflows/ci.yml/badge.svg)](https://github.com/ElouarnLC/paxflux/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-24.x%20LTS-brightgreen.svg)](https://nodejs.org/)
 
 **PaxFlux** is an open-source, self-hosted, offline-capable, real-time occupancy and people-flow counting system designed for festivals, venues, cultural events, and temporary spaces.
@@ -171,4 +171,4 @@ docker compose exec paxflux wget -qO- --post-data='{"reason":"manual_cli"}' http
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+Apache-2.0. See [LICENSE](LICENSE) for the full text.
