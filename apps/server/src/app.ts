@@ -150,26 +150,34 @@ export async function buildApp(options: AppOptions) {
 
   // Static Frontend Serving (if apps/web/dist exists)
   const webDistPath = path.resolve(process.cwd(), 'apps/web/dist');
-  if (fs.existsSync(webDistPath)) {
+  const servesFrontend = fs.existsSync(webDistPath);
+  if (servesFrontend) {
     await app.register(fastifyStatic, {
       root: webDistPath,
       prefix: '/',
       wildcard: false,
     });
-
-    app.setNotFoundHandler((req, reply) => {
-      if (req.raw.url && req.raw.url.startsWith(API_PREFIX)) {
-        return reply.status(404).send({
-          type: 'https://paxflux.org/problems/not-found',
-          title: 'Not Found',
-          status: 404,
-          code: 'NOT_FOUND',
-          detail: `Route ${req.method} ${req.url} not found`,
-        });
-      }
-      return reply.sendFile('index.html');
-    });
   }
+
+  // The API's error shape is part of its contract and must not depend on
+  // whether the frontend happens to have been built: without this handler
+  // registered unconditionally, `/api/v1/*` answered Fastify's default
+  // `{statusCode, error, message}` in any run without apps/web/dist — a dev
+  // server, or a deployment that serves the PWA from elsewhere — while
+  // answering RFC 7807 in production. Only the non-API branch depends on the
+  // bundle, because only it needs a file to send.
+  app.setNotFoundHandler((req, reply) => {
+    if (!servesFrontend || (req.raw.url && req.raw.url.startsWith(API_PREFIX))) {
+      return reply.status(404).send({
+        type: 'https://paxflux.org/problems/not-found',
+        title: 'Not Found',
+        status: 404,
+        code: 'NOT_FOUND',
+        detail: `Route ${req.method} ${req.url} not found`,
+      });
+    }
+    return reply.sendFile('index.html');
+  });
 
   return app;
 }
