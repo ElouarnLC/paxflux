@@ -35,11 +35,11 @@ column; it does not by itself mean the requirement is fully satisfied — read
 | **§24** | Standard HTTP API (`/api/v1/*`), RFC 7807 problem error format | `apps/server/src/routes/*` | HTTP schema validation tests | Implemented |
 | **§25, §26**| Stateful sessions in HttpOnly cookies, CSRF synchronizer tokens, Origin/Fetch-Metadata checks | `apps/server/src/auth/*` | Security CSRF/Cookie tests | Implemented |
 | **§27, §28**| Security headers, strict CSP (`self`), log redaction, rate limiting | `apps/server/src/app.ts`, `redactor.ts` | Security headers audit & log checks | Implemented |
-| **§30** | SQLite Online Backup API, SHA-256 validation, `PRAGMA quick_check`, retention, restore with session invalidation | `apps/server/src/backups/backup-service.ts` | Backup & restore verification tests | Implemented |
+| **§30** | SQLite Online Backup API, SHA-256 validation, `PRAGMA quick_check`, retention, restore with session invalidation | `apps/server/src/backups/backup-service.ts`, `apps/server/src/db/restore.ts` | Backup & restore verification tests; `scripts/acceptance-compose.sh` proves the documented restore path | Implemented |
 | **§31** | Local observability (`/health/live`, `/health/ready`, system status panel) | `apps/server/src/routes/system.ts` | Healthcheck integration tests | Implemented |
 | **§32, §33**| Multi-stage Docker container (non-root, persistent `/data` and `/backups`), optional Cloudflare/Caddy docs | `Dockerfile`, `docker-compose.yml` | `scripts/docker-smoke.sh`, `scripts/acceptance-compose.sh` | Implemented |
 | **§40, §44**| Load testing (~100 req/s burst, 50 devices, 100 SSE) and chaos/recovery resilience | `tests/load/*`, `tests/chaos/*` | Vitest load simulation & chaos recovery (no autocannon: it is not a dependency of this repository) | Implemented |
-| **§48, §49**| Operational runbooks and incident response guide | README.md (Operator Runbooks) | Runbooks executed by `scripts/acceptance-compose.sh` | Partial — no separate `docs/operations.md`; the backup and restore runbooks live in README.md and are exercised in CI. Restore does not invalidate sessions: ACCEPTANCE_REPORT §10.1 |
+| **§48, §49**| Operational runbooks and incident response guide | README.md (Operator Runbooks) | Runbooks executed by `scripts/acceptance-compose.sh` | Partial — no separate `docs/operations.md`; the backup and restore runbooks live in README.md and are both exercised in CI by `scripts/acceptance-compose.sh`. |
 | **§53** | 8 Architecture Decision Records (ADR-001 through ADR-008) | `docs/adr/ADR-*.md` | ADR verification | Completed |
 
 ---
@@ -51,7 +51,8 @@ column; it does not by itself mean the requirement is fully satisfied — read
 | Operator journey, first run to export, on a virgin instance | product as a whole | `tests/e2e/operator-acceptance.spec.ts` (8 steps) | Implemented |
 | Published Docker Compose install | `docker-compose.yml`, `Dockerfile` | `scripts/acceptance-compose.sh` §6 | Implemented |
 | Restart / persistence | `/data` volume, migrations | `scripts/acceptance-compose.sh` §4 | Implemented |
-| Backup & restore runbook | `backup-service.ts`, README runbook | `scripts/acceptance-compose.sh` §5 | Implemented, with the session-invalidation gap of ACCEPTANCE_REPORT §10.1 |
+| Backup & restore runbook | `backup-service.ts`, `apps/server/src/db/restore.ts`, README runbook | `scripts/acceptance-compose.sh` §5, `tests/integration/db-restore-cli.test.ts` | Implemented |
+| Offline restore command, single documented path (invariant 17) | `npm run db:restore` -> `restoreDatabaseFromFile()` | `scripts/acceptance-compose.sh` §5.2 (staff **and** device session valid before the snapshot both rejected after the restore, on the real compose stack) | Implemented |
 | Pairing URL contract (`PUBLIC_BASE_URL` set and unset) | `auth/pairing.ts` | `tests/integration/deployment-contract.test.ts` | Implemented |
 | Static-serving boundary | `app.ts`, `@fastify/static` 10.x | `tests/integration/deployment-contract.test.ts` | Implemented |
 | Clean-checkout developer commands | root `package.json` pre-scripts | `tests/integration/monorepo-contract.test.ts` | Implemented |

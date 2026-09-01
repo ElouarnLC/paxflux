@@ -35,6 +35,7 @@
     "db:generate": "npm run db:generate -w @paxflux/server",
     "predb:migrate": "npm run build:shared",
     "db:migrate": "npm run db:migrate -w @paxflux/server",
+    "db:restore": "node apps/server/dist/db/restore.js",
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",
     "check": "npm run typecheck && npm run lint && npm test && npm run build"

@@ -190,52 +190,52 @@ an event is live, every `BACKUP_INTERVAL_LIVE_MINUTES`.
 
 ### Restoring from Backup
 
-A snapshot is a complete, self-contained SQLite file. Restoring it means
-putting it in place of the live database while the application is stopped.
-
-Two details are not optional — omitting either leaves the container restarting
-in a loop rather than restored:
-
-* **Remove the `-wal` and `-shm` sidecars.** They belong to the database you
-  are replacing. Left behind, they hand SQLite a journal that does not describe
-  the file next to it.
-* **Restore the ownership.** PaxFlux runs as uid/gid `10001`. A copy made by
-  root — a helper container, `docker cp`, a host shell — produces a database
-  the server cannot write, and it dies at boot with
-  `attempt to write a readonly database`.
+Restoration is an **offline** operation performed by a one-shot container while
+the service is stopped. `npm run db:restore` is the only supported way to do it:
+there is deliberately no HTTP endpoint, because a restore replaces the whole
+instance and must not be reachable from a request.
 
 ```bash
-# 1. Stop the application (leave the volumes in place).
 docker compose stop paxflux
-
-# 2. Put the snapshot in place, clear the stale journal, restore ownership.
-docker run --rm \
-  -v paxflux_paxflux_data:/data \
-  -v paxflux_paxflux_backups:/backups \
-  alpine:3 sh -c '
-    cp /backups/paxflux-backup-<timestamp>-<reason>.db /data/app.db &&
-    rm -f /data/app.db-wal /data/app.db-shm &&
-    chown 10001:10001 /data/app.db &&
-    chmod 640 /data/app.db'
-
-# 3. Start again.
+docker compose run --rm --no-deps paxflux npm run db:restore -- /backups/paxflux-backup-<timestamp>-<reason>.db
 docker compose start paxflux
 ```
 
-Check the volume names for your project with `docker volume ls`; Compose
-prefixes them with the project directory name.
+List the snapshots available on the volume first if you need the filename:
 
-`scripts/acceptance-compose.sh` performs exactly this sequence and asserts the
-instance comes back to the snapshot's occupancy and ledger, with
-`PRAGMA quick_check` returning `ok`.
+```bash
+docker compose run --rm --no-deps paxflux ls -1 /backups
+```
 
-> **Known limitation.** Sessions opened before a restore are **not**
-> invalidated by this procedure. The code that revokes staff and device
-> sessions on restore (`restoreDatabaseFromFile()`) is not reachable from any
-> supported command — there is no restore endpoint — so the file copy bypasses
-> it. Until that is addressed, revoke device sessions from the admin interface
-> after restoring, and change the administrator password if the restore was
-> prompted by a suspected compromise. See `docs/ACCEPTANCE_REPORT.md`.
+The command runs as the image's own runtime user, so everything the old manual
+file-copy procedure asked you to remember is enforced rather than documented:
+
+* the snapshot is validated with `PRAGMA quick_check` **before** anything is
+  replaced — a corrupt backup can no longer destroy a working instance;
+* the work happens on a temporary file and is promoted by a single rename, so
+  the live database is never left half-restored;
+* **every staff and device session carried by the snapshot is revoked**, so a
+  token issued after the snapshot cannot keep writing to the restored database
+  (specification invariant 17);
+* the stale `app.db-wal` and `app.db-shm` of the replaced database are removed;
+* the restored file belongs to the runtime user (uid/gid `10001`, mode `640`)
+  by construction, because that user is what writes it;
+* the restored database is checked again with `PRAGMA quick_check` before the
+  command reports success.
+
+The command exits non-zero on any problem and leaves the existing database
+untouched. Everyone is signed out after a restore — administrators log in again,
+and counter devices must be paired again with a fresh QR code. That is
+intentional: it is what prevents a session created after the snapshot from
+writing into the restored state.
+
+`scripts/acceptance-compose.sh` runs exactly this sequence in CI and asserts
+that a staff session and a device session that were valid before the snapshot
+are both rejected afterwards.
+
+> **Restoring outside Docker.** The same command works from a checkout:
+> `npm run db:restore -- <backup.db> [--target <path-to-app.db>]`. It defaults
+> to `$DATA_DIR/app.db`.
 
 ## License
 

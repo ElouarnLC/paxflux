@@ -1,7 +1,7 @@
 # PaxFlux — Phase 10 Acceptance Report
 
 **Date**: 2026-09-01
-**Verdict**: **ACCEPTED WITH KNOWN LIMITATIONS** — see §10.
+**Verdict**: **ACCEPTED** — see §12. No Phase 10 blocker remains; three ordinary limitations are recorded in §10.
 **Baseline**: `main @ 126ef29c4118a5f4e194e4dab09e19a939c01e65` (Phase 9 merge, CI run #39 green)
 **Branch under acceptance**: `remediation/phase-10-acceptance`
 **Specification**: `PaxFlux_SPECIFICATION_v1.1.md`
@@ -23,9 +23,14 @@ a clean machine, prepare a real event, pair several phones, count with and
 without network, close the event cleanly, export, and recover a coherent
 installation after a restart or a restore?*
 
-The answer is yes, with four limitations recorded in §10 — one of which is a
-gap in a recovery guarantee the product previously claimed to offer, and which
-is escalated rather than closed here.
+The answer is yes. Seven defects were found and fixed (§9), including a
+restore runbook that produced a crash-looping container and a documented backup
+command that could not authenticate. The one gap that could not be closed
+without an owner's decision — a restore did not invalidate the sessions the
+snapshot carried — was escalated, decided, and is now closed by an offline
+`npm run db:restore` command whose behaviour is proved end to end (§5.5). Three
+ordinary limitations remain in §10; none is a gap in a guarantee the product
+makes.
 
 ---
 
@@ -59,12 +64,12 @@ directories removed, then `npm ci`.
 | Install | `npm ci` | green |
 | Types | `npm run typecheck` | green, 3 workspaces |
 | Lint | `npm run lint` | **0 diagnostics** |
-| Unit / integration | `npm test` | **229 / 229** |
+| Unit / integration | `npm test` | **241 / 241** |
 | Build | `npm run build` | green |
 | Browser | `npm run test:e2e` | **229 / 229** across 8 viewport projects |
 
-Vitest grew from the Phase 9 baseline of 194 by 35 repository- and
-deployment-contract tests (§6). Playwright grew from 221 by the 8 steps of the
+Vitest grew from the Phase 9 baseline of 194 by 47: 14 repository-contract,
+21 deployment-contract and 12 restore-command tests (§6). Playwright grew from 221 by the 8 steps of the
 operator acceptance scenario. No existing test was removed, skipped, weakened,
 retried or made conditional.
 
@@ -154,7 +159,52 @@ recorded before it.
 | Restore returns to the snapshot exactly | occupancy **42**, ledger length identical |
 | `PRAGMA quick_check` on the restored file | ok |
 | Frontend after restore | 200 |
-| Pre-restore staff sessions invalidated | **no** — see §10.1 |
+| Pre-restore staff sessions invalidated | **yes** — HTTP 401, see §5.5 |
+| Pre-restore device sessions invalidated | **yes** — HTTP 401, see §5.5 |
+
+### 5.5 Offline restore command — invariant 17, proved
+
+Restoration is an offline operation performed by a one-shot container while the
+service is stopped. There is deliberately no HTTP endpoint: a restore replaces
+the whole instance and must not be reachable from a request.
+
+```
+docker compose stop paxflux
+docker compose run --rm --no-deps paxflux npm run db:restore -- /backups/<backup>.db
+docker compose start paxflux
+```
+
+`npm run db:restore` calls `restoreDatabaseFromFile()`, refactored so the
+primitive itself guarantees every property rather than leaving them to a
+runbook an operator must remember at 2 a.m.:
+
+| Guarantee | How |
+|---|---|
+| The snapshot is sound before anything is replaced | `PRAGMA quick_check` on the backup; a corrupt file is refused with the live database untouched |
+| The live database is never half-restored | work is staged on a temporary file beside the target and promoted by a single `rename` |
+| Sessions carried by the snapshot are revoked | staff and device sessions revoked **on the staged file**, in a transaction, and re-counted before promotion |
+| Stale journal removed | `app.db-wal` and `app.db-shm` of the replaced database are deleted; the staged file is checkpointed with `wal_checkpoint(TRUNCATE)` |
+| Ownership is right by construction | the command runs as the image's runtime user, so the file it writes is `uid/gid 10001`, mode `640` — the root-owned-copy trap cannot occur |
+| The restored database is sound | `PRAGMA quick_check` again, after the rename |
+| Any problem is a failure | every path throws a `RestoreError` naming the step; the command exits non-zero and says the database was left untouched |
+
+Measured by `scripts/acceptance-compose.sh`, on the real compose stack, in CI:
+
+| Check | Result |
+|---|---|
+| `docker compose run --rm --no-deps paxflux npm run db:restore -- …` | exit 0 |
+| Snapshot validated before replacement | reported by the command |
+| Sessions revoked | `revoked 1 staff session(s) and 1 device session(s)` |
+| Restored database `PRAGMA quick_check`, from inside the running container | `ok` |
+| Restored database ownership and mode | `10001:10001 640` |
+| **Staff session valid before the snapshot** | **HTTP 401 after the restore** |
+| **Device session paired before the snapshot** | **HTTP 401 after the restore** |
+| A fresh login works afterwards | yes — revocation is not a lockout |
+| State returns exactly to the snapshot | occupancy 42, ledger identical |
+| A corrupt snapshot | refused, non-zero, live database untouched and still healthy |
+
+Both sessions were created **before** the snapshot, so both were inside it: this
+is the case invariant 17 is about.
 
 ---
 
@@ -163,6 +213,7 @@ recorded before it.
 | File | Tests | Pins |
 |---|---|---|
 | `tests/integration/monorepo-contract.test.ts` | 14 | every public command that reaches a workspace importing `@paxflux/shared` builds it first; licence coherent across `LICENSE`, four manifests and the README |
+| `tests/integration/db-restore-cli.test.ts` | 12 | the restore primitive's seven guarantees, its refusals, the argument parser, and the compiled command's exit codes and output |
 | `tests/integration/deployment-contract.test.ts` | 21 | the `PUBLIC_BASE_URL` / QR contract in both modes; eleven path-traversal spellings refused by the static server; database and setup token never served; API 404s stay RFC 7807 |
 
 ---
@@ -205,51 +256,44 @@ owner. Replace it with a legal name or entity if one applies.
 | 5 | The documented manual-backup command (`wget --post-data`, unauthenticated) could not work — the endpoint requires an admin session and a CSRF token | operators would conclude backups were broken | README replaced with a login-then-request sequence, verified against a live container |
 | 6 | Two high-severity advisories in production dependencies | see §7 | upgraded |
 | 7 | Licence contradiction, no `LICENSE` file | blocks a public release | see §8 |
+| 8 | **A restore did not invalidate the sessions the snapshot carried**, contradicting invariant 17 and the README | a session issued after the snapshot kept writing to the restored database; on a compromise-driven restore, a stolen session survived recovery | escalated, decided by the owner, then closed: offline `npm run db:restore` command, the single documented restore path, with the guarantees enforced in the primitive. Proved end to end in CI — see §5.5 |
 
 ---
 
 ## 10. Known limitations
 
-### 10.1 A restore does not invalidate pre-existing sessions — **escalated**
+None of these is a gap in a guarantee the product makes. The one that was —
+sessions surviving a restore — is closed; see §5.5 and §9 defect 8.
 
-**Measured**, not inferred: a staff session opened before a restore still
-authenticates afterwards (HTTP 200). The previous README claimed the opposite.
+### 10.1 Four moderate dev-only advisories remain
 
-`restoreDatabaseFromFile()` — which runs `PRAGMA quick_check` on the backup and
-revokes every active staff and device session — exists and is covered by
-integration tests, but **nothing in production reaches it**. There is no restore
-endpoint and no restore command, so the only supported path is the file copy,
-which bypasses it entirely.
+See §7. `drizzle-kit` 0.31.10 is the latest published version and still depends
+on the deprecated `@esbuild-kit/esm-loader`; no upstream fix exists. Not shipped
+— the image installs with `npm ci --omit=dev` — and the advisory concerns
+`esbuild`'s dev server, which `drizzle-kit` never starts.
 
-*Impact*: after restoring an older snapshot, a device or operator holding a
-session issued after that snapshot can keep writing to the restored database.
-On a compromise-driven restore, a stolen session survives the recovery.
+*Impact*: none at runtime. Revisit when `drizzle-kit` drops the loader.
 
-*Mitigation today*: revoke device sessions from the admin interface after a
-restore, and change the administrator password if the restore followed a
-suspected compromise. Both are documented in the README runbook.
-
-*Why it is not fixed here*: exposing the existing function as an operator
-command is a new capability, not a repair, and Phase 10's scope explicitly
-stops at that line. **This needs an external decision** on the shape of a
-supported restore command before it is built.
-
-### 10.2 Four moderate dev-only advisories remain
-
-See §7. No upstream fix exists; not shipped in the production image.
-
-### 10.3 `useExhaustiveDependencies` suppressed in two components
+### 10.2 `useExhaustiveDependencies` suppressed in two components
 
 `Dashboard.tsx` and `SystemPanel.tsx` carry per-site suppressions with written
 reasons. Real findings; the safe fix is a `useCallback` refactor of the fetch
 functions, which is behavioural work outside Phase 9's and Phase 10's scope.
 
-### 10.4 Local validation ran on Node 22
+*Impact*: the components refetch on their current schedule, unchanged from
+before the lint existed. No user-visible effect.
+
+### 10.3 Local validation ran on Node 22
 
 See §2. CI and the container run Node 24 and are green; where they could
 disagree, CI is the authority.
 
----
+### 10.4 A restore signs everyone out
+
+Not a defect — it is the mechanism of invariant 17 — but operators must know
+it: after a restore, administrators log in again and every counter device must
+be paired again with a fresh QR code. Documented in the README runbook. Budget
+a few minutes for re-pairing before restoring during a live event.
 
 ## 11. Non-negotiable invariants
 
@@ -270,7 +314,7 @@ names where it is verified **in this branch** rather than restating a claim.
 | 11–14 | Topology rules, positive capacity | acceptance step B; `tests/integration/ledger-invariants.test.ts` |
 | 15 | Topology locked once live | `tests/integration/event-lifecycle.test.ts` |
 | 16 | Single-use pairing tokens | acceptance step C (three distinct secrets); `tests/integration/auth.test.ts` |
-| 17 | Session invalidation on restore | **see §10.1 — not honoured by the supported restore path** |
+| 17 | Session invalidation on restore | **PASS** — proved through the documented `npm run db:restore` path: a staff session and a device session valid before the snapshot are both rejected (401) afterwards, on the real compose stack in CI (§5.5). Also covered by `tests/integration/db-restore-cli.test.ts` |
 | 18 | CSV formula-injection defence | `tests/integration/export.test.ts` |
 | 19 | Secret redaction in logs | `apps/server/src/logging/redactor.ts`; the pairing URL is redacted |
 | 20 | Strict CSP | `apps/server/src/app.ts`; `deployment-contract.test.ts` pins the static boundary |
@@ -279,18 +323,19 @@ names where it is verified **in this branch** rather than restating a claim.
 
 ## 12. Verdict
 
-**ACCEPTED WITH KNOWN LIMITATIONS.**
+**ACCEPTED.**
 
 The reference operator journey works end to end on a virgin instance, the
-published install works, and both recovery paths return a coherent
-installation. The quality gates are green from a clean checkout and enforced by
-CI.
+published install works, and both recovery paths return a coherent installation
+— the restore now through a command whose guarantees are enforced in code and
+proved on the real stack, not left to a runbook. The quality gates are green
+from a clean checkout and enforced by CI, including the compose install,
+restart and restore.
 
-It is not "ACCEPTED" without qualification because §10.1 is a gap in a recovery
-guarantee the product previously advertised, and closing it requires a decision
-this phase is not entitled to make. It is not "NOT ACCEPTED" because that gap
-has a documented mitigation, is not reachable in normal operation, and does not
-affect counting correctness.
+No Phase 10 blocker remains. The limitations in §10 are ordinary: an unfixable
+dev-only advisory chain, two lint suppressions with written reasons, a local
+Node version that CI overrides, and one operational consequence of invariant 17
+that operators need to plan for rather than avoid.
 
-Deploy with the §10 limitations understood, and resolve §10.1 before the next
-release.
+Deploy with §10.4 understood — a restore signs everyone out — and revisit §10.1
+when `drizzle-kit` publishes a fix.

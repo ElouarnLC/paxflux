@@ -13,7 +13,8 @@
     "clean": "rimraf dist",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrator.ts"
+    "db:migrate": "tsx src/db/migrator.ts",
+    "db:restore": "node dist/db/restore.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

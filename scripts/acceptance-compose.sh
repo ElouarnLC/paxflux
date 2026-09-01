@@ -209,6 +209,26 @@ SNAPSHOT_MOVEMENTS=$(count_movements)
 [ "$SNAPSHOT_OCCUPANCY" = "42" ] || fail "expected occupancy 42, got ${SNAPSHOT_OCCUPANCY}"
 ok "recorded state: occupancy=${SNAPSHOT_OCCUPANCY}, ledger=${SNAPSHOT_MOVEMENTS} movements"
 
+# A paired counter, so the restore can be checked against a *device* session
+# and not only a staff one. Both are created before the snapshot, so both are
+# inside it and both must stop working once it is restored (invariant 17).
+DEVICE_JAR="${WORK_DIR}/device-cookies.txt"
+code=$(api POST "/api/v1/events/${EVENT_ID}/device-invites" "{\"checkpointId\":\"${CHECKPOINT_ID}\",\"expiresInMinutes\":30}")
+[ "$code" = "200" ] || [ "$code" = "201" ] || fail "device invite returned ${code}: $(cat "${WORK_DIR}/body.json")"
+INVITE_TOKEN=$(jqf "d['token']")
+
+code=$(curl -s -o "${WORK_DIR}/body.json" -w '%{http_code}' --max-time 20 \
+  -c "$DEVICE_JAR" -H 'Content-Type: application/json' -H "Origin: ${BASE_URL}" \
+  --data "{\"token\":\"${INVITE_TOKEN}\",\"appVersion\":\"acceptance\"}" \
+  "${BASE_URL}/api/v1/device/pair")
+[ "$code" = "200" ] || [ "$code" = "201" ] || fail "device pairing returned ${code}: $(cat "${WORK_DIR}/body.json")"
+
+device_probe() {
+  curl -s -o /dev/null -w '%{http_code}' --max-time 20 -b "$DEVICE_JAR" "${BASE_URL}/api/v1/device/bootstrap"
+}
+[ "$(device_probe)" = "200" ] || fail "the freshly paired device cannot reach /api/v1/device/bootstrap"
+ok "a counter device is paired and authenticated (device session inside the snapshot)"
+
 # ---------------------------------------------------------------------------
 log "§4 — restart with the same volumes: nothing is recreated, nothing is lost"
 # ---------------------------------------------------------------------------
@@ -272,57 +292,66 @@ DIVERGED_MOVEMENTS=$(count_movements)
 [ "$DIVERGED_MOVEMENTS" -gt "$SNAPSHOT_MOVEMENTS" ] || fail "the ledger did not grow after the snapshot"
 ok "database diverged after the snapshot: occupancy=${DIVERGED_OCCUPANCY}, ledger=${DIVERGED_MOVEMENTS}"
 
-log "§5.2 — restore following the runbook exactly"
-"${COMPOSE[@]}" stop paxflux >/dev/null
-ok "container stopped"
+log "§5.2 — restore through the supported command, exactly as the runbook reads"
 
-# Restoring means putting the snapshot in place of the live database. Two
-# details the first version of the README left out, both of which produce a
-# crash-looping container rather than a restored one:
-#
-#   * the WAL and shared-memory sidecars belong to the *replaced* database, so
-#     leaving them behind hands SQLite a journal that does not describe the
-#     file beside it;
-#   * whatever performs the copy is almost certainly root (a helper container,
-#     `docker cp`, a host shell), while PaxFlux runs as uid 10001. A
-#     root-owned app.db makes the server die at boot with
-#     "attempt to write a readonly database".
-docker run --rm \
-  -v "${PROJECT}_paxflux_data:/data" \
-  -v "${PROJECT}_paxflux_backups:/backups" \
-  alpine:3 sh -c "cp /backups/${BACKUP_FILE} /data/app.db \
-    && rm -f /data/app.db-wal /data/app.db-shm \
-    && chown 10001:10001 /data/app.db \
-    && chmod 640 /data/app.db" \
-  || fail "could not put the snapshot in place"
-ok "snapshot copied over /data/app.db, stale -wal/-shm removed, ownership restored to 10001:10001"
+# The runbook is three lines, and this is those three lines. Everything the
+# operator used to have to remember by hand — validating the snapshot first,
+# clearing the stale -wal/-shm, getting the ownership right, revoking the
+# sessions the snapshot carried — is inside `npm run db:restore`, which runs as
+# the image's own runtime user from a one-shot container.
+"${COMPOSE[@]}" stop paxflux >/dev/null
+ok "docker compose stop paxflux"
+
+RESTORE_LOG="${WORK_DIR}/restore.log"
+if ! "${COMPOSE[@]}" run --rm --no-deps paxflux npm run db:restore -- "/backups/${BACKUP_FILE}" > "$RESTORE_LOG" 2>&1; then
+  echo "--- db:restore output ---" >&2
+  cat "$RESTORE_LOG" >&2
+  fail "docker compose run ... npm run db:restore exited non-zero"
+fi
+grep -q 'snapshot passed PRAGMA quick_check before anything was replaced' "$RESTORE_LOG" \
+  || fail "db:restore did not validate the snapshot before replacing anything"
+grep -qE 'revoked [0-9]+ staff session\(s\) and [0-9]+ device session\(s\)' "$RESTORE_LOG" \
+  || fail "db:restore did not report revoking the snapshot's sessions"
+grep -q 'restored database passed PRAGMA quick_check' "$RESTORE_LOG" \
+  || fail "db:restore did not verify the restored database"
+REVOKED_LINE=$(grep -oE 'revoked [0-9]+ staff session\(s\) and [0-9]+ device session\(s\)' "$RESTORE_LOG")
+ok "docker compose run --rm --no-deps paxflux npm run db:restore -- /backups/${BACKUP_FILE}"
+info "${REVOKED_LINE}"
 
 "${COMPOSE[@]}" start paxflux >/dev/null
 RESTORE_ELAPSED=$(wait_healthy)
 CONTAINER=$("${COMPOSE[@]}" ps -q paxflux)
-ok "container healthy again after ${RESTORE_ELAPSED}s"
+ok "docker compose start paxflux — healthy again after ${RESTORE_ELAPSED}s"
 
 QUICK_CHECK=$(docker exec "$CONTAINER" sh -c 'node -e "const {DatabaseSync}=require(\"node:sqlite\");const d=new DatabaseSync(\"/data/app.db\");console.log(d.prepare(\"PRAGMA quick_check;\").get().quick_check);d.close();"')
 [ "$QUICK_CHECK" = "ok" ] || fail "PRAGMA quick_check on the restored database returned '${QUICK_CHECK}'"
-ok "restored database passes PRAGMA quick_check"
+ok "restored database passes PRAGMA quick_check from inside the running container"
 
-# §5.8 — the runbook promises that a restore invalidates the sessions that
-# were open before it. Check the promise, using the cookie taken before the
-# restore, and do not soften the result either way.
-RESTORE_SESSION_CODE=$(api GET "/api/v1/events/${EVENT_ID}/state")
-if [ "$RESTORE_SESSION_CODE" = "200" ]; then
-  SESSION_SURVIVED=1
-  info "a staff session opened before the restore is STILL VALID (HTTP 200)"
-else
-  SESSION_SURVIVED=0
-  ok "staff sessions opened before the restore are rejected (HTTP ${RESTORE_SESSION_CODE})"
-fi
+DB_OWNER=$(docker exec "$CONTAINER" sh -c 'stat -c "%u:%g %a" /data/app.db')
+[ "${DB_OWNER%% *}" = "10001:10001" ] || fail "restored database is owned by ${DB_OWNER%% *}, expected 10001:10001"
+ok "restored database ownership and mode: ${DB_OWNER}"
 
+docker exec "$CONTAINER" sh -c 'test ! -e /data/app.db-wal' \
+  || info "a -wal exists again, which is expected once the server has written"
+
+# §5.8 — invariant 17, end to end. Both sessions existed before the snapshot,
+# so both are inside it, and neither may still authenticate once it is back.
+STAFF_AFTER=$(api GET "/api/v1/events/${EVENT_ID}/state")
+DEVICE_AFTER=$(device_probe)
+[ "$STAFF_AFTER" != "200" ] \
+  || fail "a staff session opened before the restore still authenticates (HTTP 200) — invariant 17 broken"
+ok "staff session from before the restore is rejected (HTTP ${STAFF_AFTER})"
+[ "$DEVICE_AFTER" != "200" ] \
+  || fail "a device session paired before the restore still authenticates (HTTP 200) — invariant 17 broken"
+ok "device session from before the restore is rejected (HTTP ${DEVICE_AFTER})"
+
+# Logging in again must work: revocation is not a lockout.
 CSRF_TOKEN=""
 rm -f "$COOKIE_JAR"
 code=$(api POST /api/v1/auth/login "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}")
 [ "$code" = "200" ] || fail "cannot log in after the restore (${code})"
 CSRF_TOKEN=$(jqf "d['csrfToken']")
+ok "a fresh login works after the restore"
 
 RESTORED_OCCUPANCY=$(read_state)
 RESTORED_MOVEMENTS=$(count_movements)
@@ -336,10 +365,22 @@ status=$(curl -s -o "${WORK_DIR}/root3.html" -w '%{http_code}' --max-time 20 "${
 [ "$status" = "200" ] && grep -qi '<div id="root"' "${WORK_DIR}/root3.html" || fail "frontend is not served after the restore"
 ok "frontend still served after the restore"
 
+log "§5.3 — the command refuses a snapshot it cannot trust"
+docker run --rm -v "${PROJECT}_paxflux_backups:/backups" alpine:3 \
+  sh -c 'printf "not a database" > /backups/corrupt-acceptance.db' >/dev/null
+if "${COMPOSE[@]}" run --rm --no-deps paxflux npm run db:restore -- /backups/corrupt-acceptance.db > "${WORK_DIR}/bad.log" 2>&1; then
+  fail "db:restore accepted a corrupt snapshot"
+fi
+grep -q 'RESTORE FAILED' "${WORK_DIR}/bad.log" || fail "db:restore failed without saying so"
+grep -q 'left untouched' "${WORK_DIR}/bad.log" || fail "db:restore did not state that the database was left untouched"
+ok "a corrupt snapshot is refused, non-zero, with the live database left in place"
+
+"${COMPOSE[@]}" start paxflux >/dev/null 2>&1 || true
+wait_healthy >/dev/null
+[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "${BASE_URL}/health/ready")" = "200" ] \
+  || fail "the instance is not healthy after the refused restore"
+ok "the instance is untouched and healthy after the refused restore"
+
 log "Docker Compose acceptance PASSED"
 printf '    healthy: first boot %ss, restart %ss, restore %ss\n' "$ELAPSED" "$RESTART_ELAPSED" "$RESTORE_ELAPSED"
-if [ "$SESSION_SURVIVED" = "1" ]; then
-  printf '\n\033[33m    NOTE: a pre-restore staff session still authenticated after the restore.\n'
-  printf '    The file-copy runbook does not pass through restoreDatabaseFromFile(),\n'
-  printf '    which is where session invalidation lives. See docs/ACCEPTANCE_REPORT.md.\033[0m\n'
-fi
+printf '    invariant 17 verified through the documented restore command\n'
