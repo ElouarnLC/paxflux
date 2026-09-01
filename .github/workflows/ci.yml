@@ -10,10 +10,19 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR makes the previous run obsolete. Cancel it there, but
-# never on main, where every commit's result is a record worth keeping.
+# A new push to a PR makes the previous run obsolete, so PR runs share one
+# group per pull request and supersede each other.
+#
+# Every commit on main keeps its result. `cancel-in-progress: false` is not
+# enough for that on its own: GitHub keeps at most one running plus one pending
+# run per group, so a third push would evict the pending run of the commit in
+# between. Giving each non-PR run a group of its own (github.run_id is unique
+# per run) takes those runs out of the concurrency mechanism entirely — nothing
+# can ever queue behind them or replace them. That is deliberately *not*
+# serialisation: main commits are independent and must all run, in parallel if
+# the runners allow it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
