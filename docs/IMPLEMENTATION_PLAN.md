@@ -1,14 +1,20 @@
 # PaxFlux Implementation Plan & Delivery Roadmap
 
-**Target Version:** 1.0.0  
-**Specification Reference:** `PaxFlux_SPECIFICATION_v1.1.md`  
-**Date:** August 2026  
+**Target Version:** 1.0.0
+**Specification Reference:** `PaxFlux_SPECIFICATION_v1.1.md`
+**Date:** August 2026
+
+> **Historical document.** This is the plan as written before implementation,
+> kept for the record. It is not a description of the current system: it names
+> `better-sqlite3` (the shipped code uses Node 24's built-in `node:sqlite`) and
+> predates the ten v1.2 remediation phases. For what the system does today read
+> `README.md`, `docs/ACCEPTANCE_REPORT.md` and `docs/TRACEABILITY_MATRIX.md`.
 
 ---
 
 ## 1. Project Invariants & Non-Negotiable Constraints
 
-1. **Topology:** Exactly one application container, one Node.js 24 LTS process, one Fastify 5 server on one port, local SQLite (`better-sqlite3`) in WAL mode with `synchronous=FULL` on a persistent `/data` volume.
+1. **Topology:** Exactly one application container, one Node.js 24 LTS process, one Fastify 5 server on one port, local SQLite (`node:sqlite`) in WAL mode with `synchronous=FULL` on a persistent `/data` volume.
 2. **Zero External Databases/BaaS:** No PostgreSQL, MySQL, Redis, Firebase, Supabase, Airtable, or external SaaS dependencies.
 3. **Data Integrity:** Append-only immutable movement ledger (`movements`). The materialized `space_state` is continuously reconstructable from the ledger. Capacity limits trigger visual alarms and anomalies but **never** discard real physical movements or clamp negative counts.
 4. **Protocols:** State mutations exclusively via transactional HTTP POST/PATCH endpoints. Real-time updates exclusively via Server-Sent Events (SSE).
@@ -28,7 +34,7 @@ paxflux/
 │   │   │   ├── server.ts               # Process entry point, signal handling
 │   │   │   ├── config/                 # Env validation (TypeBox/Zod)
 │   │   │   ├── db/
-│   │   │   │   ├── index.ts            # better-sqlite3 connection, PRAGMAs
+│   │   │   │   ├── index.ts            # node:sqlite connection, PRAGMAs
 │   │   │   │   ├── schema.ts           # Drizzle ORM schema definitions
 │   │   │   │   ├── migrator.ts         # Migration runner with backup hook
 │   │   │   │   └── rebuild.ts          # State reconstruction from ledger

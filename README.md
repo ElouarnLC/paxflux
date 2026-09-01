@@ -81,9 +81,11 @@ paxflux/
 │   ├── DEPENDENCIES.md
 │   └── ACCEPTANCE_REPORT.md
 ├── tests/
-│   ├── integration/      # Invariant validation, auth, counting, exports, backups
+│   ├── integration/      # Invariants, auth, counting, exports, backups, contracts
+│   ├── e2e/              # Playwright: 8 viewport projects + operator acceptance
 │   ├── load/             # High-throughput load benchmark (50 simulated devices)
 │   └── chaos/            # Process crash recovery & ledger reconstruction
+├── scripts/              # docker-smoke.sh, acceptance-compose.sh
 └── Dockerfile            # Multi-stage production container
 ```
 
@@ -91,35 +93,52 @@ paxflux/
 
 ## Testing & Verification
 
-Run the entire test suite across all packages:
+Every command below is what CI runs, in the same order. `npm run check` is the
+composition of the first four.
 
 ```bash
-# Clean install dependencies
 npm ci
-
-# Run all test suites (unit, integration, load, chaos)
-npx vitest run
-
-# Build all workspaces
-npm run build
+npm run typecheck     # all three workspaces
+npm run lint          # Biome, lint only — no formatter, no mass rewrite
+npm test              # Vitest: integration, load and chaos suites
+npm run build         # shared -> server -> web
 ```
+
+A fresh clone needs nothing else: `packages/shared` is built automatically
+before any command that consumes it, so `npm ci && npm run typecheck` works on
+a tree that has never been built.
 
 ### End-to-end tests (Playwright)
 
-`tests/e2e/` holds a separate Playwright suite (excluded from the vitest run
-above via `vitest.config.ts`) driving the app through a real browser against
-the built single-process server. Install the managed browser once per
-machine, then run the suite:
+`tests/e2e/` is a separate suite (excluded from the Vitest run via
+`vitest.config.ts`) driving the app through a real browser against the built
+single-process server, across eight viewport projects from 320x568 to 1280x800.
 
 ```bash
-# One-time local setup: installs Playwright's managed Chromium build
-npx playwright install chromium
-
-# Builds all workspaces and runs the suite (see playwright.config.ts)
-npm run test:e2e
+npx playwright install chromium   # one-time, per machine
+npm run test:e2e                  # rebuilds, wipes E2E data, then runs
 ```
 
----
+`npm run test:e2e` includes `tests/e2e/operator-acceptance.spec.ts`, the
+end-to-end operator scenario: first run through `/setup` on a virgin instance,
+event and topology through the wizard, three paired phones, live counting,
+offline counting and drain, undo, closing and export.
+
+### Packaging and recovery
+
+```bash
+./scripts/docker-smoke.sh          # builds the shipped Dockerfile, boots it on empty volumes
+./scripts/acceptance-compose.sh    # docker compose install, restart, backup/restore
+```
+
+Both clean up their containers and volumes on every exit path.
+
+### Development
+
+```bash
+npm run dev          # API + built frontend on :3000
+npm run dev:web      # Vite dev server on :5173
+```
 
 ## Environment Variables & Configuration
 
@@ -146,28 +165,77 @@ PaxFlux is configured via environment variables. Defaults are pre-configured for
 
 ### Creating a Manual Backup
 
+Snapshots are taken through the admin API, which requires an authenticated
+administrator session and a CSRF token — an unauthenticated `wget` against
+this endpoint is rejected with 401. Trigger one from the **État Système**
+panel in the admin interface, or from a script that logs in first:
+
 ```bash
-# Trigger an immediate WAL-consistent snapshot from host
-docker compose exec paxflux wget -qO- --post-data='{"reason":"manual_cli"}' http://127.0.0.1:3000/api/v1/system/backups
+BASE_URL=http://localhost:3000
+
+# 1. Log in and keep the session cookie; the response carries the CSRF token.
+CSRF=$(curl -s -c /tmp/paxflux.jar -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<password>"}' \
+  "$BASE_URL/api/v1/auth/login" | python3 -c 'import json,sys;print(json.load(sys.stdin)["csrfToken"])')
+
+# 2. Ask for a WAL-consistent snapshot (VACUUM INTO + SHA-256 + quick_check).
+curl -s -b /tmp/paxflux.jar -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $CSRF" -H "Origin: $BASE_URL" \
+  -d '{"reason":"manual_cli"}' "$BASE_URL/api/v1/system/backups"
 ```
+
+Snapshots land in `BACKUP_DIR` (`/backups` in Docker) and are listed by
+`GET /api/v1/system/backups`. Periodic snapshots are taken automatically while
+an event is live, every `BACKUP_INTERVAL_LIVE_MINUTES`.
 
 ### Restoring from Backup
 
-1. Stop the application container:
-   
-   ```bash
-   docker compose stop paxflux
-   ```
-2. Replace `/data/app.db` with your backup copy.
-3. Start the container:
-   
-   ```bash
-   docker compose start paxflux
-   ```
-   
-   *Note: Restoration automatically invalidates all active staff and counter device sessions to prevent stale write collisions.*
+A snapshot is a complete, self-contained SQLite file. Restoring it means
+putting it in place of the live database while the application is stopped.
 
----
+Two details are not optional — omitting either leaves the container restarting
+in a loop rather than restored:
+
+* **Remove the `-wal` and `-shm` sidecars.** They belong to the database you
+  are replacing. Left behind, they hand SQLite a journal that does not describe
+  the file next to it.
+* **Restore the ownership.** PaxFlux runs as uid/gid `10001`. A copy made by
+  root — a helper container, `docker cp`, a host shell — produces a database
+  the server cannot write, and it dies at boot with
+  `attempt to write a readonly database`.
+
+```bash
+# 1. Stop the application (leave the volumes in place).
+docker compose stop paxflux
+
+# 2. Put the snapshot in place, clear the stale journal, restore ownership.
+docker run --rm \
+  -v paxflux_paxflux_data:/data \
+  -v paxflux_paxflux_backups:/backups \
+  alpine:3 sh -c '
+    cp /backups/paxflux-backup-<timestamp>-<reason>.db /data/app.db &&
+    rm -f /data/app.db-wal /data/app.db-shm &&
+    chown 10001:10001 /data/app.db &&
+    chmod 640 /data/app.db'
+
+# 3. Start again.
+docker compose start paxflux
+```
+
+Check the volume names for your project with `docker volume ls`; Compose
+prefixes them with the project directory name.
+
+`scripts/acceptance-compose.sh` performs exactly this sequence and asserts the
+instance comes back to the snapshot's occupancy and ledger, with
+`PRAGMA quick_check` returning `ok`.
+
+> **Known limitation.** Sessions opened before a restore are **not**
+> invalidated by this procedure. The code that revokes staff and device
+> sessions on restore (`restoreDatabaseFromFile()`) is not reachable from any
+> supported command — there is no restore endpoint — so the file copy bypasses
+> it. Until that is addressed, revoke device sessions from the admin interface
+> after restoring, and change the administrator password if the restore was
+> prompted by a suspected compromise. See `docs/ACCEPTANCE_REPORT.md`.
 
 ## License
 

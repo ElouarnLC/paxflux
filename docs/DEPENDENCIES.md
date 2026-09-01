@@ -1,7 +1,8 @@
 # PaxFlux Dependency Compatibility Record
 
-**Runtime Target:** Node.js 24 LTS (`v24.13.1` verified)  
-**Package Manager:** npm (npm workspaces)  
+**Runtime Target:** Node.js 24 LTS (`engines.node >= 24.0.0`; the shipped image is `node:24-alpine`)
+**Package Manager:** npm (npm workspaces)
+**Last reviewed:** 2026-09-01, against `remediation/phase-10-acceptance`
 
 ---
 
@@ -10,14 +11,14 @@
 | Package | Purpose | Target Version | Compatibility & Rationale |
 |---|---|---|---|
 | `fastify` | High-performance HTTP/2 & HTTP/1.1 backend framework | `^5.2.1` | Fastify 5 is natively compatible with Node 24 LTS and TypeScript 5. |
-| `@fastify/static` | Serve static frontend PWA assets from single process | `^8.1.1` | Official Fastify 5 plugin. |
+| `@fastify/static` | Serve static frontend PWA assets from single process | `^10.1.3` | Upgraded in Phase 10 to clear a high-severity route-guard bypass (GHSA-83w8-p2f5-377r) and three moderate advisories. Declares `fastify: '5.x'`; the static boundary is pinned by `tests/integration/deployment-contract.test.ts`. |
 | `@fastify/cookie` | Parse and sign HttpOnly session cookies | `^11.0.2` | Official Fastify 5 cookie manager supporting secure cookie prefixes. |
 | `@fastify/helmet` | Security headers (CSP, HSTS, frame-ancestors, etc.) | `^13.0.1` | Official Fastify 5 security plugin. |
 | `@fastify/rate-limit` | Rate limiter by IP / route for brute-force protection | `^10.2.2` | In-memory store for single-instance monolith. |
 | `@fastify/cors` | Cross-Origin controls (strictly restricted to same origin) | `^10.0.2` | Same-origin configuration by default. |
-| `node:sqlite` / `better-sqlite3` | High-performance local SQLite driver with WAL support | Built-in (SQLite 3.51.2) | Node 24 LTS includes native `node:sqlite` (`DatabaseSync`), offering identical SQLite 3.51 WAL performance, full ACID transactions, and zero external build toolchain requirements across all host operating systems. |
-| `drizzle-orm` | Type-safe SQL query builder and schema manager | `^0.39.3` | Zero-overhead ORM supporting SQLite with typed schemas and migrations. |
-| `drizzle-kit` | Migration generation and runner tooling | `^0.30.4` | Generates deterministic SQL migration files committed to Git. |
+| `node:sqlite` | Local SQLite driver with WAL support | Built-in to Node 24 | `DatabaseSync` from the Node standard library. **`better-sqlite3` is not a dependency of this repository** and never has been in the shipped tree — earlier revisions of this document and of ADR-001/ADR-002 named it, which was wrong. |
+| `drizzle-orm` | Type-safe SQL query builder and schema manager | `^0.45.2` | Upgraded in Phase 10 to clear GHSA-gpj5-g38j-94v9 (SQL injection via SQL identifiers). Not reachable in this codebase — no `sql.identifier`, `sql.raw`, template-literal SQL or request-derived identifiers — but upgraded rather than argued away. |
+| `drizzle-kit` | Migration generation tooling (**dev only**) | `^0.31.10` | Generates deterministic SQL migration files committed to Git. Carries 4 moderate advisories through `@esbuild-kit/esm-loader` -> `esbuild` that **cannot be fixed today**: 0.31.10 is the latest published version and still depends on the deprecated loader. Accepted as a residual — not shipped (`npm ci --omit=dev` in the image) and GHSA-67mh-4wv8-2f99 concerns esbuild's dev server, which drizzle-kit never starts. |
 | `@node-rs/argon2` | OWASP-recommended Argon2id password hashing | `^2.2.0` | N-API precompiled native Argon2id bindings with zero runtime build dependencies across Windows, Linux, and macOS. |
 | `pino` / `pino-pretty` | Structured JSON logging with custom key redaction | `^9.6.0` | Built-in logger for Fastify. |
 | `zod` | Runtime schema validation & DTO parsing | `^3.24.2` | Strict type checking and JSON validation across client/server. |
@@ -47,7 +48,29 @@
 | Package | Purpose | Target Version |
 |---|---|---|
 | `typescript` | Static type safety (`strict: true`) | `^5.7.3` |
+| `@biomejs/biome` | Lint only — formatter disabled, see `biome.json` | `^2.5.11` |
 | `vitest` | Unit and integration test runner | `^3.0.7` |
-| `@playwright/test` | End-to-end multi-browser context testing | `^1.50.0` |
-| `autocannon` | HTTP load and burst testing tool | `^8.0.0` |
+| `@playwright/test` | End-to-end browser testing (Chromium; 8 viewport projects) | `^1.62.1` |
 | `rimraf` / `tsx` | Workspace script helpers | `^6.0.1` / `^4.19.3` |
+
+---
+
+## 4. Security posture
+
+`npm audit` is analysed rather than auto-fixed. As of 2026-09-01:
+
+```
+4 moderate, 0 high, 0 critical
+```
+
+All four are the dev-only `drizzle-kit` -> `@esbuild-kit/esm-loader` -> `esbuild`
+chain described above. **This is not a clean audit and should not be reported as
+one.** The production dependency tree — what `npm ci --omit=dev` installs into
+the image — carries no known advisory at this date.
+
+Rules for this repository:
+
+* never run `npm audit fix --force` without reading each advisory;
+* a production, reachable advisory is fixed before release;
+* a residual is recorded here with package, severity, reachability and the
+  reason no fix was taken, or it is not a residual — it is an oversight.
