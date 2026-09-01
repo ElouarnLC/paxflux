@@ -288,7 +288,36 @@ before the lint existed. No user-visible effect.
 See §2. CI and the container run Node 24 and are green; where they could
 disagree, CI is the authority.
 
-### 10.4 A restore signs everyone out
+### 10.4 `offline-round2` "un 401 appareil est terminal" is timing-sensitive
+
+Observed once in eight local full-suite runs, and reproduced deliberately:
+
+| Condition | Result |
+|---|---|
+| Full suite, local | 7 green / 8 runs |
+| Full suite, CI (runs #40, #41, #42) | 3 green / 3 |
+| Single spec, `npm run test:e2e` (wiped database) | 2 green / 2 |
+| Single spec, `npx playwright test` on a database left by a previous run, machine under container load | 1 green / 3 |
+
+The outbox row stays `sending` instead of reaching `quarantined` inside the
+test's 25 s budget. The spec queues a tap against an aborted batch route, so the
+action enters exponential backoff before the route is released; when the machine
+is loaded, the next attempt can fall outside the poll window.
+
+This is a **Phase 6 spec, unmodified by Phase 10**, and it runs *before* the
+Phase 10 acceptance spec in file order, so nothing added here feeds it. It was
+left alone rather than "stabilised": no retry was added, no timeout inflated,
+no assertion weakened. Changing a previous round's test without having pinned
+the cause is how a real regression gets hidden.
+
+*Impact*: none on the product — the behaviour under test (a device 401 is
+terminal) is asserted correctly and passes. The risk is a red CI run that costs
+a cycle.
+
+*Follow-up*: pin the cause in the retry engine's scheduling rather than the
+spec's budget, in a dedicated change.
+
+### 10.5 A restore signs everyone out
 
 Not a defect — it is the mechanism of invariant 17 — but operators must know
 it: after a restore, administrators log in again and every counter device must
