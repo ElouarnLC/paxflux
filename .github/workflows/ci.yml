@@ -106,6 +106,22 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  # The published quickstart, not just the image: `docker compose up -d` on a
+  # machine with no node_modules, no dist, no data and no backups, then the two
+  # recovery paths an operator actually needs — a restart, and a restore from a
+  # snapshot. Longer than the smoke, so it is its own job rather than being
+  # folded into one whose name would stop describing it.
+  compose-acceptance:
+    name: docker compose install + restart + restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install from the documented quickstart and exercise recovery
+        run: ./scripts/acceptance-compose.sh
+
   # Proves the *shipped* packaging works: the repository Dockerfile builds from
   # the same source the other jobs test, and the resulting image boots from
   # nothing on empty volumes. Independent of the two jobs above on purpose —

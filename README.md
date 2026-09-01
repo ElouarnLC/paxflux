@@ -1,7 +1,7 @@
 # PaxFlux
 
 [![CI Status](https://github.com/ElouarnLC/paxflux/actions/workflows/ci.yml/badge.svg)](https://github.com/ElouarnLC/paxflux/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-24.x%20LTS-brightgreen.svg)](https://nodejs.org/)
 
 **PaxFlux** is an open-source, self-hosted, offline-capable, real-time occupancy and people-flow counting system designed for festivals, venues, cultural events, and temporary spaces.
@@ -81,9 +81,11 @@ paxflux/
 │   ├── DEPENDENCIES.md
 │   └── ACCEPTANCE_REPORT.md
 ├── tests/
-│   ├── integration/      # Invariant validation, auth, counting, exports, backups
+│   ├── integration/      # Invariants, auth, counting, exports, backups, contracts
+│   ├── e2e/              # Playwright: 8 viewport projects + operator acceptance
 │   ├── load/             # High-throughput load benchmark (50 simulated devices)
 │   └── chaos/            # Process crash recovery & ledger reconstruction
+├── scripts/              # docker-smoke.sh, acceptance-compose.sh
 └── Dockerfile            # Multi-stage production container
 ```
 
@@ -91,35 +93,52 @@ paxflux/
 
 ## Testing & Verification
 
-Run the entire test suite across all packages:
+Every command below is what CI runs, in the same order. `npm run check` is the
+composition of the first four.
 
 ```bash
-# Clean install dependencies
 npm ci
-
-# Run all test suites (unit, integration, load, chaos)
-npx vitest run
-
-# Build all workspaces
-npm run build
+npm run typecheck     # all three workspaces
+npm run lint          # Biome, lint only — no formatter, no mass rewrite
+npm test              # Vitest: integration, load and chaos suites
+npm run build         # shared -> server -> web
 ```
+
+A fresh clone needs nothing else: `packages/shared` is built automatically
+before any command that consumes it, so `npm ci && npm run typecheck` works on
+a tree that has never been built.
 
 ### End-to-end tests (Playwright)
 
-`tests/e2e/` holds a separate Playwright suite (excluded from the vitest run
-above via `vitest.config.ts`) driving the app through a real browser against
-the built single-process server. Install the managed browser once per
-machine, then run the suite:
+`tests/e2e/` is a separate suite (excluded from the Vitest run via
+`vitest.config.ts`) driving the app through a real browser against the built
+single-process server, across eight viewport projects from 320x568 to 1280x800.
 
 ```bash
-# One-time local setup: installs Playwright's managed Chromium build
-npx playwright install chromium
-
-# Builds all workspaces and runs the suite (see playwright.config.ts)
-npm run test:e2e
+npx playwright install chromium   # one-time, per machine
+npm run test:e2e                  # rebuilds, wipes E2E data, then runs
 ```
 
----
+`npm run test:e2e` includes `tests/e2e/operator-acceptance.spec.ts`, the
+end-to-end operator scenario: first run through `/setup` on a virgin instance,
+event and topology through the wizard, three paired phones, live counting,
+offline counting and drain, undo, closing and export.
+
+### Packaging and recovery
+
+```bash
+./scripts/docker-smoke.sh          # builds the shipped Dockerfile, boots it on empty volumes
+./scripts/acceptance-compose.sh    # docker compose install, restart, backup/restore
+```
+
+Both clean up their containers and volumes on every exit path.
+
+### Development
+
+```bash
+npm run dev          # API + built frontend on :3000
+npm run dev:web      # Vite dev server on :5173
+```
 
 ## Environment Variables & Configuration
 
@@ -146,29 +165,96 @@ PaxFlux is configured via environment variables. Defaults are pre-configured for
 
 ### Creating a Manual Backup
 
+Snapshots are taken through the admin API, which requires an authenticated
+administrator session and a CSRF token — an unauthenticated `wget` against
+this endpoint is rejected with 401. Trigger one from the **État Système**
+panel in the admin interface, or from a script that logs in first:
+
 ```bash
-# Trigger an immediate WAL-consistent snapshot from host
-docker compose exec paxflux wget -qO- --post-data='{"reason":"manual_cli"}' http://127.0.0.1:3000/api/v1/system/backups
+BASE_URL=http://localhost:3000
+
+# 1. Log in and keep the session cookie; the response carries the CSRF token.
+CSRF=$(curl -s -c /tmp/paxflux.jar -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<password>"}' \
+  "$BASE_URL/api/v1/auth/login" | python3 -c 'import json,sys;print(json.load(sys.stdin)["csrfToken"])')
+
+# 2. Ask for a WAL-consistent snapshot (VACUUM INTO + SHA-256 + quick_check).
+curl -s -b /tmp/paxflux.jar -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $CSRF" -H "Origin: $BASE_URL" \
+  -d '{"reason":"manual_cli"}' "$BASE_URL/api/v1/system/backups"
 ```
+
+Snapshots land in `BACKUP_DIR` (`/backups` in Docker) and are listed by
+`GET /api/v1/system/backups`. Periodic snapshots are taken automatically while
+an event is live, every `BACKUP_INTERVAL_LIVE_MINUTES`.
 
 ### Restoring from Backup
 
-1. Stop the application container:
-   
-   ```bash
-   docker compose stop paxflux
-   ```
-2. Replace `/data/app.db` with your backup copy.
-3. Start the container:
-   
-   ```bash
-   docker compose start paxflux
-   ```
-   
-   *Note: Restoration automatically invalidates all active staff and counter device sessions to prevent stale write collisions.*
+Restoration is an **offline** operation performed by a one-shot container while
+the service is stopped. `npm run db:restore` is the only supported way to do it:
+there is deliberately no HTTP endpoint, because a restore replaces the whole
+instance and must not be reachable from a request.
 
----
+```bash
+docker compose stop paxflux
+docker compose run --rm --no-deps paxflux npm run db:restore -- /backups/paxflux-backup-<timestamp>-<reason>.db
+docker compose start paxflux
+```
+
+List the snapshots available on the volume first if you need the filename:
+
+```bash
+docker compose run --rm --no-deps paxflux ls -1 /backups
+```
+
+The command runs as the image's own runtime user, so everything the old manual
+file-copy procedure asked you to remember is enforced rather than documented:
+
+* the snapshot is validated with `PRAGMA quick_check` **before** anything is
+  replaced — a corrupt backup can no longer destroy a working instance;
+* the work happens on a temporary file and is promoted by a single rename, so
+  the live database is never left half-restored;
+* **every staff and device session carried by the snapshot is revoked**, so a
+  token issued after the snapshot cannot keep writing to the restored database
+  (specification invariant 17);
+* the stale `app.db-wal` and `app.db-shm` of the replaced database are removed;
+* the restored file belongs to the runtime user (uid/gid `10001`, mode `640`)
+  by construction, because that user is what writes it;
+* the restored database is checked again with `PRAGMA quick_check` before the
+  command reports success.
+
+The command exits non-zero on any problem, and tells you which of the two
+situations you are in:
+
+* **Failed before promotion** — the snapshot was never put in place. The
+  existing database and its journal are exactly as they were, and you can start
+  the service again as it was. This covers every refusal above: a bad path, a
+  corrupt snapshot, a failure while staging.
+* **Failed after promotion** — the rename already happened, so the snapshot *is*
+  the database, and the command says so explicitly. **Leave the service
+  stopped**, investigate the database in place or restore another snapshot with
+  the same command, and only then start again. The command never reports this
+  case as "untouched".
+
+The promotion itself is a single `rename` within one directory, which is atomic:
+a reader sees either the old database or the new one, never a half-written file.
+The predecessor's `-wal` and `-shm` are cleared *after* that rename, never
+before, so a failure at any earlier point cannot leave a still-live database
+stripped of its journal.
+
+Everyone is signed out after a restore — administrators log in again, and
+counter devices must be paired again with a fresh QR code. That is intentional:
+it is what prevents a session created after the snapshot from writing into the
+restored state.
+
+`scripts/acceptance-compose.sh` runs exactly this sequence in CI and asserts
+that a staff session and a device session that were valid before the snapshot
+are both rejected afterwards.
+
+> **Restoring outside Docker.** The same command works from a checkout:
+> `npm run db:restore -- <backup.db> [--target <path-to-app.db>]`. It defaults
+> to `$DATA_DIR/app.db`.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+Apache-2.0. See [LICENSE](LICENSE) for the full text.

@@ -92,7 +92,8 @@ describe('Backup & Restore Operations', () => {
     const restoreTargetDbPath = path.join(scratchDir, 'restored.db');
     const restoreResult = restoreDatabaseFromFile(backup.filepath, restoreTargetDbPath);
 
-    expect(restoreResult.success).toBe(true);
+    expect(restoreResult.revokedStaffSessions).toBe(1);
+    expect(restoreResult.targetDbPath).toBe(path.resolve(restoreTargetDbPath));
 
     // Verify restored sessions are revoked
     const restoredConn = createDatabase(restoreTargetDbPath);
