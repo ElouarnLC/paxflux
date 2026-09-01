@@ -223,11 +223,29 @@ file-copy procedure asked you to remember is enforced rather than documented:
 * the restored database is checked again with `PRAGMA quick_check` before the
   command reports success.
 
-The command exits non-zero on any problem and leaves the existing database
-untouched. Everyone is signed out after a restore — administrators log in again,
-and counter devices must be paired again with a fresh QR code. That is
-intentional: it is what prevents a session created after the snapshot from
-writing into the restored state.
+The command exits non-zero on any problem, and tells you which of the two
+situations you are in:
+
+* **Failed before promotion** — the snapshot was never put in place. The
+  existing database and its journal are exactly as they were, and you can start
+  the service again as it was. This covers every refusal above: a bad path, a
+  corrupt snapshot, a failure while staging.
+* **Failed after promotion** — the rename already happened, so the snapshot *is*
+  the database, and the command says so explicitly. **Leave the service
+  stopped**, investigate the database in place or restore another snapshot with
+  the same command, and only then start again. The command never reports this
+  case as "untouched".
+
+The promotion itself is a single `rename` within one directory, which is atomic:
+a reader sees either the old database or the new one, never a half-written file.
+The predecessor's `-wal` and `-shm` are cleared *after* that rename, never
+before, so a failure at any earlier point cannot leave a still-live database
+stripped of its journal.
+
+Everyone is signed out after a restore — administrators log in again, and
+counter devices must be paired again with a fresh QR code. That is intentional:
+it is what prevents a session created after the snapshot from writing into the
+restored state.
 
 `scripts/acceptance-compose.sh` runs exactly this sequence in CI and asserts
 that a staff session and a device session that were valid before the snapshot

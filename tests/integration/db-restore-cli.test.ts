@@ -239,6 +239,83 @@ describe('db:restore — the restore primitive', () => {
     );
   });
 
+  /**
+   * The order of operations is itself the guarantee. An earlier version cleared
+   * the target's -wal/-shm *before* the rename, which stripped a still-live
+   * database of its journal: any later failure would have left the instance
+   * holding a file whose uncheckpointed commits had just been deleted. Nothing
+   * about the target may be disturbed until the snapshot is actually promoted.
+   */
+  it('leaves the target and its journal completely alone when it fails before promotion', async () => {
+    await seedInstance();
+    fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(96, 7));
+    fs.writeFileSync(`${dbPath}-shm`, Buffer.alloc(96, 9));
+
+    const dbBefore = fs.readFileSync(dbPath);
+    const walBefore = fs.readFileSync(`${dbPath}-wal`);
+    const shmBefore = fs.readFileSync(`${dbPath}-shm`);
+
+    const corrupt = path.join(backupDir, 'corrupt.db');
+    fs.writeFileSync(corrupt, Buffer.from('not a database at all'));
+
+    try {
+      restoreDatabaseFromFile(corrupt, dbPath);
+      throw new Error('expected the restore to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(RestoreError);
+      expect((err as RestoreError).promoted, 'nothing was promoted').toBe(false);
+    }
+
+    expect(fs.readFileSync(dbPath).equals(dbBefore)).toBe(true);
+    expect(
+      fs.existsSync(`${dbPath}-wal`) && fs.readFileSync(`${dbPath}-wal`).equals(walBefore),
+      'the journal of a database that was never replaced must survive'
+    ).toBe(true);
+    expect(fs.existsSync(`${dbPath}-shm`) && fs.readFileSync(`${dbPath}-shm`).equals(shmBefore)).toBe(
+      true
+    );
+  });
+
+  /**
+   * And the converse: once the rename has happened the snapshot *is* the
+   * database, so a later failure must say so rather than claim nothing
+   * happened. Forced here by making the predecessor's -wal impossible to
+   * remove, which is the first thing that runs after promotion.
+   */
+  it('reports a failure after promotion as promoted, not as "nothing happened"', async () => {
+    await seedInstance();
+    const backupPath = await snapshot();
+
+    const live = createDatabase(dbPath);
+    live.sqlite.exec("UPDATE events SET name = 'Diverged Before Promotion' WHERE id = 'event-1';");
+    live.sqlite.close();
+
+    // A directory where a file is expected: rmSync without `recursive` refuses.
+    fs.rmSync(`${dbPath}-wal`, { force: true });
+    fs.mkdirSync(`${dbPath}-wal`);
+    fs.writeFileSync(path.join(`${dbPath}-wal`, 'blocker'), 'x');
+
+    try {
+      restoreDatabaseFromFile(backupPath, dbPath);
+      throw new Error('expected the restore to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(RestoreError);
+      expect((err as RestoreError).step).toBe('clear-sidecars');
+      expect((err as RestoreError).promoted, 'the rename had already happened').toBe(true);
+    }
+
+    // Clear the blocker first: SQLite refuses to open a database whose -wal is
+    // a directory, so the check below could not run with it still in place.
+    fs.rmSync(`${dbPath}-wal`, { recursive: true, force: true });
+
+    // The promotion really did take effect — which is exactly why the failure
+    // may not be reported as harmless.
+    const db = new DatabaseSync(dbPath);
+    const row = db.prepare("SELECT name FROM events WHERE id = 'event-1';").get() as { name: string };
+    db.close();
+    expect(row.name).toBe('Restore Fixture');
+  });
+
   it('names the step that failed, so an operator knows where it stopped', async () => {
     await seedInstance();
     const corrupt = path.join(backupDir, 'corrupt.db');
@@ -283,18 +360,26 @@ describe('db:restore — the command', () => {
   /**
    * The command as an operator runs it, against the compiled entry point that
    * ships in the image — not the TypeScript source.
+   *
+   * `pretest` builds the server precisely so these two tests have something to
+   * execute. An earlier version skipped them when the file was missing, which
+   * meant that on CI — where `npm test` runs before `npm run build` — they were
+   * counted as passing without ever running the command. A missing binary is
+   * now a failure, never an implicit pass.
    */
   const compiled = path.resolve(process.cwd(), 'apps/server/dist/db/restore.js');
-  const hasBuild = fs.existsSync(compiled);
+
+  it('ships the compiled entry point the runbook invokes', () => {
+    expect(
+      fs.existsSync(compiled),
+      `${compiled} is missing. \`npm test\` must build the server first (see the ` +
+        `root "pretest" script) so the two tests below actually exercise the ` +
+        `compiled command instead of silently passing.`
+    ).toBe(true);
+  });
 
   it('exits non-zero and changes nothing when the snapshot is unusable', async () => {
     await seedInstance();
-    if (!hasBuild) {
-      // Nothing to assert about a binary that has not been built; the argument
-      // parser above already covers the logic. `npm test` builds only the
-      // shared package, so this is skipped rather than silently passing.
-      return;
-    }
     const corrupt = path.join(backupDir, 'corrupt.db');
     fs.writeFileSync(corrupt, Buffer.from('not a database'));
     const before = fs.readFileSync(dbPath);
@@ -315,14 +400,50 @@ describe('db:restore — the command', () => {
 
     expect(status, 'a failed restore must exit non-zero').toBe(1);
     expect(output).toMatch(/RESTORE FAILED \(verify-backup\)/);
+    // A pre-promotion failure may say the database is untouched, because it is.
     expect(output).toMatch(/left untouched/);
+    expect(output).not.toMatch(/ALREADY BEEN PROMOTED/);
     expect(fs.readFileSync(dbPath).equals(before)).toBe(true);
+  });
+
+  it('never tells an operator the database is untouched once the snapshot is live', async () => {
+    await seedInstance();
+    const conn = createDatabase(dbPath);
+    const backup = await createDatabaseBackup(conn.sqlite, conn.db, env, 'promoted');
+    conn.sqlite.close();
+
+    fs.rmSync(`${dbPath}-wal`, { force: true });
+    fs.mkdirSync(`${dbPath}-wal`);
+    fs.writeFileSync(path.join(`${dbPath}-wal`, 'blocker'), 'x');
+
+    let status = 0;
+    let output = '';
+    try {
+      execFileSync('node', [compiled, backup.filepath], {
+        env: { ...process.env, DATA_DIR: dataDir, BACKUP_DIR: backupDir },
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      const e = err as { status: number; stderr: string };
+      status = e.status;
+      output = e.stderr;
+    }
+
+    expect(status).toBe(1);
+    expect(output).toMatch(/RESTORE FAILED \(clear-sidecars\)/);
+    expect(output).toMatch(/THE SNAPSHOT HAS ALREADY BEEN PROMOTED/);
+    expect(output).toMatch(/Leave the service STOPPED/);
+    expect(
+      output,
+      'claiming the database is untouched after promotion would send an operator to restart on an unverified database'
+    ).not.toMatch(/left untouched/);
+
+    fs.rmSync(`${dbPath}-wal`, { recursive: true, force: true });
   });
 
   it('restores through the compiled command and reports what it did', async () => {
     await seedInstance();
-    if (!hasBuild) return;
-
     const conn = createDatabase(dbPath);
     const backup = await createDatabaseBackup(conn.sqlite, conn.db, env, 'cli');
     conn.sqlite.exec("UPDATE events SET name = 'Diverged' WHERE id = 'event-1';");

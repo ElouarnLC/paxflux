@@ -9,8 +9,14 @@
  *
  * It runs as the image's runtime user, so the database it puts in place belongs
  * to that user by construction — the ownership trap of a root-side file copy
- * cannot happen. It exits non-zero on any problem, and leaves the existing
- * database untouched when it does.
+ * cannot happen.
+ *
+ * It exits non-zero on any problem, and distinguishes the two cases that matter
+ * to whoever is standing in front of the machine: a failure *before* the
+ * snapshot was promoted leaves the existing database exactly as it was, and the
+ * service can simply be started again; a failure *after* promotion means the
+ * snapshot is already the database, and the service must stay stopped. The
+ * command never reports the second as the first.
  */
 import path from 'node:path';
 import { parseEnv } from '../config/env.js';
@@ -94,13 +100,29 @@ function main(): void {
     console.log('  docker compose start paxflux');
     process.exit(0);
   } catch (err) {
+    const promoted = err instanceof RestoreError && err.promoted;
     if (err instanceof RestoreError) {
       console.error(`RESTORE FAILED (${err.step}): ${err.message}`);
     } else {
       console.error(`RESTORE FAILED: ${(err as Error).message}`);
     }
     console.error('');
-    console.error('The existing database was left untouched.');
+
+    if (promoted) {
+      // The rename already happened: the snapshot IS the database now.
+      // Saying "nothing was touched" here would send an operator to restart a
+      // service on a database nobody has verified.
+      console.error('THE SNAPSHOT HAS ALREADY BEEN PROMOTED and could not be verified.');
+      console.error(`The database at ${path.resolve(target)} is the restored snapshot,`);
+      console.error('not the one that was there before.');
+      console.error('');
+      console.error('Leave the service STOPPED. Do not start it until this is resolved.');
+      console.error('Investigate the database in place, or restore another snapshot');
+      console.error('with this same command before starting again.');
+    } else {
+      console.error('The existing database was left untouched: nothing was promoted,');
+      console.error('and the service can be started again as it was.');
+    }
     process.exit(1);
   }
 }

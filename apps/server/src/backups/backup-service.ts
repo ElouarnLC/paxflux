@@ -111,18 +111,26 @@ export interface RestoreResult {
   removedSidecars: string[];
 }
 
-/** Every way a restore can refuse, so a caller can report the cause exactly. */
+/**
+ * Every way a restore can refuse, so a caller can report the cause exactly.
+ *
+ * `promoted` is the part an operator has to act on. Before the rename, the
+ * live database has not been touched at all and the instance can simply be
+ * restarted. After it, the snapshot IS the database — a failure past that
+ * point is not "nothing happened", and must never be reported as such.
+ */
 export class RestoreError extends Error {
   constructor(
     message: string,
-    readonly step: string
+    readonly step: string,
+    readonly promoted: boolean = false
   ) {
     super(message);
     this.name = 'RestoreError';
   }
 }
 
-function quickCheck(dbPath: string, step: string): void {
+function quickCheck(dbPath: string, step: string, promoted = false): void {
   // Opening is lazy: SQLite accepts the path and only rejects the file when a
   // statement runs, so a text file an operator picked by mistake fails here
   // and not above. Both paths have to produce a RestoreError naming the step,
@@ -134,14 +142,16 @@ function quickCheck(dbPath: string, step: string): void {
     if (row?.quick_check !== 'ok') {
       throw new RestoreError(
         `PRAGMA quick_check on ${dbPath} returned '${row?.quick_check ?? 'no result'}' instead of 'ok'`,
-        step
+        step,
+        promoted
       );
     }
   } catch (err) {
     if (err instanceof RestoreError) throw err;
     throw new RestoreError(
       `${dbPath} is not a usable SQLite database: ${(err as Error).message}`,
-      step
+      step,
+      promoted
     );
   } finally {
     db?.close();
@@ -263,26 +273,59 @@ export function restoreDatabaseFromFile(
     throw new RestoreError((err as Error).message, 'stage-restore');
   }
 
-  // 5. Drop the sidecars of the database being replaced: they describe a file
-  //    that is about to stop existing.
-  const removedSidecars: string[] = [];
-  for (const suffix of ['-wal', '-shm']) {
-    const sidecar = `${target}${suffix}`;
-    if (fs.existsSync(sidecar)) {
-      fs.rmSync(sidecar, { force: true });
-      removedSidecars.push(path.basename(sidecar));
-    }
-  }
   for (const suffix of ['-wal', '-shm']) {
     fs.rmSync(`${staging}${suffix}`, { force: true });
   }
 
-  // 6. Promote. Up to here the live database was untouched.
-  fs.renameSync(staging, target);
+  // 5. Promote. This is the point of no return, and the only single operation
+  //    that changes what the instance will open: `rename` within one directory
+  //    is atomic, so a reader sees either the old database or the new one,
+  //    never a partial file.
+  //
+  //    The replaced database's `-wal` and `-shm` are cleared *after* the
+  //    rename, not before. Doing it the other way round would strip a live
+  //    database of its journal while it was still the database — if anything
+  //    then failed, the instance would be left holding a file whose
+  //    uncheckpointed commits had just been deleted. Ordering it this way
+  //    means every failure up to here leaves the existing database exactly as
+  //    it was, which is a guarantee worth more than tidiness.
+  try {
+    fs.renameSync(staging, target);
+  } catch (err) {
+    fs.rmSync(staging, { force: true });
+    throw new RestoreError(
+      `Could not put the restored database in place: ${(err as Error).message}`,
+      'promote',
+      false
+    );
+  }
 
-  // 7. And confirm what is now in place, rather than assuming the rename was
-  //    enough.
-  quickCheck(target, 'verify-final');
+  // --- Everything below this line happens with the snapshot already live. ---
+
+  // 6. The sidecars still on disk belong to the database that was just
+  //    replaced and describe a file that no longer exists. The promoted file
+  //    was checkpointed with wal_checkpoint(TRUNCATE), so it needs no journal
+  //    of its own.
+  const removedSidecars: string[] = [];
+  try {
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = `${target}${suffix}`;
+      if (fs.existsSync(sidecar)) {
+        fs.rmSync(sidecar, { force: true });
+        removedSidecars.push(path.basename(sidecar));
+      }
+    }
+  } catch (err) {
+    throw new RestoreError(
+      `The snapshot is in place but its predecessor's journal could not be removed: ${(err as Error).message}`,
+      'clear-sidecars',
+      true
+    );
+  }
+
+  // 7. Confirm what is now in place, rather than assuming the rename was
+  //    enough. A failure here is post-promotion: the snapshot is the database.
+  quickCheck(target, 'verify-final', true);
 
   return {
     backupFilePath: backup,

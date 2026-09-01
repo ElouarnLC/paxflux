@@ -14,9 +14,10 @@
   "scripts": {
     "build:shared": "npm run build -w @paxflux/shared",
     "build": "npm run build:shared && npm run build -w @paxflux/server && npm run build -w @paxflux/web",
+    "build:server": "npm run build -w @paxflux/server",
     "pretypecheck": "npm run build:shared",
     "typecheck": "npm run typecheck -w @paxflux/shared && npm run typecheck -w @paxflux/server && npm run typecheck -w @paxflux/web",
-    "pretest": "npm run build:shared",
+    "pretest": "npm run build:shared && npm run build:server",
     "test": "vitest run",
     "pretest:watch": "npm run build:shared",
     "test:watch": "vitest",

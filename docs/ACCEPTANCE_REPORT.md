@@ -64,12 +64,15 @@ directories removed, then `npm ci`.
 | Install | `npm ci` | green |
 | Types | `npm run typecheck` | green, 3 workspaces |
 | Lint | `npm run lint` | **0 diagnostics** |
-| Unit / integration | `npm test` | **241 / 241** |
+| Unit / integration | `npm test` | **245 / 245** |
 | Build | `npm run build` | green |
 | Browser | `npm run test:e2e` | **229 / 229** across 8 viewport projects |
 
-Vitest grew from the Phase 9 baseline of 194 by 47: 14 repository-contract,
-21 deployment-contract and 12 restore-command tests (§6). Playwright grew from 221 by the 8 steps of the
+Vitest grew from the Phase 9 baseline of 194 by 51: 14 repository-contract,
+21 deployment-contract and 16 restore-command tests (§6). `pretest` builds the
+shared package **and the server**, because four of those tests execute the
+compiled `db:restore` entry point that ships in the image; a missing binary
+fails them rather than skipping them. Playwright grew from 221 by the 8 steps of the
 operator acceptance scenario. No existing test was removed, skipped, weakened,
 retried or made conditional.
 
@@ -181,12 +184,12 @@ runbook an operator must remember at 2 a.m.:
 | Guarantee | How |
 |---|---|
 | The snapshot is sound before anything is replaced | `PRAGMA quick_check` on the backup; a corrupt file is refused with the live database untouched |
-| The live database is never half-restored | work is staged on a temporary file beside the target and promoted by a single `rename` |
+| The live database is never half-restored | work is staged on a temporary file beside the target and promoted by a single `rename` within one directory, which is atomic. Every failure **before** that rename leaves the existing database *and its journal* exactly as they were — the predecessor's `-wal`/`-shm` are cleared **after** promotion, never before, so no earlier failure can strip a still-live database of its journal |
 | Sessions carried by the snapshot are revoked | staff and device sessions revoked **on the staged file**, in a transaction, and re-counted before promotion |
 | Stale journal removed | `app.db-wal` and `app.db-shm` of the replaced database are deleted; the staged file is checkpointed with `wal_checkpoint(TRUNCATE)` |
 | Ownership is right by construction | the command runs as the image's runtime user, so the file it writes is `uid/gid 10001`, mode `640` — the root-owned-copy trap cannot occur |
 | The restored database is sound | `PRAGMA quick_check` again, after the rename |
-| Any problem is a failure | every path throws a `RestoreError` naming the step; the command exits non-zero and says the database was left untouched |
+| Any problem is a failure, reported precisely | every path throws a `RestoreError` naming the step and carrying `promoted`. Before promotion the command exits non-zero saying the existing database is untouched; **after** promotion it says the snapshot is already live, could not be verified, and the service must stay stopped. It never reports the second as the first |
 
 Measured by `scripts/acceptance-compose.sh`, on the real compose stack, in CI:
 
@@ -202,6 +205,7 @@ Measured by `scripts/acceptance-compose.sh`, on the real compose stack, in CI:
 | A fresh login works afterwards | yes — revocation is not a lockout |
 | State returns exactly to the snapshot | occupancy 42, ledger identical |
 | A corrupt snapshot | refused, non-zero, live database untouched and still healthy |
+| Post-promotion failure wording | the compiled command prints `THE SNAPSHOT HAS ALREADY BEEN PROMOTED` and `Leave the service STOPPED`, and never `left untouched` |
 
 Both sessions were created **before** the snapshot, so both were inside it: this
 is the case invariant 17 is about.
@@ -213,7 +217,7 @@ is the case invariant 17 is about.
 | File | Tests | Pins |
 |---|---|---|
 | `tests/integration/monorepo-contract.test.ts` | 14 | every public command that reaches a workspace importing `@paxflux/shared` builds it first; licence coherent across `LICENSE`, four manifests and the README |
-| `tests/integration/db-restore-cli.test.ts` | 12 | the restore primitive's seven guarantees, its refusals, the argument parser, and the compiled command's exit codes and output |
+| `tests/integration/db-restore-cli.test.ts` | 16 | the restore primitive's guarantees, its refusals, the pre/post-promotion semantics (target *and its journal* intact before promotion; a post-promotion failure reported as promoted), the argument parser, and the compiled command — whose presence is asserted rather than assumed, so a missing binary fails instead of passing silently |
 | `tests/integration/deployment-contract.test.ts` | 21 | the `PUBLIC_BASE_URL` / QR contract in both modes; eleven path-traversal spellings refused by the static server; database and setup token never served; API 404s stay RFC 7807 |
 
 ---
