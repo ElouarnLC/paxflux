@@ -13,7 +13,6 @@ import {
 } from '@paxflux/shared';
 import { requireStaffAuth } from '../auth/staff-sessions.js';
 import {
-  isValidStatusTransition,
   validateEventForLive,
   getUnsyncedActiveDevices,
   getCompactEventState,

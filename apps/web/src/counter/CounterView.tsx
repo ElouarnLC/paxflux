@@ -401,6 +401,10 @@ export const CounterView: React.FC = () => {
 
   // Refresh the undo candidate whenever the outbox or the pairing changes,
   // so the button never offers an action that is gone or no longer ours.
+  // unresolvedCount is not read inside the effect — it is the deliberate Phase 6 trigger. Every outbox
+  // mutation changes its length, which is exactly the signal that the undo candidate must be re-read.
+  // Removing it, as the rule asks, would freeze the undo button on a stale action.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: unresolvedCount is an intentional trigger
   useEffect(() => {
     let cancelled = false;
     Promise.all([getLastCountAction(owner), getConfirmedActions(owner)])

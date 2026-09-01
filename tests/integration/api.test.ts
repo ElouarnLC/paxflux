@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildApp } from '../../apps/server/src/app.js';
 import { createDatabase } from '../../apps/server/src/db/index.js';
 import { parseEnv } from '../../apps/server/src/config/env.js';
-import { instanceSettings, staffUsers } from '../../apps/server/src/db/schema.js';
+import { instanceSettings } from '../../apps/server/src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import crypto from 'node:crypto';
 

@@ -507,8 +507,9 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     expect(record?.eventId).toBe(eventB.eventId);
     // The migration must fall back to the state it can prove belongs to B,
     // not adopt A's higher version.
-    expect((record?.state as { version: number }).version).toBe(1);
-    expect((record?.state as { eventOccupancy: number }).eventOccupancy).toBe(0);
+    const migratedState = record?.state as { version: number; eventOccupancy: number } | undefined;
+    expect(migratedState?.version).toBe(1);
+    expect(migratedState?.eventOccupancy).toBe(0);
 
     // And nothing of A's is on screen.
     await expect(page.getByTestId('global-occupancy')).toHaveText('0', { timeout: 15_000 });

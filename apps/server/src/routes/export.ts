@@ -85,7 +85,7 @@ export async function registerExportRoutes(app: FastifyInstance, db: AppDb, env:
       sanitizeCsvCell(m.eventVersion),
     ]);
 
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const csvContent = `\uFEFF${[headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n')}`;
 
     reply.header('Content-Type', 'text/csv; charset=utf-8');
     reply.header('Content-Disposition', `attachment; filename="paxflux-${eventRecord.slug}-movements.csv"`);

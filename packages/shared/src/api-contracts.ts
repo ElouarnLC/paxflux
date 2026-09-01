@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { StaffUser, EventModel, SpaceModel, CheckpointModel, DeviceSessionModel, SyncQuality } from './models.js';
+import { StaffUser, EventModel, SpaceModel, CheckpointModel, SyncQuality } from './models.js';
 import { CompactEventState } from './offline-protocol.js';
 
 // Setup

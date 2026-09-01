@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
-import { FastifyRequest, FastifyReply } from 'fastify';
-import { CSRF_HEADER_NAME } from '@paxflux/shared';
+import { FastifyRequest } from 'fastify';
 
 export function generateCsrfToken(): { token: string; hash: string } {
   const token = crypto.randomBytes(32).toString('base64url');
@@ -49,8 +48,8 @@ export function validateOriginAndFetchMetadata(req: FastifyRequest): boolean {
   }
 
   // Check Origin header if present
-  const origin = req.headers['origin'];
-  const host = req.headers['host'];
+  const origin = req.headers.origin;
+  const host = req.headers.host;
   if (origin && host) {
     try {
       const originUrl = new URL(origin as string);

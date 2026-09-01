@@ -112,7 +112,7 @@ test('le compteur est dimensionné en hauteur de viewport dynamique', async ({ p
       try {
         walk(sheet.cssRules);
       } catch {
-        continue; // not one of ours
+        // cross-origin stylesheet: not one of ours, nothing to inspect
       }
     }
     return found;

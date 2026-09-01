@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createDatabase } from '../../apps/server/src/db/index.js';
 import { runMigrations } from '../../apps/server/src/db/migrator.js';
-import { buildApp } from '../../apps/server/src/app.js';
 import { parseEnv } from '../../apps/server/src/config/env.js';
 import { checkAndInitializeSetupToken, isSetupCompleted } from '../../apps/server/src/auth/bootstrap.js';
 import { hashPassword, verifyPassword } from '../../apps/server/src/auth/passwords.js';
@@ -12,7 +11,6 @@ import {
   events,
   spaces,
   checkpoints,
-  deviceInvites,
 } from '../../apps/server/src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import crypto from 'node:crypto';

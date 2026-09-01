@@ -17,7 +17,6 @@ import {
   createStaffSession,
   setStaffSessionCookie,
   clearStaffSessionCookie,
-  requireStaffAuth,
   authenticateStaffRequest,
 } from '../auth/staff-sessions.js';
 import { isSetupCompleted } from '../auth/bootstrap.js';

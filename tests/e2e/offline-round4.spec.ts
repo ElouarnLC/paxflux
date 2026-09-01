@@ -5,8 +5,6 @@ import {
   startEvent,
   beginClosingEvent,
   tryCloseEvent,
-  forceCloseEvent,
-  reopenEvent,
   createDeviceInviteToken,
   getEventState,
   getEventDevices,

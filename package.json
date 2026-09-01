@@ -12,10 +12,15 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "npm run build -w @paxflux/shared && npm run build -w @paxflux/server && npm run build -w @paxflux/web",
+    "build:shared": "npm run build -w @paxflux/shared",
+    "build": "npm run build:shared && npm run build -w @paxflux/server && npm run build -w @paxflux/web",
+    "pretypecheck": "npm run build:shared",
     "typecheck": "npm run typecheck -w @paxflux/shared && npm run typecheck -w @paxflux/server && npm run typecheck -w @paxflux/web",
+    "pretest": "npm run build:shared",
     "test": "vitest run",
+    "pretest:watch": "npm run build:shared",
     "test:watch": "vitest",
+    "pretest:coverage": "npm run build:shared",
     "test:coverage": "vitest run --coverage",
     "pretest:e2e": "rimraf tests/e2e/.data tests/e2e/.backups && npm run build",
     "test:e2e": "playwright test",
@@ -24,9 +29,13 @@
     "dev": "npm run dev -w @paxflux/server",
     "start": "node apps/server/dist/server.js",
     "db:generate": "npm run db:generate -w @paxflux/server",
-    "db:migrate": "npm run db:migrate -w @paxflux/server"
+    "db:migrate": "npm run db:migrate -w @paxflux/server",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.11",
     "@playwright/test": "^1.62.1",
     "fake-indexeddb": "^6.2.5",
     "rimraf": "^6.0.1",
