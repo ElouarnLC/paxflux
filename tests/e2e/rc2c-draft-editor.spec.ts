@@ -393,3 +393,59 @@ test('le lien de capacité se demande explicitement, et il s’applique alors', 
   const state = await getEventState(session, topo.eventId);
   expect(state.spaces.find((s: any) => s.id === topo.siteSpaceId).capacity).toBe(1200);
 });
+
+test('renommer une porte et fermer un sens de passage conservent son identifiant', async ({ page }) => {
+  const topo = await draft('RC2C Porte renommée');
+  const spaces = await getEventSpaces(session, topo.eventId);
+  const site = spaces.find((s: any) => s.id === topo.siteSpaceId);
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  await page.getByLabel('Nom de la porte Porte Principale').fill('Entrée Nord — billetterie');
+  // A one-way door: exits are handled elsewhere.
+  await page.getByLabel(`Autoriser De ${site.name} vers Extérieur`).uncheck();
+  await page.getByRole('button', { name: 'Enregistrer la porte' }).click();
+  await expectSaved(page);
+
+  const checkpoints = await getEventCheckpoints(session, topo.eventId);
+  expect(checkpoints).toHaveLength(1);
+  const main = checkpoints[0];
+  expect(main.id, 'la porte est modifiée, pas recréée').toBe(topo.mainCheckpointId);
+  expect(main.name).toBe('Entrée Nord — billetterie');
+  expect(main.allowAToB).toBe(true);
+  expect(main.allowBToA).toBe(false);
+
+  // Closing a direction disables its label rather than discarding it: the
+  // stored value is still there, and reopening the direction returns it.
+  expect(main.labelBToA).toBe('SORTIE −1');
+
+  await page.reload();
+  const closedLabel = page.getByLabel(`Libellé du bouton : De ${site.name} vers Extérieur`);
+  await expect(closedLabel).toBeDisabled();
+  await expect(closedLabel).toHaveValue('SORTIE −1');
+
+  await page.getByLabel(`Autoriser De ${site.name} vers Extérieur`).check();
+  await expect(closedLabel).toBeEnabled();
+  await expect(closedLabel).toHaveValue('SORTIE −1');
+});
+
+test('une porte sans aucun sens de passage n’est pas enregistrable', async ({ page }) => {
+  const topo = await draft('RC2C Porte sans sens');
+  const spaces = await getEventSpaces(session, topo.eventId);
+  const site = spaces.find((s: any) => s.id === topo.siteSpaceId);
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  await page.getByLabel(`Autoriser De Extérieur vers ${site.name}`).uncheck();
+  await page.getByLabel(`Autoriser De ${site.name} vers Extérieur`).uncheck();
+
+  await expect(page.getByText('Une porte doit autoriser au moins un sens de passage.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Enregistrer la porte' })).toBeDisabled();
+
+  // Nothing was sent, so the stored door is untouched.
+  const checkpoints = await getEventCheckpoints(session, topo.eventId);
+  expect(checkpoints[0].allowAToB).toBe(true);
+  expect(checkpoints[0].allowBToA).toBe(true);
+});
