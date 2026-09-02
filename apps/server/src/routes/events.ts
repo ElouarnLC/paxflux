@@ -163,6 +163,26 @@ export async function registerEventRoutes(app: FastifyInstance, sqlite: Database
     const updates = parseResult.data;
     const now = Date.now();
 
+    // Timezone is preparation, not operation.
+    //
+    // Every movement already recorded was read in the event's zone, and the
+    // exports draw their day boundaries from it. Changing it after counting
+    // has begun would silently re-cut a ledger that is append-only by
+    // design, so it is accepted only while the event is still a draft. This
+    // deliberately does not tighten any other field's authorization.
+    if (updates.timezone !== undefined && updates.timezone !== eventRecord.timezone && eventRecord.status !== 'draft') {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'TIMEZONE_LOCKED',
+            'Fuseau horaire verrouillé',
+            'Le fuseau horaire ne peut être modifié que tant que l’événement est un brouillon.'
+          )
+        );
+    }
+
     // If live, capacity updates must be audited
     if (eventRecord.status === 'live' && updates.capacity !== undefined && updates.capacity !== eventRecord.capacity) {
       await db.insert(auditLog).values({

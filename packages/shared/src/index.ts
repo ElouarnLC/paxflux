@@ -3,4 +3,5 @@ export * from './errors.js';
 export * from './models.js';
 export * from './offline-protocol.js';
 export * from './realtime-protocol.js';
+export * from './timezone.js';
 export * from './api-contracts.js';

@@ -4,8 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 import type { ZodIssue } from 'zod';
 import { AppDb } from '../db/index.js';
 import { Env } from '../config/env.js';
-import { events, spaces, checkpoints, spaceState } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { events, spaces, checkpoints, spaceState, deviceSessions, movements } from '../db/schema.js';
+import { eq, and, isNull } from 'drizzle-orm';
 import {
   CreateSpaceRequestSchema,
   UpdateSpaceRequestSchema,
@@ -213,6 +213,46 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     return eventRecord;
   }
 
+  /**
+   * The device sessions still bound to a checkpoint.
+   *
+   * A paired counter holds this checkpoint's endpoints in its own storage —
+   * `/device/bootstrap` hands them over and the browser caches them — and it
+   * projects every tap across that cached pair before the server ever sees
+   * it. The server, meanwhile, maps a tap through the checkpoint's *current*
+   * endpoints (`domain/movements.ts`). Change the endpoints under a live
+   * pairing and the two stop describing the same movement: the device counts
+   * one crossing while the ledger records another. Deleting the checkpoint
+   * is worse still — `device_sessions.checkpoint_id` is a non-null foreign
+   * key pointing at it.
+   *
+   * So a structural edit is refused while a session is live, and the
+   * operator revokes and re-pairs instead. Nothing is migrated: a device is
+   * never silently rewritten onto different semantics.
+   */
+  async function activeDeviceSessionsFor(checkpointId: string) {
+    return db
+      .select()
+      .from(deviceSessions)
+      .where(and(eq(deviceSessions.checkpointId, checkpointId), isNull(deviceSessions.revokedAtMs)))
+      .all();
+  }
+
+  function refuseStructuralEdit(reply: FastifyReply, count: number, action: string) {
+    return reply
+      .status(409)
+      .send(
+        createProblemDetails(
+          409,
+          'CHECKPOINT_IN_USE',
+          'Porte utilisée par un appareil',
+          `${count} appareil${count > 1 ? 's sont appairés' : ' est appairé'} à cette porte. ` +
+            `Révoquez-${count > 1 ? 'les' : 'le'} depuis la gestion des appareils avant de ${action}, ` +
+            'puis appairez à nouveau : un appareil déjà appairé garde en mémoire les zones de cette porte.'
+        )
+      );
+  }
+
   // PATCH /api/v1/events/:id/spaces/:spaceId
   app.patch('/api/v1/events/:id/spaces/:spaceId', async (req, reply) => {
     const sessionData = await requireStaffAuth(req, reply, db, env, 'admin');
@@ -326,13 +366,26 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     const patch = parseResult.data;
     const allowAToB = patch.allowAToB !== undefined ? patch.allowAToB : existingCheckpoint.allowAToB;
     const allowBToA = patch.allowBToA !== undefined ? patch.allowBToA : existingCheckpoint.allowBToA;
+    const spaceAId = patch.spaceAId !== undefined ? patch.spaceAId : existingCheckpoint.spaceAId;
+    const spaceBId = patch.spaceBId !== undefined ? patch.spaceBId : existingCheckpoint.spaceBId;
+
+    // Moving a door to different zones is a structural change: it redefines
+    // what a tap on it means. A device already paired here has the old pair
+    // cached and would keep counting the old crossing.
+    const movesEndpoints = spaceAId !== existingCheckpoint.spaceAId || spaceBId !== existingCheckpoint.spaceBId;
+    if (movesEndpoints) {
+      const paired = await activeDeviceSessionsFor(checkpointId);
+      if (paired.length > 0) {
+        return refuseStructuralEdit(reply, paired.length, 'changer ses zones');
+      }
+    }
 
     const existingSpaces = await db.select().from(spaces).where(eq(spaces.eventId, eventId)).all();
     const spacesMap = new Map(existingSpaces.map((s) => [s.id, s]));
-    const cpError = validateCheckpointRules(
-      { spaceAId: existingCheckpoint.spaceAId, spaceBId: existingCheckpoint.spaceBId, allowAToB, allowBToA },
-      spacesMap
-    );
+    // Validated against the *proposed* endpoints, with exactly the rules
+    // creation uses — an endpoint belonging to another event is simply not
+    // in this map, so it fails as unknown rather than being trusted.
+    const cpError = validateCheckpointRules({ spaceAId, spaceBId, allowAToB, allowBToA }, spacesMap);
     if (cpError) {
       return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Checkpoint invalide', cpError.message));
     }
@@ -341,6 +394,8 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
       .update(checkpoints)
       .set({
         ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+        ...(patch.spaceAId !== undefined ? { spaceAId: patch.spaceAId } : {}),
+        ...(patch.spaceBId !== undefined ? { spaceBId: patch.spaceBId } : {}),
         ...(patch.allowAToB !== undefined ? { allowAToB: patch.allowAToB } : {}),
         ...(patch.allowBToA !== undefined ? { allowBToA: patch.allowBToA } : {}),
         ...(patch.labelAToB !== undefined ? { labelAToB: patch.labelAToB.trim() } : {}),
@@ -372,7 +427,56 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
       return reply.status(404).send(createProblemDetails(404, 'CHECKPOINT_NOT_FOUND', 'Checkpoint introuvable', 'Checkpoint introuvable.'));
     }
 
-    await db.delete(checkpoints).where(eq(checkpoints.id, checkpointId));
+    // `device_sessions.checkpoint_id` is a non-null foreign key at this
+    // checkpoint, so a paired device does not merely lose meaning here — the
+    // row cannot go while the session points at it.
+    const paired = await activeDeviceSessionsFor(checkpointId);
+    if (paired.length > 0) {
+      return refuseStructuralEdit(reply, paired.length, 'supprimer cette porte');
+    }
+
+    // A movement recorded here would make this door part of the ledger, and
+    // the ledger is append-only. Counting requires `live`, so a draft should
+    // never have one — asserted rather than assumed, because the cost of
+    // being wrong is a deleted row the ledger still references.
+    const recorded = await db
+      .select()
+      .from(movements)
+      .where(eq(movements.checkpointId, checkpointId))
+      .get();
+    if (recorded) {
+      return reply
+        .status(409)
+        .send(
+          createProblemDetails(
+            409,
+            'CHECKPOINT_IN_USE',
+            'Porte déjà utilisée',
+            'Des mouvements ont déjà été enregistrés sur cette porte ; elle ne peut plus être supprimée.'
+          )
+        );
+    }
+
+    // What remains are this door's own preparation artefacts: QR invitations
+    // minted for it, and sessions already revoked. Both are non-null foreign
+    // keys, so the delete cannot proceed around them, and both are
+    // meaningless once the door is gone. They go with it, in one transaction
+    // so a failure leaves the door and its artefacts consistent.
+    try {
+      sqlite.exec('BEGIN IMMEDIATE;');
+      sqlite.prepare('DELETE FROM device_sessions WHERE checkpoint_id = ?').run(checkpointId);
+      sqlite.prepare('DELETE FROM device_invites WHERE checkpoint_id = ?').run(checkpointId);
+      sqlite.prepare('DELETE FROM checkpoints WHERE id = ?').run(checkpointId);
+      sqlite.exec('COMMIT;');
+    } catch (err) {
+      try {
+        sqlite.exec('ROLLBACK;');
+      } catch {
+        // A failed ROLLBACK must not mask the error that caused it.
+      }
+      throw err;
+    }
+
     return reply.status(200).send({ success: true });
   });
 }

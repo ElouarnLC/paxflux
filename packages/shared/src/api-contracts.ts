@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { StaffUser, EventModel, SpaceModel, SpaceKind, CheckpointModel, SyncQuality } from './models.js';
+import { FALLBACK_TIMEZONE, TimezoneSchema } from './timezone.js';
 import { CompactEventState } from './offline-protocol.js';
 
 // Setup
@@ -36,7 +37,10 @@ export interface MetaResponse {
 // Events
 export const CreateEventRequestSchema = z.object({
   name: z.string().min(1).max(120),
-  timezone: z.string().min(1).max(50).default('Europe/Paris'),
+  // A real IANA zone, not a free string: an event's day boundaries and its
+  // exports are drawn in it, and a fixed offset would be an hour wrong for
+  // half the year.
+  timezone: TimezoneSchema.default(FALLBACK_TIMEZONE),
   capacity: z.number().int().min(0),
   warningRatio1: z.number().min(0).max(1).default(0.80),
   warningRatio2: z.number().min(0).max(1).default(0.90),
@@ -48,6 +52,16 @@ export type CreateEventRequest = z.infer<typeof CreateEventRequestSchema>;
 export const UpdateEventRequestSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   capacity: z.number().int().min(0).optional(),
+  /**
+   * Changeable only while the event is a draft.
+   *
+   * Once counting has started the timezone is the frame every recorded
+   * movement has already been read in; moving it would silently redraw the
+   * day boundaries of a ledger that is append-only by design. The route
+   * enforces that, not this schema — the schema only says the value must be
+   * a real zone.
+   */
+  timezone: TimezoneSchema.optional(),
   warningRatio1: z.number().min(0).max(1).optional(),
   warningRatio2: z.number().min(0).max(1).optional(),
   startsAtMs: z.number().int().positive().nullable().optional(),
@@ -89,6 +103,20 @@ export type CreateCheckpointRequest = z.infer<typeof CreateCheckpointRequestSche
 
 export const UpdateCheckpointRequestSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  /**
+   * The endpoints this door connects.
+   *
+   * Editable while the event is a draft so an operator can correct a door
+   * they wired to the wrong zone, rather than deleting and recreating it —
+   * which would churn an id that device invites and sessions already point
+   * at. The route re-runs the full creation-time topology validation against
+   * the *proposed* endpoints, and refuses outright while a device is paired
+   * to this checkpoint: the paired counter caches these endpoints and
+   * projects its taps across them, so changing them under it would silently
+   * change what its taps mean.
+   */
+  spaceAId: z.string().uuid().optional(),
+  spaceBId: z.string().uuid().optional(),
   allowAToB: z.boolean().optional(),
   allowBToA: z.boolean().optional(),
   labelAToB: z.string().min(1).max(50).optional(),

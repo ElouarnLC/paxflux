@@ -16,10 +16,21 @@ export type ErrorCode =
   | 'EVENT_NOT_PAIRABLE'
   | 'INVALID_LIFECYCLE_TRANSITION'
   | 'TOPOLOGY_LOCKED'
+  /** The timezone may only change while the event is a draft. */
+  | 'TIMEZONE_LOCKED'
   | 'INVALID_TOPOLOGY'
   | 'SPACE_NOT_FOUND'
   | 'SPACE_IN_USE'
   | 'CHECKPOINT_NOT_FOUND'
+  /**
+   * A structural change to a checkpoint an active device is paired to.
+   *
+   * The paired counter caches this checkpoint's endpoints and projects its
+   * taps across them, so changing them — or removing the checkpoint — under
+   * a live pairing would silently change what those taps mean. The device is
+   * revoked and re-paired first; it is never migrated.
+   */
+  | 'CHECKPOINT_IN_USE'
   | 'DEVICE_NOT_FOUND'
   | 'DEVICE_SESSION_MISMATCH'
   | 'INVITE_NOT_FOUND'
