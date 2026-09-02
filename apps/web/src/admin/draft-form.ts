@@ -210,3 +210,61 @@ export function toEditableCheckpoints(checkpoints: CheckpointModel[]): EditableC
 export function hasUsableDirections(checkpoint: Pick<EditableCheckpoint, 'allowAToB' | 'allowBToA'>): boolean {
   return checkpoint.allowAToB || checkpoint.allowBToA;
 }
+
+// ---------------------------------------------------------------------------
+// Preflight wording
+// ---------------------------------------------------------------------------
+
+/**
+ * The server's go-live verdict, said in the operator's language.
+ *
+ * The verdict itself stays the server's: this maps its code, never re-derives
+ * whether the event is ready. `validateEventForLive` phrases its refusals in
+ * English for the API and the logs, and those strings were being shown
+ * verbatim on a French screen — an operator reading "The event must have at
+ * least one active checkpoint" learns nothing about which button to press.
+ *
+ * An unrecognised code falls through to the server's own message rather than
+ * to a vague "erreur": a wrong-language sentence that names the problem beats
+ * a French one that does not.
+ */
+export function describePreflightError(error: { code: string; message: string } | null): string {
+  if (!error) return '';
+
+  switch (error.code) {
+    case 'INVALID_CAPACITY':
+      return 'La capacité de l’événement ne peut pas être négative.';
+    case 'NO_ACTIVE_EXTERNAL_SPACE':
+      return 'Il manque la frontière de comptage : l’événement doit garder une zone extérieure active.';
+    case 'NO_INTERNAL_LEAF_SPACES':
+      return 'Ajoutez au moins une zone interne : sans elle, il n’y a rien à compter.';
+    case 'NO_ACTIVE_CHECKPOINTS':
+      return 'Ajoutez au moins une porte : sans passage, aucun comptage n’est possible.';
+    default:
+      break;
+  }
+
+  // Per-checkpoint refusals arrive as `INVALID_CHECKPOINT_<rule>` and carry
+  // the door's name in the server's message, which is the part that locates
+  // the problem for the operator.
+  if (error.code.startsWith('INVALID_CHECKPOINT_')) {
+    const name = error.message.match(/^Checkpoint "(.+?)":/)?.[1];
+    const subject = name ? `La porte « ${name} »` : 'Une porte';
+
+    switch (error.code) {
+      case 'INVALID_CHECKPOINT_SAME_SPACE_ENDPOINTS':
+        return `${subject} relie une zone à elle-même : choisissez deux zones distinctes.`;
+      case 'INVALID_CHECKPOINT_SPACE_A_NOT_FOUND':
+      case 'INVALID_CHECKPOINT_SPACE_B_NOT_FOUND':
+        return `${subject} s’appuie sur une zone qui n’existe plus. Corrigez ses deux extrémités.`;
+      case 'INVALID_CHECKPOINT_AGGREGATE_SPACE_ENDPOINT':
+        return `${subject} s’appuie sur une zone d’agrégation, qui ne peut pas être une extrémité.`;
+      case 'INVALID_CHECKPOINT_NO_ACTIVE_DIRECTIONS':
+        return `${subject} n’autorise aucun sens de passage.`;
+      default:
+        return `${subject} n’est pas valide : ${error.message}`;
+    }
+  }
+
+  return error.message;
+}

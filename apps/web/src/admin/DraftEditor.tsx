@@ -24,6 +24,7 @@ import {
   EditableSpace,
   applyEventCapacity,
   describeDirection,
+  describePreflightError,
   describeSpace,
   editedLabel,
   hasEditableCapacity,
@@ -633,7 +634,7 @@ export const DraftEditor: React.FC = () => {
             <Alert tone="warning">
               <AlertCircle />
               <AlertDescription className="mt-0 text-foreground/90">
-                {preflight.data.error?.message || 'Cet événement n’est pas encore prêt à démarrer.'}
+                {describePreflightError(preflight.data.error) || 'Cet événement n’est pas encore prêt à démarrer.'}
               </AlertDescription>
             </Alert>
           ) : preflight.kind === 'error' ? (

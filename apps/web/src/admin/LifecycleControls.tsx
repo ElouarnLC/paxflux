@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { CardPanel } from '@/components/ui/card';
 import { ConfirmAction, ReasonAction } from '@/components/paxflux/confirm-action';
 import { StatusText } from '@/components/paxflux/status';
+import { describePreflightError } from './draft-form.js';
 
 type DeviceRow = EventDetailResponse['devices'][number];
 
@@ -196,7 +197,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
           <Alert tone="warning">
             <AlertTriangle />
             <AlertDescription className="mt-0 text-foreground/90">
-              {preflight.data.error?.message || "Cet événement n'est pas prêt à démarrer."}
+              {describePreflightError(preflight.data.error) || "Cet événement n'est pas prêt à démarrer."}
             </AlertDescription>
           </Alert>
         ) : (

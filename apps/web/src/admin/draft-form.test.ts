@@ -4,6 +4,7 @@ import {
   applyEventCapacity,
   defaultDirectionLabel,
   describeDirection,
+  describePreflightError,
   describeSpace,
   editedLabel,
   generatedLabel,
@@ -207,5 +208,68 @@ describe('direction validity', () => {
     expect(hasUsableDirections({ allowAToB: true, allowBToA: false })).toBe(true);
     expect(hasUsableDirections({ allowAToB: false, allowBToA: true })).toBe(true);
     expect(hasUsableDirections({ allowAToB: false, allowBToA: false })).toBe(false);
+  });
+});
+
+describe('describePreflightError', () => {
+  it('says, in the operator’s language, what is missing', () => {
+    expect(
+      describePreflightError({
+        code: 'NO_ACTIVE_CHECKPOINTS',
+        message: 'The event must have at least one active checkpoint.',
+      })
+    ).toBe('Ajoutez au moins une porte : sans passage, aucun comptage n’est possible.');
+
+    expect(
+      describePreflightError({
+        code: 'NO_INTERNAL_LEAF_SPACES',
+        message: 'The event must have at least one active internal leaf space.',
+      })
+    ).toContain('zone interne');
+
+    expect(
+      describePreflightError({
+        code: 'NO_ACTIVE_EXTERNAL_SPACE',
+        message: 'The event must have at least one active external (boundary) space.',
+      })
+    ).toContain('frontière de comptage');
+  });
+
+  it('keeps the door’s name, which is what locates the problem', () => {
+    // The server phrases per-checkpoint refusals as `Checkpoint "<name>": …`.
+    // Losing the name would leave an operator with four doors and no clue.
+    expect(
+      describePreflightError({
+        code: 'INVALID_CHECKPOINT_NO_ACTIVE_DIRECTIONS',
+        message: 'Checkpoint "Porte Nord": A checkpoint must have at least one active direction (A→B or B→A).',
+      })
+    ).toBe('La porte « Porte Nord » n’autorise aucun sens de passage.');
+
+    expect(
+      describePreflightError({
+        code: 'INVALID_CHECKPOINT_SAME_SPACE_ENDPOINTS',
+        message: 'Checkpoint "Passage VIP": Checkpoint endpoints spaceA and spaceB must be distinct spaces.',
+      })
+    ).toContain('« Passage VIP »');
+  });
+
+  it('falls back to the server’s own sentence rather than inventing a vague one', () => {
+    // A wrong-language sentence that names the problem is worth more than a
+    // French one that does not. This is also what keeps a new server-side
+    // rule visible here instead of silently reading "erreur inconnue".
+    expect(
+      describePreflightError({ code: 'SOME_FUTURE_RULE', message: 'Something specific went wrong.' })
+    ).toBe('Something specific went wrong.');
+
+    expect(
+      describePreflightError({
+        code: 'INVALID_CHECKPOINT_FUTURE_RULE',
+        message: 'Checkpoint "Porte Est": something specific.',
+      })
+    ).toContain('« Porte Est »');
+  });
+
+  it('has nothing to say when the server raised no objection', () => {
+    expect(describePreflightError(null)).toBe('');
   });
 });
