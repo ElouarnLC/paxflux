@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { useSSE } from '../sse/useSSE.js';
@@ -6,9 +6,17 @@ import { LifecycleControls } from './LifecycleControls.js';
 import {
   EventDetailResponse,
   EventModel,
-  SyncQuality,
+  SpaceModel,
   CompactEventState,
 } from '@paxflux/shared';
+import {
+  DashboardView,
+  acceptSupervisionResponse,
+  applyLifecycleMessage,
+  applyLiveState,
+  isLifecyclePushForEvent,
+  summariseSyncQuality,
+} from './supervision.js';
 import {
   Users,
   Activity,
@@ -39,29 +47,49 @@ import {
   StatusBadge,
   StatusText,
   eventStatusKey,
-  type StatusKey,
 } from '@/components/paxflux/status';
 
 /**
- * Sync quality is a supervisor-facing status like any other.
+ * How often the supervision half of the dashboard is re-read from the server.
  *
- * Keyed by the wire value, which calls the worst case `uncertain`; the
- * status vocabulary calls it `unreliable`. The mapping lives here rather
- * than renaming either side, because the wire name is the server's contract
- * and the vocabulary name is the operator's.
+ * A device goes offline when its heartbeat *stops*, and silence produces no
+ * SSE frame — so nothing pushes that transition to this screen. The server
+ * calls a device offline after `DEVICE_OFFLINE_THRESHOLD_MS` (45s) of
+ * silence; re-reading `/state` every few seconds keeps the dashboard's
+ * verdict within a few seconds of the device-management screen's, which is
+ * what an operator compares it against.
+ *
+ * Deliberately not faster: `/state` is a handful of indexed reads, but it is
+ * still a request per supervisor per tick, and nothing on this card changes
+ * meaningfully inside five seconds.
  */
-const SYNC_QUALITY_COPY: Record<SyncQuality, { status: StatusKey; detail: string }> = {
-  reliable: { status: 'reliable', detail: 'Tous les appareils sont connectés et à jour.' },
-  degraded: { status: 'degraded', detail: 'Un ou plusieurs appareils ont des actions en attente.' },
-  uncertain: { status: 'unreliable', detail: 'Plusieurs appareils déconnectés. Jauge globale incertaine.' },
-};
+const SUPERVISION_POLL_INTERVAL_MS = 5_000;
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [eventsList, setEventsList] = useState<EventModel[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [eventDetail, setEventDetail] = useState<EventDetailResponse | null>(null);
+  // The response plus the epoch of the lifecycle status inside it: a
+  // lifecycle transition does not bump `event.version`, so the status needs
+  // an ordering signal of its own. See `supervision.ts`.
+  const [dashboardView, setDashboardView] = useState<DashboardView | null>(null);
+  const eventDetail = dashboardView?.detail ?? null;
+
+  // The lifecycle fence. Both counters live in refs because a refresh has to
+  // read them at the moment it *starts*, which is outside any render.
+  //
+  // `lifecycleGenerationRef` counts lifecycle pushes for the event on
+  // screen. A refresh reads it twice — as it is issued and as its response
+  // arrives — and a difference means a push crossed it in flight. Reading
+  // both ends from this one counter is what keeps the fence correct even
+  // when a push lands before there is any view to apply it to.
+  //
+  // `requestSeqRef` numbers the refreshes themselves, so two concurrent ones
+  // — the poll, and the one `LifecycleControls` fires through `onChanged` —
+  // cannot land out of order and regress the status.
+  const lifecycleGenerationRef = useRef(0);
+  const requestSeqRef = useRef(0);
   const [loading, setLoading] = useState(true);
 
   // Load events list
@@ -87,52 +115,113 @@ export const Dashboard: React.FC = () => {
     fetchEvents();
   }, [navigate, selectedEventId, searchParams]);
 
-  // Load selected event details
-  const refreshDetails = async () => {
-    if (!selectedEventId) return;
-    try {
-      const details = await apiFetch<EventDetailResponse>(`/api/v1/events/${selectedEventId}/state`);
-      setEventDetail(details);
-    } catch {
-      // ignore
-    }
-  };
-
-  // refreshDetails is re-created on every render, so listing it as a dependency would re-run the
-  // effect after each fetch and loop. The real fix is to memoise it with useCallback, which is a
-  // behavioural refactor of the dashboard and out of Phase 9's scope; tracked as a known follow-up.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: adding refreshDetails would loop; see above
+  // The event the screen is currently about, readable from inside an
+  // in-flight request without making the request's identity a dependency.
+  const selectedEventIdRef = useRef<string | null>(selectedEventId);
   useEffect(() => {
-    if (selectedEventId) {
-      refreshDetails();
-    }
+    selectedEventIdRef.current = selectedEventId;
   }, [selectedEventId]);
+
+  /**
+   * Re-reads the supervision state for the selected event.
+   *
+   * Memoised, so the polling effect below depends on a stable reference
+   * instead of being re-armed by every render — which is what previously
+   * forced a lint suppression here.
+   *
+   * A failure is deliberately not surfaced as an error state: this runs on a
+   * timer behind a screen the operator is reading, and blanking the gauge
+   * because one request timed out would be worse than briefly showing state
+   * a few seconds old. The last good snapshot stays, and the next tick
+   * retries. A 401 is not swallowed by this: `apiFetch` routes it to the
+   * auth guard, which is the only thing that may end the session.
+   */
+  const refreshDetails = useCallback(async () => {
+    const requestedEventId = selectedEventIdRef.current;
+    if (!requestedEventId) return;
+    const generationAtStart = lifecycleGenerationRef.current;
+    const requestSeq = ++requestSeqRef.current;
+    try {
+      const details = await apiFetch<EventDetailResponse>(`/api/v1/events/${requestedEventId}/state`);
+      // Read again now the response is here: if the counter moved, a
+      // transition was pushed while this request was in flight and the
+      // lifecycle it carries is stale, whatever it says.
+      const fence = {
+        generationAtStart,
+        generationAtEnd: lifecycleGenerationRef.current,
+        requestSeq,
+      };
+      setDashboardView((prev) =>
+        // Merged rather than assigned: the response also carries counting
+        // state and a lifecycle status, either of which SSE may already have
+        // moved past while it was in flight. It is dropped entirely if the
+        // operator has since switched events.
+        acceptSupervisionResponse(prev, details, selectedEventIdRef.current, fence) ?? prev
+      );
+    } catch (err) {
+      console.debug('Supervision refresh failed; keeping the last known state:', err);
+    }
+  }, []);
+
+  // Supervision is polled, counting is pushed.
+  //
+  // Each tick waits for the previous request to resolve before scheduling
+  // the next, so a slow response can never produce overlapping requests, and
+  // the timer is cleared when the event changes or the dashboard unmounts.
+  useEffect(() => {
+    if (!selectedEventId) return;
+    // A new event starts its own fence: the counters describe the lifecycle
+    // of the event on screen, not of the one just left.
+    lifecycleGenerationRef.current = 0;
+    requestSeqRef.current = 0;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async () => {
+      await refreshDetails();
+      if (!cancelled) {
+        timer = setTimeout(tick, SUPERVISION_POLL_INTERVAL_MS);
+      }
+    };
+
+    tick();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [selectedEventId, refreshDetails]);
 
   // SSE Stream for Realtime Live Updates
   useSSE({
     url: selectedEventId ? `/api/v1/events/${selectedEventId}/stream` : '',
     enabled: !!selectedEventId,
+    // Counting only. A state frame's `eventStatus` is not read: its
+    // `serverTimeMs` is stamped after the event row was fetched, so a frame
+    // can carry a status the server has already superseded under a
+    // timestamp that looks newer than the transition. See `supervision.ts`.
     onState: (state: CompactEventState) => {
-      setEventDetail((prev: any) => {
-        if (!prev) return prev;
-        const updatedSpaces: Record<string, number> = {};
-        for (const s of state.spaces) {
-          updatedSpaces[s.id] = s.occupancy;
-        }
-        return {
-          ...prev,
-          occupancy: {
-            global: state.eventOccupancy,
-            spaces: updatedSpaces,
-          },
-          event: {
-            ...prev.event,
-            status: state.eventStatus as any,
-            capacity: state.eventCapacity,
-            version: state.version,
-          },
-        };
-      });
+      setDashboardView((prev) => applyLiveState(prev, state));
+    },
+    // The lifecycle channel: every transition broadcasts this message with
+    // the same `now` it writes to the event row, so it is ordered against
+    // the `/state` refresh by the same quantity.
+    onMessage: (message) => {
+      if (message.type !== 'event-status') return;
+      // Identity first, then the counter: a message about another event must
+      // not move this event's fence.
+      if (!isLifecyclePushForEvent(message.data, selectedEventIdRef.current)) return;
+      // Bumped before any React state is touched, so a refresh already in
+      // flight sees the change when it reads the counter again — even if
+      // there is no view here yet for the transition to be applied to.
+      lifecycleGenerationRef.current += 1;
+      setDashboardView((prev) =>
+        applyLifecycleMessage(prev, {
+          eventId: message.data.eventId,
+          status: message.data.status,
+          timestampMs: message.data.timestampMs,
+        })
+      );
     },
   });
 
@@ -172,8 +261,10 @@ export const Dashboard: React.FC = () => {
   const capacityPercentage = capacity > 0 ? (globalOccupancy / capacity) * 100 : 0;
   const remaining = capacity - globalOccupancy;
 
-  const syncQuality: SyncQuality = eventDetail?.syncQuality || 'reliable';
-  const sync = SYNC_QUALITY_COPY[syncQuality];
+  // Derived from the server's verdict *and* the devices it was computed
+  // from, so the card can be specific ("1 appareil en ligne sur 2") without
+  // ever re-deriving the verdict itself.
+  const sync = summariseSyncQuality(eventDetail?.syncQuality ?? 'reliable', eventDetail?.devices ?? []);
 
   // The bar's colour is information, so it is derived from the gauge — and
   // always shown next to the written percentage, never instead of it.
@@ -239,7 +330,7 @@ export const Dashboard: React.FC = () => {
             <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
                 <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
-                  Jauge en Direct
+                  Jauge en direct
                 </h2>
                 <p
                   data-testid="dashboard-event-name"
@@ -293,11 +384,24 @@ export const Dashboard: React.FC = () => {
           <Card className="flex flex-col justify-between p-4 sm:p-5">
             <div>
               <h2 className="mb-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
-                Qualité de Synchronisation
+                Qualité de synchronisation
               </h2>
+              {/* Every critical fact is written, not signalled by the badge's
+                  colour alone: how many devices answer, how many counts are
+                  still in flight, and what the server's verdict means. */}
               <CardPanel className="mt-4 space-y-2">
                 <StatusBadge status={sync.status} />
-                <p className="text-xs text-muted-foreground">{sync.detail}</p>
+                <p data-testid="sync-presence" className="text-sm font-semibold text-foreground">
+                  {sync.presence}
+                </p>
+                {sync.pending ? (
+                  <p data-testid="sync-pending" className="text-xs font-semibold text-muted-foreground">
+                    {sync.pending}
+                  </p>
+                ) : null}
+                <p data-testid="sync-detail" className="text-xs text-muted-foreground">
+                  {sync.detail}
+                </p>
               </CardPanel>
             </div>
 
@@ -348,7 +452,7 @@ export const Dashboard: React.FC = () => {
         ) : null}
 
         <Section
-          title="Répartition par Zone"
+          title="Répartition par zone"
           actions={
             <span className="text-xs text-muted-foreground">
               Total zones : {eventDetail?.spaces.length || 0}
@@ -357,8 +461,8 @@ export const Dashboard: React.FC = () => {
         >
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             {eventDetail?.spaces
-              .filter((s: any) => s.kind !== 'external')
-              .map((sp: any) => {
+              .filter((sp: SpaceModel) => sp.kind !== 'external')
+              .map((sp: SpaceModel) => {
                 const occ = eventDetail.occupancy.spaces[sp.id] || 0;
                 const spCap = sp.capacity || 0;
                 const pct = spCap > 0 ? (occ / spCap) * 100 : 0;
@@ -369,7 +473,7 @@ export const Dashboard: React.FC = () => {
                       <div className="min-w-0">
                         <h4 className="break-words text-sm font-bold text-foreground">{sp.name}</h4>
                         <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          {sp.kind === 'leaf' ? 'Zone Simple' : 'Agrégat'}
+                          {sp.kind === 'leaf' ? 'Zone simple' : 'Agrégat'}
                         </span>
                       </div>
                       <span className="shrink-0 font-mono text-lg font-bold text-foreground">
@@ -397,7 +501,7 @@ export const Dashboard: React.FC = () => {
         </Section>
 
         <Section
-          title="Appareils et Portes Actives"
+          title="Appareils et portes actives"
           contentClassName="p-0 sm:p-0"
           actions={
             <Button asChild variant="secondary" size="sm">
@@ -415,15 +519,15 @@ export const Dashboard: React.FC = () => {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Porte / Checkpoint</TableHead>
+                  <TableHead>Porte / checkpoint</TableHead>
                   <TableHead>Appareil</TableHead>
                   <TableHead>Statut</TableHead>
-                  <TableHead>Dernier Contact</TableHead>
-                  <TableHead>En Attente</TableHead>
+                  <TableHead>Dernier contact</TableHead>
+                  <TableHead>En attente</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {eventDetail?.devices.map((dev: any) => (
+                {eventDetail?.devices.map((dev) => (
                   <TableRow key={dev.id}>
                     <TableCell className="font-medium text-foreground">{dev.checkpointName}</TableCell>
                     <TableCell>{dev.label}</TableCell>

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { StaffUser, EventModel, SpaceModel, CheckpointModel, SyncQuality } from './models.js';
+import { StaffUser, EventModel, SpaceModel, SpaceKind, CheckpointModel, SyncQuality } from './models.js';
 import { CompactEventState } from './offline-protocol.js';
 
 // Setup
@@ -283,6 +283,18 @@ export interface AnalyticsResponse {
   spaceStats: Array<{
     spaceId: string;
     spaceName: string;
+    /**
+     * What kind of space this row describes.
+     *
+     * Added because a client cannot otherwise tell an operational zone from
+     * the `external` sentinel, which exists to give boundary movements a
+     * counterpart and whose occupancy is structurally meaningless — it is
+     * always 0 and is never counted into `eventOccupancy`. Rendering it as a
+     * zone holding zero people invites an operator to read "the outside is
+     * empty". The alternative was to infer it from the space's *name*, which
+     * is operator-chosen text.
+     */
+    kind: SpaceKind;
     occupancy: number;
     capacity: number | null;
   }>;

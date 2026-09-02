@@ -113,6 +113,7 @@ export async function computeEventAnalytics(db: AppDb, eventId: string): Promise
     return {
       spaceId: s.id,
       spaceName: s.name,
+      kind: s.kind,
       occupancy: occ,
       capacity: s.capacity,
     };
