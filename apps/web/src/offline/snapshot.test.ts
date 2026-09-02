@@ -159,6 +159,54 @@ describe('a new pairing establishes a new authoritative baseline', () => {
     expect(config?.pendingSessionId, 'the handoff is complete').toBeUndefined();
     expect(stored?.state.version).toBe(13);
   });
+
+  it('rolls the configuration back when the baseline write fails', async () => {
+    // The test above shows the two rows agreeing once everything worked,
+    // which two separate transactions also produce. This one is what tells
+    // them apart: it makes the *second* write fail and looks at what the
+    // first one left behind.
+    //
+    // Committing `device_config` on its own — as the code did before this
+    // change — leaves the device holding S2's identity beside S1's
+    // pre-restore state, which is the field defect exactly: a counter
+    // configured for the new pairing, reading the old pairing's occupancy,
+    // with no further bootstrap coming to correct it.
+    await establishPreRestoreState();
+    await beginPairingHandoff(S2);
+
+    // A Dexie hook is the only way to fail one write inside the transaction
+    // without teaching production code a test-only path.
+    const refuseTheWrite = () => {
+      throw new Error('event_state write refused');
+    };
+    localDb.event_state.hook('creating', refuseTheWrite);
+    localDb.event_state.hook('updating', refuseTheWrite);
+
+    try {
+      await expect(
+        persistBootstrap(bootstrap(S2, state(13, 10, 13_000))),
+        'a failed baseline write must surface, not be swallowed'
+      ).rejects.toThrow();
+    } finally {
+      localDb.event_state.hook('creating').unsubscribe(refuseTheWrite);
+      localDb.event_state.hook('updating').unsubscribe(refuseTheWrite);
+    }
+
+    const config = await localDb.device_config.get('current');
+    expect(config?.bootstrap, 'the configuration must not survive its own transaction').toBeUndefined();
+    expect(config?.pendingSessionId, 'the device is still awaiting configuration for S2').toBe(S2);
+
+    // Nothing was half-applied on the other side either.
+    const stored = await localDb.event_state.get('current');
+    expect(stored?.state.version, 'the previous baseline is left as it was').toBe(20);
+
+    // And the counter stays non-operational rather than acting as either
+    // identity — the handoff is still fail-closed after the failure.
+    const snapshot = await loadSnapshot();
+    expect(snapshot.bootstrap).toBeNull();
+    expect(snapshot.awaitingConfigurationFor).toBe(S2);
+    expect(await currentOwner()).toBeNull();
+  });
 });
 
 describe('the boundary is an identity change, not a licence for stale state', () => {

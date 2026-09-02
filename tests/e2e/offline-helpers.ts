@@ -168,7 +168,6 @@ export async function waitForServiceWorkerControl(page: Page, timeoutMs = 20_000
   }, timeoutMs);
 }
 
-/** The stored snapshot record, for asserting on migration outcomes. */
 /**
  * Overwrites the stored authoritative state with a version the server has
  * moved *behind*.
@@ -222,6 +221,7 @@ export async function seedAheadOfServerEventState(
   );
 }
 
+/** The stored snapshot record, for asserting on migration outcomes. */
 export async function readEventStateRecord(page: Page): Promise<Record<string, unknown> | null> {
   return page.evaluate(async (dbName) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
