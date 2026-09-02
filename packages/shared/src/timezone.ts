@@ -15,7 +15,15 @@ import { z } from 'zod';
  * with every tzdata release.
  */
 
-/** `Europe/Paris`, `America/Argentina/Buenos_Aires`, `Etc/GMT+5`. */
+/**
+ * `Europe/Paris`, `America/Argentina/Buenos_Aires`, `Etc/GMT+5`.
+ *
+ * The last of those is a fixed offset, and it passes: it is a real tzdata
+ * identifier, and an operator reaching for `Etc/GMT+5` in a searchable list
+ * has chosen it. What the shape excludes is what a free-text field produces
+ * by accident — `+05:00`, `GMT`, `EST` — none of which are identifiers at
+ * all.
+ */
 const IANA_SHAPE = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)+$/;
 
 export function isValidTimezone(value: unknown): value is string {
@@ -37,9 +45,9 @@ export function isValidTimezone(value: unknown): value is string {
 /**
  * The zone identifier accepted anywhere one is persisted.
  *
- * Bounded at 64 characters: the longest identifiers in tzdata are around 30
- * (`America/Argentina/ComodRivadavia`), and the column is 50 in the schema
- * that predates this — the schema's own limit still applies underneath.
+ * Bounded at 50 characters, which is the width of the column that predates
+ * this; the longest identifiers in tzdata are around 30
+ * (`America/Argentina/ComodRivadavia`), so nothing real is excluded.
  */
 export const TimezoneSchema = z
   .string()
