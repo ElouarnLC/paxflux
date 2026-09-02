@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import {
@@ -31,6 +31,9 @@ import {
   hasEditableCapacity,
   hasUsableDirections,
   overrideCapacity,
+  reconcileCheckpoints,
+  reconcileField,
+  reconcileSpaces,
   relabelForEndpoints,
   relinkCapacity,
   toEditableCheckpoints,
@@ -89,6 +92,16 @@ export const DraftEditor: React.FC = () => {
   // so.
   const [preflight, setPreflight] = useState<PreflightState>({ kind: 'unknown' });
 
+  /**
+   * What the server said on the previous load.
+   *
+   * A reload has to show what persisted without discarding what is still
+   * being typed elsewhere, and telling those apart needs a reference point:
+   * a field still equal to this is one nobody has edited since. In a ref
+   * rather than state because it is never rendered — only compared against.
+   */
+  const lastServerRef = useRef<EventDetailResponse | null>(null);
+
   // Event fields are edited locally and committed explicitly, so a slow
   // keystroke never races a request.
   const [name, setName] = useState('');
@@ -105,14 +118,30 @@ export const DraftEditor: React.FC = () => {
     if (!eventId) return;
     try {
       const detail = await apiFetch<EventDetailResponse>(`/api/v1/events/${eventId}/state`);
-      setDraft({
-        event: detail.event,
-        spaces: toEditableSpaces(detail.spaces),
-        checkpoints: toEditableCheckpoints(detail.checkpoints),
-      });
-      setName(detail.event.name);
-      setCapacityState(detail.event.capacity);
-      setTimezone(detail.event.timezone);
+      const previous = lastServerRef.current;
+
+      setDraft((current) =>
+        previous && current
+          ? {
+              event: detail.event,
+              spaces: reconcileSpaces(previous.spaces, current.spaces, detail.spaces),
+              checkpoints: reconcileCheckpoints(previous.checkpoints, current.checkpoints, detail.checkpoints),
+            }
+          : {
+              event: detail.event,
+              spaces: toEditableSpaces(detail.spaces),
+              checkpoints: toEditableCheckpoints(detail.checkpoints),
+            }
+      );
+      setName((local) => (previous ? reconcileField(previous.event.name, local, detail.event.name) : detail.event.name));
+      setCapacityState((local) =>
+        previous ? reconcileField(previous.event.capacity, local, detail.event.capacity) : detail.event.capacity
+      );
+      setTimezone((local) =>
+        previous ? reconcileField(previous.event.timezone, local, detail.event.timezone) : detail.event.timezone
+      );
+
+      lastServerRef.current = detail;
       setLoadError(null);
     } catch (err) {
       setLoadError(errorDetail(err, 'Impossible de charger ce brouillon.'));
@@ -174,26 +203,36 @@ export const DraftEditor: React.FC = () => {
     );
   }
 
-  const saveEvent = () =>
-    mutate(() =>
+  // Each save normalises the field locally to exactly what it sends. The
+  // reload that follows then agrees with the server about the saved entity —
+  // the merge above has nothing to disagree about — while still protecting
+  // whatever is being typed in the other sections.
+  const saveEvent = () => {
+    const trimmed = name.trim();
+    setName(trimmed);
+    return mutate(() =>
       apiFetch(`/api/v1/events/${eventId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name: name.trim(), capacity, timezone }),
+        body: JSON.stringify({ name: trimmed, capacity, timezone }),
       })
     );
+  };
 
-  const saveSpace = (space: EditableSpace) =>
-    mutate(() =>
+  const saveSpace = (space: EditableSpace) => {
+    const trimmed = space.name.trim();
+    updateSpace(space.id, { name: trimmed });
+    return mutate(() =>
       apiFetch(`/api/v1/events/${eventId}/spaces/${space.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          name: space.name.trim(),
+          name: trimmed,
           ...(hasEditableCapacity(space)
             ? { capacity: space.capacity.capacity === '' ? null : space.capacity.capacity }
             : {}),
         }),
       })
     );
+  };
 
   const addSpace = () =>
     mutate(() =>
@@ -211,21 +250,31 @@ export const DraftEditor: React.FC = () => {
   const deleteSpace = (space: EditableSpace) =>
     mutate(() => apiFetch(`/api/v1/events/${eventId}/spaces/${space.id}`, { method: 'DELETE' }));
 
-  const saveCheckpoint = (checkpoint: EditableCheckpoint) =>
-    mutate(() =>
+  const saveCheckpoint = (checkpoint: EditableCheckpoint) => {
+    const name = checkpoint.name.trim();
+    const labelAToB = checkpoint.labelAToB.value.trim();
+    const labelBToA = checkpoint.labelBToA.value.trim();
+    updateCheckpoint(checkpoint.id, {
+      name,
+      labelAToB: { ...checkpoint.labelAToB, value: labelAToB },
+      labelBToA: { ...checkpoint.labelBToA, value: labelBToA },
+    });
+
+    return mutate(() =>
       apiFetch(`/api/v1/events/${eventId}/checkpoints/${checkpoint.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          name: checkpoint.name.trim(),
+          name,
           spaceAId: checkpoint.spaceAId,
           spaceBId: checkpoint.spaceBId,
           allowAToB: checkpoint.allowAToB,
           allowBToA: checkpoint.allowBToA,
-          labelAToB: checkpoint.labelAToB.value.trim(),
-          labelBToA: checkpoint.labelBToA.value.trim(),
+          labelAToB,
+          labelBToA,
         }),
       })
     );
+  };
 
   const addCheckpoint = () => {
     const zones = draft?.spaces.filter((s) => s.kind !== 'aggregate') ?? [];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CheckpointModel, SpaceModel } from '@paxflux/shared';
 import {
+  EditableCheckpoint,
   applyEventCapacity,
   defaultDirectionLabel,
   describeDirection,
@@ -13,6 +14,9 @@ import {
   independentCapacity,
   linkedCapacity,
   overrideCapacity,
+  reconcileCheckpoints,
+  reconcileField,
+  reconcileSpaces,
   relabelForEndpoints,
   relinkCapacity,
   toEditableCheckpoints,
@@ -271,5 +275,90 @@ describe('describePreflightError', () => {
 
   it('has nothing to say when the server raised no objection', () => {
     expect(describePreflightError(null)).toBe('');
+  });
+});
+
+describe('reconciling a reload with what is still being typed', () => {
+  const serverSpace = (over: Partial<SpaceModel> = {}): SpaceModel =>
+    ({
+      id: 'space-1',
+      eventId: 'event-1',
+      name: 'Site',
+      kind: 'leaf',
+      parentId: null,
+      capacity: 500,
+      isActive: true,
+      sortOrder: 1,
+      ...over,
+    }) as SpaceModel;
+
+  const serverCheckpoint = (over: Partial<CheckpointModel> = {}): CheckpointModel =>
+    ({
+      id: 'cp-1',
+      eventId: 'event-1',
+      name: 'Porte Principale',
+      spaceAId: 'ext-1',
+      spaceBId: 'space-1',
+      allowAToB: true,
+      allowBToA: true,
+      labelAToB: 'ENTRÉE +1',
+      labelBToA: 'SORTIE −1',
+      isActive: true,
+      sortOrder: 1,
+      ...over,
+    }) as CheckpointModel;
+
+  it('keeps a field the operator edited and takes one they did not', () => {
+    // The defect this closes: saving a zone reloaded the whole draft and
+    // silently discarded an event name typed a moment earlier.
+    expect(reconcileField('Site', 'Site', 'Esplanade'), 'untouched follows the server').toBe('Esplanade');
+    expect(reconcileField('Site', 'Grande halle', 'Esplanade'), 'edited stays').toBe('Grande halle');
+  });
+
+  it('preserves an unsaved zone name while adopting the server’s capacity', () => {
+    const previous = [serverSpace()];
+    const local = toEditableSpaces(previous).map((s) => ({ ...s, name: 'Grande halle' }));
+    const next = [{ ...serverSpace(), capacity: 900 }];
+
+    const merged = reconcileSpaces(previous, local, next);
+    expect(merged[0].name).toBe('Grande halle');
+    expect(merged[0].capacity.capacity).toBe(900);
+  });
+
+  it('lets the server add and remove zones regardless of local edits', () => {
+    const previous = [serverSpace()];
+    const local = toEditableSpaces(previous).map((s) => ({ ...s, name: 'jamais enregistré' }));
+    const next = [{ ...serverSpace(), id: 'space-2', name: 'Nouvelle zone' } as SpaceModel];
+
+    const merged = reconcileSpaces(previous, local, next);
+    expect(merged.map((s) => s.id), 'the server’s list is the list').toEqual(['space-2']);
+    expect(merged[0].name).toBe('Nouvelle zone');
+  });
+
+  it('does not turn a suggestion into an operator’s label just by reloading', () => {
+    // Provenance must survive a reload: a generated label the operator never
+    // accepted has to keep following its zones.
+    const previous = [serverCheckpoint()];
+    const local: EditableCheckpoint[] = [
+      { ...toEditableCheckpoints(previous)[0], labelAToB: generatedLabel(EXTERIOR, SITE) },
+    ];
+    const next = [serverCheckpoint()];
+
+    const merged = reconcileCheckpoints(previous, local, next);
+    expect(merged[0].labelAToB.provenance, 'still a suggestion').toBe('generated');
+  });
+
+  it('keeps an unsaved endpoint move and an unsaved direction toggle', () => {
+    const previous = [serverCheckpoint()];
+    const local: EditableCheckpoint[] = [
+      { ...toEditableCheckpoints(previous)[0], spaceBId: 'space-9', allowBToA: false },
+    ];
+    // Meanwhile the server only saw a rename, from another save.
+    const next = [serverCheckpoint({ name: 'Entrée Nord' })];
+
+    const merged = reconcileCheckpoints(previous, local, next);
+    expect(merged[0].name, 'untouched name follows the server').toBe('Entrée Nord');
+    expect(merged[0].spaceBId, 'unsaved move survives').toBe('space-9');
+    expect(merged[0].allowBToA, 'unsaved toggle survives').toBe(false);
   });
 });

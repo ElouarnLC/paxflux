@@ -268,3 +268,89 @@ export function describePreflightError(error: { code: string; message: string } 
 
   return error.message;
 }
+
+// ---------------------------------------------------------------------------
+// Reconciling a reload with what is still being typed
+// ---------------------------------------------------------------------------
+
+/**
+ * The editor re-reads the whole draft after every save, because that is the
+ * only way to show what actually persisted. Taken literally, that also
+ * discards whatever the operator had typed elsewhere and not yet saved: a new
+ * event name, entered before scrolling down to rename a zone, would vanish
+ * the moment the zone was saved.
+ *
+ * So a reload is a three-way merge, not an overwrite. A field the operator
+ * has not touched since it was loaded takes the server's new value; a field
+ * they have takes theirs. The comparison is against the value the *previous*
+ * load produced, which is what makes "touched" a fact rather than a guess:
+ * a field equal to what the server last said is one nobody has edited.
+ */
+export function reconcileField<T>(previousServer: T, local: T, nextServer: T): T {
+  return local === previousServer ? nextServer : local;
+}
+
+export function reconcileSpaces(
+  previousServer: SpaceModel[],
+  local: EditableSpace[],
+  nextServer: SpaceModel[]
+): EditableSpace[] {
+  const previousById = new Map(previousServer.map((s) => [s.id, s]));
+  const localById = new Map(local.map((s) => [s.id, s]));
+
+  // Driven by the server's list: a zone it no longer has is gone, and one it
+  // has gained appears. Only the *contents* of a surviving row are merged.
+  return nextServer.map((next) => {
+    const previous = previousById.get(next.id);
+    const current = localById.get(next.id);
+    if (!previous || !current) return toEditableSpaces([next])[0];
+
+    const previousCapacity = previous.capacity ?? '';
+    const capacityUntouched = current.capacity.capacity === previousCapacity;
+
+    return {
+      id: next.id,
+      kind: next.kind,
+      name: reconcileField(previous.name, current.name, next.name),
+      capacity: capacityUntouched ? independentCapacity(next.capacity ?? '') : current.capacity,
+    };
+  });
+}
+
+export function reconcileCheckpoints(
+  previousServer: CheckpointModel[],
+  local: EditableCheckpoint[],
+  nextServer: CheckpointModel[]
+): EditableCheckpoint[] {
+  const previousById = new Map(previousServer.map((c) => [c.id, c]));
+  const localById = new Map(local.map((c) => [c.id, c]));
+
+  return nextServer.map((next) => {
+    const previous = previousById.get(next.id);
+    const current = localById.get(next.id);
+    if (!previous || !current) return toEditableCheckpoints([next])[0];
+
+    // Provenance belongs to the local field, not to the reload: a suggestion
+    // the operator never accepted must still follow its zones afterwards, so
+    // only the *value* is taken from the server.
+    const mergeLabel = (
+      previousValue: string,
+      currentLabel: LabelFieldState,
+      nextValue: string
+    ): LabelFieldState =>
+      currentLabel.value === previousValue
+        ? { provenance: currentLabel.provenance, value: nextValue }
+        : currentLabel;
+
+    return {
+      id: next.id,
+      name: reconcileField(previous.name, current.name, next.name),
+      spaceAId: reconcileField(previous.spaceAId, current.spaceAId, next.spaceAId),
+      spaceBId: reconcileField(previous.spaceBId, current.spaceBId, next.spaceBId),
+      allowAToB: reconcileField(previous.allowAToB, current.allowAToB, next.allowAToB),
+      allowBToA: reconcileField(previous.allowBToA, current.allowBToA, next.allowBToA),
+      labelAToB: mergeLabel(previous.labelAToB, current.labelAToB, next.labelAToB),
+      labelBToA: mergeLabel(previous.labelBToA, current.labelBToA, next.labelBToA),
+    };
+  });
+}

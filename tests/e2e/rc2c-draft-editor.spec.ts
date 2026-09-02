@@ -472,3 +472,43 @@ test('sans deuxième zone, « Ajouter une porte » le dit au lieu de ne rien fai
   );
   expect(await getEventCheckpoints(session, topo.eventId)).toHaveLength(0);
 });
+
+test('enregistrer une section ne jette pas ce qui est en cours de saisie dans une autre', async ({
+  page,
+}) => {
+  const topo = await draft('RC2C Saisie préservée');
+  const spaces = await getEventSpaces(session, topo.eventId);
+  const site = spaces.find((s: any) => s.id === topo.siteSpaceId);
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  // Type in three sections, then save exactly one of them. Every save
+  // re-reads the whole draft from the server — that is what makes the screen
+  // honest — so the reload has to merge rather than overwrite.
+  await page.getByLabel('Nom de l’événement').fill('Nom pas encore enregistré');
+  await page.getByLabel(`Nom de la porte Porte Principale`).fill('Porte pas encore enregistrée');
+  await page.getByLabel(`Nom de la zone ${site.name}`).fill('Esplanade');
+  await page.getByRole('button', { name: 'Enregistrer la zone' }).first().click();
+  await expectSaved(page);
+
+  await expect(page.getByLabel('Nom de l’événement')).toHaveValue('Nom pas encore enregistré');
+  await expect(page.getByLabel('Nom de la porte Porte pas encore enregistrée')).toBeVisible();
+
+  // The zone really was saved, and only the zone.
+  const state = await getEventState(session, topo.eventId);
+  expect(state.spaces.find((s: any) => s.id === topo.siteSpaceId).name).toBe('Esplanade');
+  expect(state.event.name).not.toBe('Nom pas encore enregistré');
+  expect(state.checkpoints[0].name).toBe('Porte Principale');
+
+  // And the still-unsaved fields save afterwards, from where they were left.
+  await page.getByRole('button', { name: 'Enregistrer l’événement' }).click();
+  await expectSaved(page);
+  await page.getByRole('button', { name: 'Enregistrer la porte' }).click();
+  await expectSaved(page);
+
+  const after = await getEventState(session, topo.eventId);
+  expect(after.event.name).toBe('Nom pas encore enregistré');
+  expect(after.checkpoints[0].name).toBe('Porte pas encore enregistrée');
+  expect(after.checkpoints[0].id, 'toujours la même porte').toBe(topo.mainCheckpointId);
+});
