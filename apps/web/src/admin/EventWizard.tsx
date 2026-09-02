@@ -2,7 +2,24 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { Plus, Trash2, ArrowRight, ArrowLeft, CheckCircle, AlertCircle } from 'lucide-react';
-import { CreateEventDraftRequest, CreateEventDraftResponse } from '@paxflux/shared';
+import {
+  CreateEventDraftRequest,
+  CreateEventDraftResponse,
+  detectDefaultTimezone,
+} from '@paxflux/shared';
+import {
+  CapacityFieldState,
+  applyEventCapacity,
+  describeDirection,
+  generatedLabel,
+  independentCapacity,
+  linkedCapacity,
+  overrideCapacity,
+  relabelForEndpoints,
+  LabelFieldState,
+  editedLabel,
+} from './draft-form.js';
+import { TimezoneField } from './TimezoneField.js';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardPanel } from '@/components/ui/card';
@@ -15,10 +32,19 @@ const STEP_NAMES = ['Général', 'Espaces', 'Portes', 'Validation'] as const;
 
 const EXTERIOR_CLIENT_ID = 'exterieur';
 
+/** The sentinel and the first zone, for generating default labels. */
+const EXTERIOR_SPACE = { name: 'Extérieur', kind: 'external' as const };
+const FIRST_ZONE = { name: 'Site', kind: 'leaf' as const };
+
 interface SpaceDraft {
   clientId: string;
   name: string;
-  capacity: number | '';
+  /**
+   * Capacity plus whether it is still following the event's.
+   *
+   * The relationship is form state, never inferred: see `draft-form.ts`.
+   */
+  capacity: CapacityFieldState;
 }
 
 interface CheckpointDraft {
@@ -28,8 +54,9 @@ interface CheckpointDraft {
   spaceBClientId: string;
   allowAToB: boolean;
   allowBToA: boolean;
-  labelAToB: string;
-  labelBToA: string;
+  /** Label plus whether it is still a generated suggestion. */
+  labelAToB: LabelFieldState;
+  labelBToA: LabelFieldState;
 }
 
 function newId(): string {
@@ -44,17 +71,37 @@ export const EventWizard: React.FC = () => {
 
   // Step 1: General
   const [name, setName] = useState('Campulsations 2026');
-  const [capacity, setCapacity] = useState(1500);
+  const [capacity, setCapacityState] = useState(1500);
+
+  /**
+   * Sets the event capacity and carries every still-linked zone with it.
+   *
+   * A zone the operator has explicitly set keeps its own number: see
+   * `applyEventCapacity`.
+   */
+  function setCapacity(next: number) {
+    setCapacityState(next);
+    setInternalSpaces((prev) =>
+      prev.map((s) => ({ ...s, capacity: applyEventCapacity(s.capacity, next) }))
+    );
+  }
   const [warningRatio1] = useState(0.8);
   const [warningRatio2] = useState(0.9);
-  const [timezone, setTimezone] = useState('Europe/Paris');
+  // The operator's own zone is right far more often than any constant; it
+  // is validated before use and falls back only if unusable.
+  const [timezone, setTimezone] = useState(() => detectDefaultTimezone());
 
   // Step 2: Spaces. "Extérieur" always exists (SPEC: boundary counting
   // requires it) and isn't part of this editable list — only the internal
   // zones staff actually chooses are. A zone needs no door of its own back
   // to Extérieur: it can be reached only through another internal zone
   // (e.g. VIP via Site<->VIP), so nothing here forces one.
-  const [internalSpaces, setInternalSpaces] = useState<SpaceDraft[]>([{ clientId: newId(), name: 'Site', capacity: 1500 }]);
+  // The first zone starts linked to the event capacity: the operator has
+  // not yet said anything about it, and two independent 1500s that drift
+  // apart the moment the event capacity changes is the defect this fixes.
+  const [internalSpaces, setInternalSpaces] = useState<SpaceDraft[]>([
+    { clientId: newId(), name: 'Site', capacity: linkedCapacity(1500) },
+  ]);
 
   const allSpaceOptions = [{ clientId: EXTERIOR_CLIENT_ID, name: 'Extérieur' }, ...internalSpaces.map((s) => ({ clientId: s.clientId, name: s.name }))];
 
@@ -70,8 +117,8 @@ export const EventWizard: React.FC = () => {
       spaceBClientId: internalSpaces[0].clientId,
       allowAToB: true,
       allowBToA: true,
-      labelAToB: 'ENTRÉE +1',
-      labelBToA: 'SORTIE −1',
+      labelAToB: generatedLabel(EXTERIOR_SPACE, FIRST_ZONE),
+      labelBToA: generatedLabel(FIRST_ZONE, EXTERIOR_SPACE),
     },
   ]);
 
@@ -79,7 +126,8 @@ export const EventWizard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   function addInternalSpace() {
-    setInternalSpaces((prev) => [...prev, { clientId: newId(), name: '', capacity: '' }]);
+    // Additional zones answer to nobody from the start.
+    setInternalSpaces((prev) => [...prev, { clientId: newId(), name: '', capacity: independentCapacity('') }]);
   }
 
   function removeInternalSpace(clientId: string) {
@@ -101,8 +149,8 @@ export const EventWizard: React.FC = () => {
         spaceBClientId: internalSpaces[0]?.clientId || EXTERIOR_CLIENT_ID,
         allowAToB: true,
         allowBToA: true,
-        labelAToB: 'ENTRÉE +1',
-        labelBToA: 'SORTIE −1',
+        labelAToB: generatedLabel(EXTERIOR_SPACE, FIRST_ZONE),
+        labelBToA: generatedLabel(FIRST_ZONE, EXTERIOR_SPACE),
       },
     ]);
   }
@@ -117,6 +165,36 @@ export const EventWizard: React.FC = () => {
 
   function spaceName(clientId: string): string {
     return allSpaceOptions.find((s) => s.clientId === clientId)?.name || '?';
+  }
+
+  /** A zone as the wording helpers see it: a name and whether it is the sentinel. */
+  function spaceLike(clientId: string) {
+    return {
+      name: spaceName(clientId),
+      kind: clientId === EXTERIOR_CLIENT_ID ? ('external' as const) : ('leaf' as const),
+    };
+  }
+
+  /**
+   * Moves one end of a door.
+   *
+   * A label that is still a generated suggestion follows the new zones,
+   * which is the useful part; one the operator wrote is left exactly as
+   * typed. Provenance is recorded when the label is set, never guessed from
+   * the text afterwards.
+   */
+  function changeEndpoint(cp: CheckpointDraft, patch: Partial<Pick<CheckpointDraft, 'spaceAClientId' | 'spaceBClientId'>>) {
+    const spaceAClientId = patch.spaceAClientId ?? cp.spaceAClientId;
+    const spaceBClientId = patch.spaceBClientId ?? cp.spaceBClientId;
+    const from = spaceLike(spaceAClientId);
+    const to = spaceLike(spaceBClientId);
+
+    updateCheckpoint(cp.key, {
+      spaceAClientId,
+      spaceBClientId,
+      labelAToB: relabelForEndpoints(cp.labelAToB, from, to),
+      labelBToA: relabelForEndpoints(cp.labelBToA, to, from),
+    });
   }
 
   const handleCreateEvent = async () => {
@@ -137,7 +215,7 @@ export const EventWizard: React.FC = () => {
           clientId: s.clientId,
           name: s.name.trim(),
           kind: 'leaf' as const,
-          capacity: s.capacity === '' ? null : s.capacity,
+          capacity: s.capacity.capacity === '' ? null : s.capacity.capacity,
           sortOrder: idx + 1,
         })),
       ],
@@ -147,8 +225,8 @@ export const EventWizard: React.FC = () => {
         spaceBClientId: cp.spaceBClientId,
         allowAToB: cp.allowAToB,
         allowBToA: cp.allowBToA,
-        labelAToB: cp.labelAToB.trim(),
-        labelBToA: cp.labelBToA.trim(),
+        labelAToB: cp.labelAToB.value.trim(),
+        labelBToA: cp.labelBToA.value.trim(),
         sortOrder: idx,
       })),
     };
@@ -180,7 +258,13 @@ export const EventWizard: React.FC = () => {
     name.trim().length > 0 &&
     canGoToCheckpoints &&
     checkpointDrafts.length > 0 &&
-    checkpointDrafts.every((cp) => cp.name.trim().length > 0 && cp.labelAToB.trim().length > 0 && cp.labelBToA.trim().length > 0 && (cp.allowAToB || cp.allowBToA));
+    checkpointDrafts.every(
+      (cp) =>
+        cp.name.trim().length > 0 &&
+        cp.labelAToB.value.trim().length > 0 &&
+        cp.labelBToA.value.trim().length > 0 &&
+        (cp.allowAToB || cp.allowBToA)
+    );
 
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6">
@@ -258,15 +342,7 @@ export const EventWizard: React.FC = () => {
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="event-timezone">Fuseau horaire</Label>
-                <Input
-                  id="event-timezone"
-                  type="text"
-                  value={timezone}
-                  onChange={(e) => setTimezone(e.target.value)}
-                />
-              </div>
+              <TimezoneField value={timezone} onChange={setTimezone} />
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2 pt-4">
@@ -311,10 +387,16 @@ export const EventWizard: React.FC = () => {
                     type="number"
                     aria-label="Capacité de l'espace"
                     placeholder="Capacité"
-                    value={s.capacity}
+                    value={s.capacity.capacity}
                     onChange={(e) =>
                       updateInternalSpace(s.clientId, {
-                        capacity: e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0,
+                        // Typing here ends the link, even to the same number:
+                        // it is an explicit statement that this zone owns its
+                        // capacity from now on.
+                        capacity: overrideCapacity(
+                          s.capacity,
+                          e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0
+                        ),
                       })
                     }
                     className="flex-1 font-mono sm:w-28 sm:flex-none"
@@ -387,11 +469,11 @@ export const EventWizard: React.FC = () => {
                       narrow to read the space names in. */}
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div className="space-y-1">
-                      <Label className="text-[10px] text-muted-foreground">Espace A</Label>
+                      <Label className="text-[10px] text-muted-foreground">Première zone</Label>
                       <NativeSelect
-                        aria-label="Espace A"
+                        aria-label="Première zone de la porte"
                         value={cp.spaceAClientId}
-                        onChange={(e) => updateCheckpoint(cp.key, { spaceAClientId: e.target.value })}
+                        onChange={(e) => changeEndpoint(cp, { spaceAClientId: e.target.value })}
                       >
                         {allSpaceOptions.map((opt) => (
                           <option key={opt.clientId} value={opt.clientId}>
@@ -401,11 +483,11 @@ export const EventWizard: React.FC = () => {
                       </NativeSelect>
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-[10px] text-muted-foreground">Espace B</Label>
+                      <Label className="text-[10px] text-muted-foreground">Deuxième zone</Label>
                       <NativeSelect
-                        aria-label="Espace B"
+                        aria-label="Deuxième zone de la porte"
                         value={cp.spaceBClientId}
-                        onChange={(e) => updateCheckpoint(cp.key, { spaceBClientId: e.target.value })}
+                        onChange={(e) => changeEndpoint(cp, { spaceBClientId: e.target.value })}
                       >
                         {allSpaceOptions.map((opt) => (
                           <option key={opt.clientId} value={opt.clientId}>
@@ -416,49 +498,63 @@ export const EventWizard: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <div className="flex items-center gap-1">
-                      {/* The box stays 20×20 so it still reads as a
-                          checkbox; the <label> around it is the target a
-                          thumb actually hits, and clicking anywhere in it
-                          toggles the box. */}
-                      <label className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center">
-                        <input
-                          type="checkbox"
-                          className="size-5 accent-[var(--color-primary)]"
-                          aria-label="Sens A vers B activé"
-                          checked={cp.allowAToB}
-                          onChange={(e) => updateCheckpoint(cp.key, { allowAToB: e.target.checked })}
+                  {/* Directions read as the movement they are. "A → B" is
+                      the ledger's vocabulary, not the field's: someone at a
+                      door thinks "from the outside into the site". And for an
+                      internal transfer there is no global entrée/sortie —
+                      Site → VIP is neither. */}
+                  <div className="space-y-2">
+                    {([
+                      { key: 'aToB' as const, from: cp.spaceAClientId, to: cp.spaceBClientId, allowed: cp.allowAToB, label: cp.labelAToB },
+                      { key: 'bToA' as const, from: cp.spaceBClientId, to: cp.spaceAClientId, allowed: cp.allowBToA, label: cp.labelBToA },
+                    ]).map((direction) => (
+                      <div key={direction.key} className="space-y-1.5">
+                        <div className="flex items-center gap-1">
+                          {/* The box stays 20×20 so it still reads as a
+                              checkbox; the <label> around it is the target a
+                              thumb actually hits. */}
+                          <label className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center">
+                            <input
+                              type="checkbox"
+                              className="size-5 accent-[var(--color-primary)]"
+                              aria-label={`Autoriser ${describeDirection(spaceLike(direction.from), spaceLike(direction.to))}`}
+                              checked={direction.allowed}
+                              onChange={(e) =>
+                                updateCheckpoint(
+                                  cp.key,
+                                  direction.key === 'aToB'
+                                    ? { allowAToB: e.target.checked }
+                                    : { allowBToA: e.target.checked }
+                                )
+                              }
+                            />
+                          </label>
+                          <span className="min-w-0 break-words text-xs font-semibold text-foreground">
+                            {describeDirection(spaceLike(direction.from), spaceLike(direction.to))}
+                          </span>
+                        </div>
+                        <Input
+                          type="text"
+                          aria-label={`Libellé du bouton : ${describeDirection(spaceLike(direction.from), spaceLike(direction.to))}`}
+                          value={direction.label.value}
+                          disabled={!direction.allowed}
+                          onChange={(e) =>
+                            updateCheckpoint(
+                              cp.key,
+                              direction.key === 'aToB'
+                                ? { labelAToB: editedLabel(e.target.value) }
+                                : { labelBToA: editedLabel(e.target.value) }
+                            )
+                          }
+                          className="w-full"
                         />
-                      </label>
-                      <Input
-                        type="text"
-                        aria-label="Libellé A vers B"
-                        value={cp.labelAToB}
-                        onChange={(e) => updateCheckpoint(cp.key, { labelAToB: e.target.value })}
-                        placeholder={`${spaceName(cp.spaceAClientId)} → ${spaceName(cp.spaceBClientId)}`}
-                        className="flex-1"
-                      />
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <label className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center">
-                        <input
-                          type="checkbox"
-                          className="size-5 accent-[var(--color-primary)]"
-                          aria-label="Sens B vers A activé"
-                          checked={cp.allowBToA}
-                          onChange={(e) => updateCheckpoint(cp.key, { allowBToA: e.target.checked })}
-                        />
-                      </label>
-                      <Input
-                        type="text"
-                        aria-label="Libellé B vers A"
-                        value={cp.labelBToA}
-                        onChange={(e) => updateCheckpoint(cp.key, { labelBToA: e.target.value })}
-                        placeholder={`${spaceName(cp.spaceBClientId)} → ${spaceName(cp.spaceAClientId)}`}
-                        className="flex-1"
-                      />
-                    </div>
+                      </div>
+                    ))}
+                    {!cp.allowAToB && !cp.allowBToA ? (
+                      <p className="text-xs font-semibold text-danger">
+                        Une porte doit autoriser au moins un sens de passage.
+                      </p>
+                    ) : null}
                   </div>
                 </CardPanel>
               ))}

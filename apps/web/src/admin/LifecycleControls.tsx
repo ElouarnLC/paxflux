@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { useAuth } from '../auth/AuthProvider.js';
 import { EventDetailResponse, EventModel, ProblemDetails, PreflightResponse } from '@paxflux/shared';
@@ -12,6 +13,7 @@ import {
   RefreshCw,
   RotateCcw,
   Archive,
+  Pencil,
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -207,6 +209,18 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
         )}
 
         {errorBanner}
+
+        {/* Preparation is editable right up to the moment the event starts,
+            and a preflight refusal is only actionable if the screen that
+            fixes it is one tap away. This link exists only in `draft`: past
+            that, the topology is locked server-side and offering to edit it
+            would be a lie. */}
+        <Button asChild variant="secondary" className="w-full sm:w-auto sm:min-w-56">
+          <Link to={`/admin/events/${event.id}/edit`}>
+            <Pencil />
+            Modifier le brouillon
+          </Link>
+        </Button>
 
         <ConfirmAction
           disabled={actionLoading || !ready}
