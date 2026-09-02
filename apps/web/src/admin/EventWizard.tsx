@@ -6,6 +6,7 @@ import {
   CreateEventDraftRequest,
   CreateEventDraftResponse,
   detectDefaultTimezone,
+  isValidTimezone,
 } from '@paxflux/shared';
 import {
   CapacityFieldState,
@@ -256,6 +257,7 @@ export const EventWizard: React.FC = () => {
   const canGoToCheckpoints = internalSpaces.every((s) => s.name.trim().length > 0);
   const canCreate =
     name.trim().length > 0 &&
+    isValidTimezone(timezone) &&
     canGoToCheckpoints &&
     checkpointDrafts.length > 0 &&
     checkpointDrafts.every(
@@ -346,7 +348,10 @@ export const EventWizard: React.FC = () => {
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2 pt-4">
-              <Button onClick={() => setStep(2)}>
+              {/* A timezone the engine cannot resolve is refused by the
+                  server too, so the operator learns it here rather than
+                  after filling three more steps. */}
+              <Button disabled={!isValidTimezone(timezone)} onClick={() => setStep(2)}>
                 Suivant <ArrowRight />
               </Button>
             </div>

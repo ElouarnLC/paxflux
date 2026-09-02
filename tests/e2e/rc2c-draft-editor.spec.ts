@@ -341,3 +341,55 @@ test('le fuseau horaire d’un brouillon est corrigeable et validé', async ({ p
   const state = await getEventState(session, topo.eventId);
   expect(state.event.timezone).toBe('America/Guadeloupe');
 });
+
+test('un brouillon rechargé n’invente aucun lien entre la capacité d’une zone et celle de l’événement', async ({
+  page,
+}) => {
+  // The event and its only zone carry the same number on purpose: the
+  // server records two capacities and no relationship between them, so a
+  // value-based rule would adopt this zone and overwrite it below.
+  const topo = await createDraftEventWithMainCheckpoint(session, {
+    name: `RC2C Aucun lien déduit · ${test.info().project.name}`,
+    capacity: 500,
+  });
+  await adminApi(session, 'PATCH', `/api/v1/events/${topo.eventId}/spaces/${topo.siteSpaceId}`, {
+    capacity: 500,
+  });
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  await page.getByLabel('Capacité maximale').fill('900');
+  await page.getByRole('button', { name: 'Enregistrer l’événement' }).click();
+  await expectSaved(page);
+
+  const state = await getEventState(session, topo.eventId);
+  expect(state.event.capacity).toBe(900);
+  expect(
+    state.spaces.find((s: any) => s.id === topo.siteSpaceId).capacity,
+    'la zone garde la capacité enregistrée'
+  ).toBe(500);
+});
+
+test('le lien de capacité se demande explicitement, et il s’applique alors', async ({ page }) => {
+  const topo = await draft('RC2C Lien explicite');
+  const spaces = await getEventSpaces(session, topo.eventId);
+  const site = spaces.find((s: any) => s.id === topo.siteSpaceId);
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  // The operator asks for it by name; nothing about the current values
+  // decides this for them.
+  await page.getByRole('button', { name: 'Même capacité que l’événement' }).click();
+  await expect(page.getByLabel(`Capacité de la zone ${site.name}`)).toHaveValue('500');
+
+  await page.getByLabel('Capacité maximale').fill('1200');
+  await expect(page.getByLabel(`Capacité de la zone ${site.name}`)).toHaveValue('1200');
+
+  await page.getByRole('button', { name: 'Enregistrer la zone' }).first().click();
+  await expectSaved(page);
+
+  const state = await getEventState(session, topo.eventId);
+  expect(state.spaces.find((s: any) => s.id === topo.siteSpaceId).capacity).toBe(1200);
+});
