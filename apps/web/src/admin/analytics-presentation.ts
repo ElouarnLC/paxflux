@@ -35,3 +35,37 @@ export function formatNetDelta(value: number): string {
   if (value < 0) return `−${Math.abs(value)}`;
   return '0';
 }
+
+/**
+ * Analytics figures together with the event they describe.
+ *
+ * Kept as one value rather than two pieces of state so the pair can never
+ * drift: the figures and the id they belong to are set in the same update.
+ */
+export interface LoadedAnalytics {
+  eventId: string;
+  data: AnalyticsResponse;
+  updatedAtMs: number;
+}
+
+/**
+ * The figures that may be displayed for `eventId`, or `null`.
+ *
+ * Two requirements meet here, and only holding the id alongside the data
+ * satisfies both. A refresh that *fails* for the event on screen must leave
+ * the last good figures up — blanking a supervisor's statistics because one
+ * request timed out is worse than showing figures a few seconds old. But
+ * when the operator opens a *different* event, the previous event's figures
+ * must disappear at once: an occupancy and a peak from event A, rendered
+ * under event B's heading while B loads, are indistinguishable from B's own
+ * and would be read as B's.
+ *
+ * So staleness in time is tolerated and staleness in identity is not.
+ */
+export function analyticsForEvent(
+  loaded: LoadedAnalytics | null,
+  eventId: string | undefined
+): LoadedAnalytics | null {
+  if (!loaded || !eventId) return null;
+  return loaded.eventId === eventId ? loaded : null;
+}

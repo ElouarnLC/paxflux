@@ -166,3 +166,35 @@ test('l’écran de statistiques n’affiche jamais l’extérieur comme une zon
   // beside real zones would read as "the outside is empty".
   await expect(zones.getByText('Extérieur', { exact: true })).toHaveCount(0);
 });
+
+test('les statistiques d’un événement ne restent jamais affichées pendant le chargement d’un autre', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+
+  const session = await getAdminSession();
+  const eventA = await liveEventWithCheckpoint(session, 'RC2B Analytics Événement A');
+  const eventB = await liveEventWithCheckpoint(session, 'RC2B Analytics Événement B');
+
+  // Two events with unmistakably different occupancies.
+  await adjustSpaceOccupancy(session, eventA.eventId, eventA.siteSpaceId, 42, 'Recalage A');
+  await adjustSpaceOccupancy(session, eventB.eventId, eventB.siteSpaceId, 7, 'Recalage B');
+
+  await loginAsAdmin(page);
+  await page.goto(`/admin/events/${eventA.eventId}/analytics`);
+  await expect(page.getByTestId('analytics-current-occupancy')).toHaveText('42', { timeout: 20_000 });
+
+  // Hold the response for B, so the window where A's figures could still be
+  // on screen under B's heading is wide open rather than a millisecond.
+  await page.route(`**/api/v1/events/${eventB.eventId}/analytics`, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await route.continue();
+  });
+
+  await page.goto(`/admin/events/${eventB.eventId}/analytics`);
+
+  // A's 42 must be gone immediately, not lingering until B answers.
+  await expect(page.getByTestId('analytics-current-occupancy')).toHaveCount(0);
+
+  await expect(page.getByTestId('analytics-current-occupancy')).toHaveText('7', { timeout: 20_000 });
+});

@@ -17,7 +17,12 @@ import { Progress } from '@/components/ui/progress';
 import { CardPanel } from '@/components/ui/card';
 import { MetricCard } from '@/components/paxflux/metric-card';
 import { PageHeader, Section } from '@/components/paxflux/layout';
-import { formatNetDelta, operationalSpaces } from './analytics-presentation.js';
+import {
+  LoadedAnalytics,
+  analyticsForEvent,
+  formatNetDelta,
+  operationalSpaces,
+} from './analytics-presentation.js';
 
 /**
  * How often the analytics screen re-reads the endpoint.
@@ -39,10 +44,11 @@ const ANALYTICS_REFRESH_INTERVAL_MS = 12_000;
 
 export const AnalyticsView: React.FC = () => {
   const { id: eventId } = useParams<{ id: string }>();
-  const [data, setData] = useState<AnalyticsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [updatedAtMs, setUpdatedAtMs] = useState<number | null>(null);
-  const [refreshFailed, setRefreshFailed] = useState(false);
+  // Figures and the event they belong to, held as one value: an operator who
+  // opens another event must never see the previous event's numbers under
+  // the new event's heading.
+  const [loaded, setLoaded] = useState<LoadedAnalytics | null>(null);
+  const [failedForEventId, setFailedForEventId] = useState<string | null>(null);
 
   // The event this screen is about, readable from inside an in-flight
   // request so a response for a previous event can be discarded rather than
@@ -71,15 +77,14 @@ export const AnalyticsView: React.FC = () => {
       // Discarded if the operator has moved to another event while this was
       // in flight: the response describes an event no longer on screen.
       if (eventIdRef.current !== requestedEventId) return;
-      setData(res);
-      setUpdatedAtMs(Date.now());
-      setRefreshFailed(false);
+      setLoaded({ eventId: requestedEventId, data: res, updatedAtMs: Date.now() });
+      setFailedForEventId(null);
     } catch (err) {
       if (eventIdRef.current !== requestedEventId) return;
       console.debug('Analytics refresh failed; keeping the last known figures:', err);
-      setRefreshFailed(true);
-    } finally {
-      if (eventIdRef.current === requestedEventId) setLoading(false);
+      // Recorded against the event it happened on, so a failure cannot
+      // follow the operator to the next event's screen.
+      setFailedForEventId(requestedEventId);
     }
   }, []);
 
@@ -107,7 +112,11 @@ export const AnalyticsView: React.FC = () => {
     };
   }, [eventId, loadAnalytics]);
 
-  if (loading || !data) {
+  // Only figures belonging to the event currently in the URL may render.
+  // Anything else — nothing loaded yet, or the previous event's numbers
+  // still held while this one loads — shows the loading state instead.
+  const current = analyticsForEvent(loaded, eventId);
+  if (!current) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
         <RefreshCw className="size-8 animate-spin text-primary-accent" />
@@ -115,6 +124,8 @@ export const AnalyticsView: React.FC = () => {
     );
   }
 
+  const data = current.data;
+  const refreshFailed = failedForEventId === eventId;
   const zones = operationalSpaces(data.spaceStats);
 
   return (
@@ -125,10 +136,8 @@ export const AnalyticsView: React.FC = () => {
           an operator needs to know when it stopped advancing. */}
       <p data-testid="analytics-freshness" className="-mt-2 text-xs text-muted-foreground">
         {refreshFailed
-          ? 'Actualisation indisponible : chiffres figés à ' +
-            (updatedAtMs ? new Date(updatedAtMs).toLocaleTimeString('fr-FR') : '—') +
-            '. Nouvelle tentative en cours.'
-          : `Dernière mise à jour : ${updatedAtMs ? new Date(updatedAtMs).toLocaleTimeString('fr-FR') : '—'}`}
+          ? `Actualisation indisponible : chiffres figés à ${new Date(current.updatedAtMs).toLocaleTimeString('fr-FR')}. Nouvelle tentative en cours.`
+          : `Dernière mise à jour : ${new Date(current.updatedAtMs).toLocaleTimeString('fr-FR')}`}
       </p>
 
       {/* Two columns at 320px gives each card about 130px, which is not
