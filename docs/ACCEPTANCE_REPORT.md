@@ -321,7 +321,47 @@ a cycle.
 *Follow-up*: pin the cause in the retry engine's scheduling rather than the
 spec's budget, in a dedicated change.
 
-### 10.5 A restore signs everyone out
+### 10.5 A restore moves event versions backwards, and a new pairing rebaselines the device
+
+Recorded here because a physical-device dry-run of v1.0.0-rc.1 found it and no
+automated Compose test could: those tests exercise a real server rollback but
+have no browser, so no IndexedDB survives across it.
+
+A restore rolls the **server** back to an earlier `event.version`. It does not
+roll a paired browser back — IndexedDB keeps whatever that device last heard.
+So after a restore the same browser can hold a *higher* version than the server
+now reports, for the same `eventId`.
+
+The device's freshness ordering (newer `version`, then newer `serverTimeMs`)
+is correct within one pairing and was rejecting the restored bootstrap as
+stale. The counter therefore kept displaying a pre-restore occupancy while the
+dashboard, the server and every new tap agreed on the restored one, and no
+reload fixed it because the stale row was the one being read back.
+
+The rule now has an identity boundary: **the authenticated bootstrap that
+establishes a new device session is the new local baseline, whatever its
+version says.** It applies only to the one response completing a handoff this
+device asked for. A refresh for the session already established, a late SSE
+frame and a batch response all still go through the ordering, so nothing else
+can roll a device backwards.
+
+Two consequences an operator should expect after a restore:
+
+* every device must be paired again with a fresh QR code — that was already
+  true, since a restore revokes all sessions (§5.5);
+* **pairing again is what re-baselines the device.** No site data needs to be
+  cleared, no browser restart is required, and none should be asked for.
+
+Counting intent is not touched by any of this: outbox actions created under the
+previous session stay owner-scoped, are quarantined by the existing Phase 6
+reconciliation rather than deleted, and are never replayed under the new
+session.
+
+Proved by `apps/web/src/offline/snapshot.test.ts` against a real in-memory
+IndexedDB, and by `tests/e2e/rc2-restore-rebaseline.spec.ts` in a real browser
+against a real server.
+
+### 10.6 A restore signs everyone out
 
 Not a defect — it is the mechanism of invariant 17 — but operators must know
 it: after a restore, administrators log in again and every counter device must

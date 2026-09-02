@@ -243,7 +243,11 @@ before, so a failure at any earlier point cannot leave a still-live database
 stripped of its journal.
 
 Everyone is signed out after a restore — administrators log in again, and
-counter devices must be paired again with a fresh QR code. That is intentional:
+counter devices must be paired again with a fresh QR code. Pairing again is
+also what resets a device's local view: a restore moves the event's version
+backwards, and the bootstrap of the new pairing becomes that device's new
+authoritative baseline. **Do not ask anyone to clear site data or restart their
+browser** — scanning a fresh QR code is the whole procedure. That is intentional:
 it is what prevents a session created after the snapshot from writing into the
 restored state.
 
