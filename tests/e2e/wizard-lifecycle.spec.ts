@@ -118,8 +118,8 @@ test.describe('Wizard de création d\'événement', () => {
 
     // The 4th (newly added) checkpoint defaults to Extérieur<->Site too;
     // repoint it to Site<->VIP explicitly.
-    await page.getByLabel('Espace A').nth(3).selectOption({ label: 'Site' });
-    await page.getByLabel('Espace B').nth(3).selectOption({ label: 'VIP' });
+    await page.getByLabel('Première zone de la porte').nth(3).selectOption({ label: 'Site' });
+    await page.getByLabel('Deuxième zone de la porte').nth(3).selectOption({ label: 'VIP' });
 
     await page.getByRole('button', { name: 'Suivant' }).click(); // step3 -> step4
     await page.getByRole('button', { name: /Créer l'événement/i }).click();
