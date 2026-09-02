@@ -127,42 +127,108 @@ function describeVerdict(
 }
 
 /**
+ * What the dashboard holds: a response, plus the epoch of the lifecycle
+ * status inside it.
+ *
+ * The epoch has to be carried separately because it is not derivable from
+ * the response once merged: after a merge the displayed status may come from
+ * one channel and the occupancy from another.
+ */
+export interface DashboardView {
+  detail: EventDetailResponse;
+  /**
+   * A server-clock instant at which `detail.event.status` was true.
+   *
+   * See `lifecycleEpochOf` for why every source can produce one and why they
+   * are comparable with each other.
+   */
+  lifecycleAtMs: number;
+}
+
+/**
+ * The lifecycle epoch of an HTTP `/state` response.
+ *
+ * `event.updatedAtMs` is a property of the row that was read, so it can
+ * never be newer than the read itself. That is exactly what the race needs:
+ * a response whose row was captured *before* a transition carries the
+ * pre-transition timestamp, however late the response arrives. Minting the
+ * epoch from `Date.now()` when the response is built or received would
+ * instead stamp a stale reading with a fresh time, which is the bug.
+ *
+ * Every lifecycle transition in `routes/events.ts` — start, begin-closing,
+ * close, force-close, reopen and archive — writes `updatedAtMs: now` in the
+ * same update that sets the new status, so the timestamp always belongs to
+ * the status beside it. Counting also bumps it, which is harmless: it moves
+ * the epoch forward while carrying the status unchanged.
+ */
+function lifecycleEpochOf(detail: EventDetailResponse): number {
+  return detail.event.updatedAtMs;
+}
+
+/** Wraps a first response, before anything has been merged into it. */
+export function viewFromDetail(detail: EventDetailResponse): DashboardView {
+  return { detail, lifecycleAtMs: lifecycleEpochOf(detail) };
+}
+
+/**
  * Merges a periodic `/state` refresh into what the dashboard already holds.
  *
  * The refresh exists for the supervision fields — devices and sync quality —
  * because those change without any new state frame: a device goes offline
  * when its heartbeat *stops*, and silence produces no SSE event. But the
- * same response also carries occupancy and the event's version, which SSE
- * may already have moved past while this request was in flight.
+ * same response also carries counting state and a lifecycle status, either
+ * of which SSE may already have moved past while this request was in flight.
  *
- * So the two halves are merged on different rules. Supervision is taken from
- * the response unconditionally — it is the only source for it, and the
- * server is authoritative. Counting state is taken only when the response is
- * at least as fresh as what is held, by the same `version` counter SSE
- * carries (`getCompactEventState` reads it from the event record, so the two
- * are the same number). A response minted before a frame already applied is
- * older, and is not allowed to roll the gauge back.
+ * Three groups, ordered by three different rules, because they genuinely
+ * move on different clocks:
  *
- * `>=` rather than `>` on purpose: a lifecycle transition does not bump
- * `version`, so an equal-version refresh is a fresher read of the event
- * record and must be able to carry `live → closing`.
+ *  - **supervision** (devices, sync quality, topology) is taken from the
+ *    response unconditionally: it is the only source for it;
+ *
+ *  - **counting** (occupancy, version, capacity) is ordered by
+ *    `event.version`, the counter SSE carries as `state.version`;
+ *
+ *  - **lifecycle** (status) is ordered by a wall-clock epoch, *not* by
+ *    version — because a transition does not bump the version at all. The
+ *    server broadcasts `live → closing` with `version: eventRecord.version`
+ *    unchanged, so an HTTP response captured before the transition and an
+ *    SSE frame minted after it are indistinguishable by version. Ordering
+ *    lifecycle by version would let the late response put the dashboard back
+ *    to `live`.
+ *
+ * The epoch is a real instant rather than a rank over status values, which
+ * matters because the statuses are not monotonic: `reopen` takes an event
+ * from `closed` back to `live`, so any "later status wins" table would be
+ * wrong in exactly the case an operator most needs to see.
  */
 export function mergeSupervisionRefresh(
-  prev: EventDetailResponse | null,
+  prev: DashboardView | null,
   incoming: EventDetailResponse
-): EventDetailResponse {
+): DashboardView {
   // Nothing held, or a different event entirely: version counters are
   // per-event, so there is nothing meaningful to compare against.
-  if (!prev || prev.event.id !== incoming.event.id) return incoming;
+  if (!prev || prev.detail.event.id !== incoming.event.id) return viewFromDetail(incoming);
 
-  if (incoming.event.version >= prev.event.version) return incoming;
+  const incomingEpoch = lifecycleEpochOf(incoming);
+  const lifecycleIsNewer = incomingEpoch >= prev.lifecycleAtMs;
+  const countingIsNewer = incoming.event.version >= prev.detail.event.version;
 
   return {
-    ...incoming,
-    // Held back: SSE has already carried this event past the moment this
-    // response describes.
-    event: prev.event,
-    occupancy: prev.occupancy,
+    detail: {
+      // Supervision, always.
+      ...incoming,
+      event: {
+        ...incoming.event,
+        // Counting, only if this response has not been overtaken.
+        version: countingIsNewer ? incoming.event.version : prev.detail.event.version,
+        capacity: countingIsNewer ? incoming.event.capacity : prev.detail.event.capacity,
+        // Lifecycle, on its own clock.
+        status: lifecycleIsNewer ? incoming.event.status : prev.detail.event.status,
+        updatedAtMs: lifecycleIsNewer ? incoming.event.updatedAtMs : prev.detail.event.updatedAtMs,
+      },
+      occupancy: countingIsNewer ? incoming.occupancy : prev.detail.occupancy,
+    },
+    lifecycleAtMs: lifecycleIsNewer ? incomingEpoch : prev.lifecycleAtMs,
   };
 }
 
@@ -180,10 +246,10 @@ export function mergeSupervisionRefresh(
  * Returns `null` when the response must be ignored.
  */
 export function acceptSupervisionResponse(
-  prev: EventDetailResponse | null,
+  prev: DashboardView | null,
   incoming: EventDetailResponse,
   currentEventId: string | null
-): EventDetailResponse | null {
+): DashboardView | null {
   if (currentEventId === null || incoming.event.id !== currentEventId) return null;
   return mergeSupervisionRefresh(prev, incoming);
 }
@@ -191,16 +257,25 @@ export function acceptSupervisionResponse(
 /**
  * Applies an SSE state frame to what the dashboard holds.
  *
- * Guarded by the same ordering, in the other direction: frames delivered out
- * of order over a reconnected stream must not move the gauge backwards
- * either.
+ * Both clocks are honoured here too. Counting is ordered by `version`, and
+ * the frame's lifecycle by `serverTimeMs` — the instant the server minted
+ * the frame, and therefore an instant at which the status it carries was
+ * true, on the same clock as `updatedAtMs`.
+ *
+ * A frame can never claim a *later* epoch while carrying an *older* status:
+ * a frame minted after a transition reads the new status, and one minted
+ * before it has an epoch below that transition's `updatedAtMs`. That is what
+ * makes the two sources safe to compare against each other.
  */
 export function applyLiveState(
-  prev: EventDetailResponse | null,
+  prev: DashboardView | null,
   state: CompactEventState
-): EventDetailResponse | null {
+): DashboardView | null {
   if (!prev) return prev;
-  if (state.version < prev.event.version) return prev;
+
+  const countingIsNewer = state.version >= prev.detail.event.version;
+  const lifecycleIsNewer = state.serverTimeMs >= prev.lifecycleAtMs;
+  if (!countingIsNewer && !lifecycleIsNewer) return prev;
 
   const spaceOccupancies: Record<string, number> = {};
   for (const space of state.spaces) {
@@ -208,13 +283,18 @@ export function applyLiveState(
   }
 
   return {
-    ...prev,
-    occupancy: { global: state.eventOccupancy, spaces: spaceOccupancies },
-    event: {
-      ...prev.event,
-      status: state.eventStatus,
-      capacity: state.eventCapacity,
-      version: state.version,
+    detail: {
+      ...prev.detail,
+      occupancy: countingIsNewer
+        ? { global: state.eventOccupancy, spaces: spaceOccupancies }
+        : prev.detail.occupancy,
+      event: {
+        ...prev.detail.event,
+        status: lifecycleIsNewer ? state.eventStatus : prev.detail.event.status,
+        capacity: countingIsNewer ? state.eventCapacity : prev.detail.event.capacity,
+        version: countingIsNewer ? state.version : prev.detail.event.version,
+      },
     },
+    lifecycleAtMs: lifecycleIsNewer ? state.serverTimeMs : prev.lifecycleAtMs,
   };
 }

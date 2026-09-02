@@ -6,10 +6,12 @@ import {
   EventModel,
 } from '@paxflux/shared';
 import {
+  DashboardView,
   acceptSupervisionResponse,
   applyLiveState,
   mergeSupervisionRefresh,
   summariseSyncQuality,
+  viewFromDetail,
 } from './supervision.js';
 
 /**
@@ -41,7 +43,11 @@ function device(overrides: Partial<EventDeviceSummary> = {}): EventDeviceSummary
   };
 }
 
-function eventModel(version: number, status: EventModel['status'] = 'live'): EventModel {
+function eventModel(
+  version: number,
+  status: EventModel['status'] = 'live',
+  updatedAtMs = 1_000
+): EventModel {
   return {
     id: EVENT_ID,
     name: 'Festival',
@@ -61,7 +67,7 @@ function eventModel(version: number, status: EventModel['status'] = 'live'): Eve
     topologyLockedAtMs: 1_000,
     createdBy: 'admin',
     createdAtMs: 1_000,
-    updatedAtMs: 1_000,
+    updatedAtMs,
   };
 }
 
@@ -81,19 +87,51 @@ function detail(
   };
 }
 
-function liveState(version: number, occupancy: number): CompactEventState {
+function liveState(
+  version: number,
+  occupancy: number,
+  lifecycle: { status?: EventModel['status']; atMs?: number } = {}
+): CompactEventState {
   return {
     version,
-    eventStatus: 'live',
+    eventStatus: lifecycle.status ?? 'live',
     eventOccupancy: occupancy,
     eventCapacity: 500,
     spaces: [
       { id: SPACE_A, name: 'Extérieur', kind: 'external', occupancy: 0, capacity: null },
       { id: SPACE_B, name: 'Site', kind: 'leaf', occupancy, capacity: 500 },
     ],
-    serverTimeMs: 1_000 + version,
+    // The moment the server minted this frame, and therefore a moment at
+    // which the status it carries was true.
+    serverTimeMs: lifecycle.atMs ?? 1_000 + version,
     closingStartedAtMs: null,
   };
+}
+
+/** A detail response with explicit lifecycle fields. */
+function detailWith(
+  version: number,
+  occupancy: number,
+  lifecycle: { status?: EventModel['status']; updatedAtMs?: number } = {}
+): EventDetailResponse {
+  return {
+    ...detail(version, occupancy),
+    event: eventModel(version, lifecycle.status ?? 'live', lifecycle.updatedAtMs ?? 1_000),
+  };
+}
+
+/** What the dashboard holds: a response plus the epoch of its status. */
+function view(detailResponse: EventDetailResponse, lifecycleAtMs?: number): DashboardView {
+  const built = viewFromDetail(detailResponse);
+  return lifecycleAtMs === undefined ? built : { ...built, lifecycleAtMs };
+}
+
+function viewDetail(
+  version: number,
+  occupancy: number,
+  lifecycle: { status?: EventModel['status']; updatedAtMs?: number } = {}
+): EventDetailResponse {
+  return detailWith(version, occupancy, lifecycle);
 }
 
 describe('summariseSyncQuality — what the card is allowed to claim', () => {
@@ -166,7 +204,7 @@ describe('summariseSyncQuality — what the card is allowed to claim', () => {
 
 describe('mergeSupervisionRefresh — supervision must not drag counting backwards', () => {
   it('takes everything from a refresh that is at least as fresh', () => {
-    const prev = detail(20, 14);
+    const prev = view(detail(20, 14));
     const incoming = detail(21, 15, {
       devices: [device({ isOnline: false })],
       syncQuality: 'uncertain',
@@ -174,16 +212,16 @@ describe('mergeSupervisionRefresh — supervision must not drag counting backwar
 
     const merged = mergeSupervisionRefresh(prev, incoming);
 
-    expect(merged.event.version).toBe(21);
-    expect(merged.occupancy.global).toBe(15);
-    expect(merged.syncQuality).toBe('uncertain');
-    expect(merged.devices).toHaveLength(1);
+    expect(merged.detail.event.version).toBe(21);
+    expect(merged.detail.occupancy.global).toBe(15);
+    expect(merged.detail.syncQuality).toBe('uncertain');
+    expect(merged.detail.devices).toHaveLength(1);
   });
 
   it('keeps newer SSE occupancy and version when the refresh is older', () => {
     // The refresh was minted at v18 and arrived after an SSE frame carrying
     // v20. Fixing stale device state must not resurrect a stale gauge.
-    const prev = detail(20, 14);
+    const prev = view(detail(20, 14));
     const incoming = detail(18, 9, {
       devices: [device({ isOnline: false })],
       syncQuality: 'uncertain',
@@ -191,52 +229,120 @@ describe('mergeSupervisionRefresh — supervision must not drag counting backwar
 
     const merged = mergeSupervisionRefresh(prev, incoming);
 
-    expect(merged.event.version, 'the newer version is kept').toBe(20);
-    expect(merged.occupancy.global, 'the newer occupancy is kept').toBe(14);
+    expect(merged.detail.event.version, 'the newer version is kept').toBe(20);
+    expect(merged.detail.occupancy.global, 'the newer occupancy is kept').toBe(14);
     // ...and the supervision half of the same response is still adopted,
     // because SSE never carries it.
-    expect(merged.syncQuality).toBe('uncertain');
-    expect(merged.devices[0].isOnline).toBe(false);
+    expect(merged.detail.syncQuality).toBe('uncertain');
+    expect(merged.detail.devices[0].isOnline).toBe(false);
   });
 
   it('lets an equal-version refresh carry a lifecycle transition', () => {
     // `live → closing` does not bump `version`, so a strict `>` would drop
     // the transition and leave the dashboard reading `live`.
-    const prev = detail(20, 14);
-    const incoming: EventDetailResponse = {
-      ...detail(20, 14),
-      event: eventModel(20, 'closing'),
-    };
+    const prev = view(detail(20, 14), 1_000);
+    const incoming = detailWith(20, 14, { status: 'closing', updatedAtMs: 2_000 });
 
-    expect(mergeSupervisionRefresh(prev, incoming).event.status).toBe('closing');
+    expect(mergeSupervisionRefresh(prev, incoming).detail.event.status).toBe('closing');
   });
 
   it('adopts a response for a different event wholesale', () => {
     // Version counters are per-event; comparing across them is meaningless.
-    const prev = detail(90, 40);
+    const prev = view(detail(90, 40));
     const incoming: EventDetailResponse = {
       ...detail(2, 3),
       event: { ...eventModel(2), id: OTHER_EVENT_ID },
     };
 
     const merged = mergeSupervisionRefresh(prev, incoming);
-    expect(merged.event.id).toBe(OTHER_EVENT_ID);
-    expect(merged.event.version).toBe(2);
-    expect(merged.occupancy.global).toBe(3);
+    expect(merged.detail.event.id).toBe(OTHER_EVENT_ID);
+    expect(merged.detail.event.version).toBe(2);
+    expect(merged.detail.occupancy.global).toBe(3);
   });
 
   it('adopts the first response when nothing is held yet', () => {
-    expect(mergeSupervisionRefresh(null, detail(5, 2)).event.version).toBe(5);
+    expect(mergeSupervisionRefresh(null, detail(5, 2)).detail.event.version).toBe(5);
+  });
+});
+
+describe('lifecycle ordering — a lifecycle change does not bump event.version', () => {
+  it('does not let an older same-version HTTP response undo a closing seen over SSE', () => {
+    // The exact interleaving from the RC2-B review:
+    //
+    //   held:      v20 / live
+    //   GET /state starts and reads the row: v20 / live, updatedAtMs 1_000
+    //   server transitions to closing at 2_000 — version stays 20
+    //   SSE frame minted at 2_050 carries closing, and is applied
+    //   the older HTTP response completes last
+    //
+    // Version alone cannot separate these two: both say 20. The HTTP
+    // response describes the event as it stood *before* the transition.
+    const held = view(detail(20, 14), 1_000);
+    const afterSse = applyLiveState(held, liveState(20, 14, { status: 'closing', atMs: 2_050 }));
+    expect(afterSse?.detail.event.status).toBe('closing');
+
+    const staleHttp = viewDetail(20, 14, { status: 'live', updatedAtMs: 1_000 });
+    const merged = mergeSupervisionRefresh(afterSse, staleHttp);
+
+    expect(merged.detail.event.status, 'closing must survive the late response').toBe('closing');
+  });
+
+  it('still converges live → closing from HTTP when the SSE transition was missed', () => {
+    // The inverse, which a strict `>` on version would break: nothing was
+    // pushed (dropped frame, stream reconnecting), so the poll is the only
+    // way this dashboard will ever learn the event is closing — and it
+    // carries the same version 20.
+    const held = view(detail(20, 14), 1_000);
+    const freshHttp = viewDetail(20, 14, { status: 'closing', updatedAtMs: 2_000 });
+
+    const merged = mergeSupervisionRefresh(held, freshHttp);
+
+    expect(merged.detail.event.status, 'the poll must be able to carry the transition').toBe('closing');
+    expect(merged.lifecycleAtMs).toBe(2_000);
+  });
+
+  it('handles reopen, where the status ordering runs backwards', () => {
+    // `closed → live` means no monotonic ordering of status values can be
+    // assumed. Only the epoch decides.
+    const closed = view(detailWith(20, 14, { status: 'closed', updatedAtMs: 3_000 }), 3_000);
+    const reopened = viewDetail(20, 14, { status: 'live', updatedAtMs: 4_000 });
+
+    expect(mergeSupervisionRefresh(closed, reopened).detail.event.status).toBe('live');
+
+    // ...and a response minted before the reopen cannot close it again.
+    const staleClosed = viewDetail(20, 14, { status: 'closed', updatedAtMs: 3_000 });
+    const afterReopen = mergeSupervisionRefresh(closed, reopened);
+    expect(mergeSupervisionRefresh(afterReopen, staleClosed).detail.event.status).toBe('live');
+  });
+
+  it('does not let an older SSE frame undo a newer lifecycle either', () => {
+    const held = view(detailWith(20, 14, { status: 'closing', updatedAtMs: 2_000 }), 2_000);
+    const olderFrame = applyLiveState(held, liveState(20, 14, { status: 'live', atMs: 1_500 }));
+
+    expect(olderFrame?.detail.event.status).toBe('closing');
+  });
+
+  it('keeps counting and lifecycle on their own clocks', () => {
+    // A refresh that is older for counting can still be newer for
+    // lifecycle, and vice versa: they are ordered by different signals.
+    const held = view(detail(20, 14), 1_000);
+    const newerLifecycleOlderCounting = viewDetail(18, 9, { status: 'closing', updatedAtMs: 2_000 });
+
+    const merged = mergeSupervisionRefresh(held, newerLifecycleOlderCounting);
+
+    expect(merged.detail.event.status, 'lifecycle advances').toBe('closing');
+    expect(merged.detail.event.version, 'counting does not roll back').toBe(20);
+    expect(merged.detail.occupancy.global).toBe(14);
   });
 });
 
 describe('acceptSupervisionResponse — a refresh loop must not follow the wrong event', () => {
   it('drops a late response for the event the operator has left', () => {
     // The selector moved to another event while this request was in flight.
-    const prev: EventDetailResponse = {
+    const prev = view({
       ...detail(4, 2),
       event: { ...eventModel(4), id: OTHER_EVENT_ID },
-    };
+    });
     const lateForOldEvent = detail(99, 77, { syncQuality: 'uncertain' });
 
     expect(acceptSupervisionResponse(prev, lateForOldEvent, OTHER_EVENT_ID)).toBeNull();
@@ -247,33 +353,34 @@ describe('acceptSupervisionResponse — a refresh loop must not follow the wrong
   });
 
   it('accepts a response for the event currently on screen', () => {
-    const merged = acceptSupervisionResponse(detail(20, 14), detail(21, 15), EVENT_ID);
-    expect(merged?.event.version).toBe(21);
+    const merged = acceptSupervisionResponse(view(detail(20, 14)), detail(21, 15), EVENT_ID);
+    expect(merged?.detail.event.version).toBe(21);
   });
 
   it('still refuses to roll counting back for the event on screen', () => {
     const merged = acceptSupervisionResponse(
-      detail(20, 14),
+      view(detail(20, 14)),
       detail(18, 9, { syncQuality: 'uncertain' }),
       EVENT_ID
     );
-    expect(merged?.occupancy.global).toBe(14);
-    expect(merged?.syncQuality).toBe('uncertain');
+    expect(merged?.detail.occupancy.global).toBe(14);
+    expect(merged?.detail.syncQuality).toBe('uncertain');
   });
 });
 
 describe('applyLiveState — SSE frames are ordered too', () => {
   it('applies a newer frame', () => {
-    const next = applyLiveState(detail(20, 14), liveState(21, 15));
-    expect(next?.event.version).toBe(21);
-    expect(next?.occupancy.global).toBe(15);
-    expect(next?.occupancy.spaces[SPACE_B]).toBe(15);
+    const next = applyLiveState(view(detail(20, 14)), liveState(21, 15));
+    expect(next?.detail.event.version).toBe(21);
+    expect(next?.detail.occupancy.global).toBe(15);
+    expect(next?.detail.occupancy.spaces[SPACE_B]).toBe(15);
   });
 
   it('ignores a frame older than the state already held', () => {
-    const prev = detail(20, 14);
+    const prev = view(detail(20, 14));
     const next = applyLiveState(prev, liveState(18, 9));
-    expect(next).toBe(prev);
+    expect(next?.detail.occupancy.global).toBe(14);
+    expect(next?.detail.event.version).toBe(20);
   });
 
   it('does nothing before the first snapshot has arrived', () => {

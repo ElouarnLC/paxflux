@@ -10,6 +10,7 @@ import {
   CompactEventState,
 } from '@paxflux/shared';
 import {
+  DashboardView,
   acceptSupervisionResponse,
   applyLiveState,
   summariseSyncQuality,
@@ -67,7 +68,11 @@ export const Dashboard: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [eventsList, setEventsList] = useState<EventModel[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [eventDetail, setEventDetail] = useState<EventDetailResponse | null>(null);
+  // The response plus the epoch of the lifecycle status inside it: a
+  // lifecycle transition does not bump `event.version`, so the status needs
+  // an ordering signal of its own. See `supervision.ts`.
+  const [dashboardView, setDashboardView] = useState<DashboardView | null>(null);
+  const eventDetail = dashboardView?.detail ?? null;
   const [loading, setLoading] = useState(true);
 
   // Load events list
@@ -119,11 +124,11 @@ export const Dashboard: React.FC = () => {
     if (!requestedEventId) return;
     try {
       const details = await apiFetch<EventDetailResponse>(`/api/v1/events/${requestedEventId}/state`);
-      setEventDetail((prev) =>
-        // Merged rather than assigned: the response also carries occupancy
-        // and a version that SSE may already have moved past while it was in
-        // flight, and it is dropped entirely if the operator has since
-        // switched events.
+      setDashboardView((prev) =>
+        // Merged rather than assigned: the response also carries counting
+        // state and a lifecycle status, either of which SSE may already have
+        // moved past while it was in flight. It is dropped entirely if the
+        // operator has since switched events.
         acceptSupervisionResponse(prev, details, selectedEventIdRef.current) ?? prev
       );
     } catch (err) {
@@ -161,7 +166,7 @@ export const Dashboard: React.FC = () => {
     url: selectedEventId ? `/api/v1/events/${selectedEventId}/stream` : '',
     enabled: !!selectedEventId,
     onState: (state: CompactEventState) => {
-      setEventDetail((prev) => applyLiveState(prev, state));
+      setDashboardView((prev) => applyLiveState(prev, state));
     },
   });
 
