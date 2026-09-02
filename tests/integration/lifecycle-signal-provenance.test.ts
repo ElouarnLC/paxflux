@@ -147,7 +147,7 @@ describe('CompactEventState.serverTimeMs is not the timestamp of the status it c
  * that at the producer, for every transition an event can make — including
  * the one that runs the status ordering backwards.
  */
-describe('event-status carries the same instant the event row records', () => {
+describe('which lifecycle transitions are pushed, and what they carry', () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let sqlite: DatabaseSync;
   let cookie: string;
@@ -279,6 +279,31 @@ describe('event-status carries the same instant the event row records', () => {
     await transition('begin-closing');
     await transition('force-close', { reason: 'Fermeture forcée de test' });
     expectMessageMatchesRow();
+  });
+
+  it('close: closed, on an event with no devices to drain', async () => {
+    await transition('start');
+    await transition('begin-closing');
+    await transition('close');
+    expectMessageMatchesRow();
+    expect(eventRow().status).toBe('closed');
+  });
+
+  it('archive broadcasts no event-status at all, so only the poll can carry it', async () => {
+    // `/archive` writes the row, revokes the device sessions and calls
+    // `closeAllForEvent` — the stream is torn down rather than told. Any
+    // claim that *every* transition is pushed is therefore wrong, and the
+    // dashboard must keep the refresh as its convergence path.
+    await transition('start');
+    await transition('begin-closing');
+    await transition('force-close', { reason: 'Fermeture forcée de test' });
+
+    const before = messages.filter((m) => m.type === 'event-status').length;
+    await transition('archive');
+
+    const after = messages.filter((m) => m.type === 'event-status').length;
+    expect(after, 'archive emits no event-status').toBe(before);
+    expect(eventRow().status).toBe('archived');
   });
 
   it('reopen: closed → live, where the status ordering runs backwards', async () => {

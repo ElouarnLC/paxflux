@@ -128,51 +128,54 @@ function describeVerdict(
 }
 
 /**
- * What the dashboard holds: a response, plus the epoch of the lifecycle
- * status inside it.
+ * What the dashboard holds: a response, plus the two counters that decide
+ * which source may set the lifecycle next.
  *
- * The epoch has to be carried separately because it is not derivable from
- * the response once merged: after a merge the displayed status may come from
- * one channel and the occupancy from another.
+ * Neither is a clock. `Date.now()` was the previous ordering signal and it
+ * cannot carry this: a server clock that steps backwards makes a genuinely
+ * later transition look older, and once the event is `closed` nothing
+ * guarantees a future mutation ever writes a timestamp above the held one —
+ * so the dashboard could sit on `closing` indefinitely rather than
+ * converging at the next poll. Equal timestamps are no better: a count and a
+ * transition can share a millisecond, so an equal value proves nothing about
+ * which happened first.
  */
 export interface DashboardView {
   detail: EventDetailResponse;
   /**
-   * A server-clock instant at which `detail.event.status` was true.
+   * Incremented every time a pushed lifecycle transition is applied.
    *
-   * See `lifecycleEpochOf` for why every source can produce one and why they
-   * are comparable with each other.
+   * A refresh records this when it *starts*. If it differs when the response
+   * arrives, a transition overtook the request in flight and its lifecycle
+   * is stale by construction — whatever its timestamps say.
    */
-  lifecycleAtMs: number;
+  lifecycleGeneration: number;
+  /**
+   * The sequence number of the newest refresh whose lifecycle was applied.
+   *
+   * Two refreshes can be in flight at once — the poll, and the one
+   * `LifecycleControls` fires through `onChanged` after a transition — with
+   * no push between them to move the generation. `archive` is exactly that
+   * case: it writes the row, revokes the device sessions and calls
+   * `closeAllForEvent`, broadcasting no `event-status` at all. Ordering by
+   * request sequence stops the earlier response from winning.
+   */
+  lifecycleRequestSeq: number;
 }
 
 /**
- * The lifecycle epoch of an HTTP `/state` response.
- *
- * `event.updatedAtMs` is a property of the row that was read, so it can
- * never be newer than the read itself. That is exactly what the race needs:
- * a response whose row was captured *before* a transition carries the
- * pre-transition timestamp, however late the response arrives. Minting the
- * epoch from `Date.now()` when the response is built or received would
- * instead stamp a stale reading with a fresh time, which is the bug.
- *
- * Every lifecycle transition in `routes/events.ts` — start, begin-closing,
- * close, force-close, reopen and archive — writes `updatedAtMs: now` in the
- * same update that sets the new status, so the timestamp always belongs to
- * the status beside it. Counting also bumps it, which is harmless: it moves
- * the epoch forward while carrying the status unchanged.
- *
- * The same is emphatically *not* true of `CompactEventState.serverTimeMs`,
- * which is why SSE state frames no longer carry lifecycle here — see
- * `applyLiveState`.
+ * What a refresh observed when it started, carried back to its response.
  */
-function lifecycleEpochOf(detail: EventDetailResponse): number {
-  return detail.event.updatedAtMs;
+export interface LifecycleFence {
+  /** `lifecycleGeneration` at the moment the request was issued. */
+  generationAtStart: number;
+  /** Monotonic id of this request, from the dashboard's own counter. */
+  requestSeq: number;
 }
 
 /** Wraps a first response, before anything has been merged into it. */
-export function viewFromDetail(detail: EventDetailResponse): DashboardView {
-  return { detail, lifecycleAtMs: lifecycleEpochOf(detail) };
+export function viewFromDetail(detail: EventDetailResponse, requestSeq = 0): DashboardView {
+  return { detail, lifecycleGeneration: 0, lifecycleRequestSeq: requestSeq };
 }
 
 /**
@@ -182,40 +185,40 @@ export function viewFromDetail(detail: EventDetailResponse): DashboardView {
  * because those change without any new state frame: a device goes offline
  * when its heartbeat *stops*, and silence produces no SSE event. But the
  * same response also carries counting state and a lifecycle status, either
- * of which SSE may already have moved past while this request was in flight.
+ * of which may already have been superseded while the request was in flight.
  *
- * Three groups, ordered by three different rules, because they genuinely
- * move on different clocks:
+ * Three groups, three rules, because they genuinely move independently:
  *
- *  - **supervision** (devices, sync quality, topology) is taken from the
+ *  - **supervision** (devices, sync quality, topology) — taken from the
  *    response unconditionally: it is the only source for it;
  *
- *  - **counting** (occupancy, version, capacity) is ordered by
+ *  - **counting** (occupancy, version, capacity) — ordered by
  *    `event.version`, the counter SSE carries as `state.version`;
  *
- *  - **lifecycle** (status) is ordered by a wall-clock epoch, *not* by
- *    version — because a transition does not bump the version at all. The
- *    server broadcasts `live → closing` with `version: eventRecord.version`
- *    unchanged, so an HTTP response captured before the transition and an
- *    SSE frame minted after it are indistinguishable by version. Ordering
- *    lifecycle by version would let the late response put the dashboard back
- *    to `live`.
+ *  - **lifecycle** (status) — accepted only when the response was not
+ *    overtaken: no pushed transition landed while it was in flight, and no
+ *    later refresh has already set the lifecycle. A transition does not bump
+ *    `event.version`, so version cannot order it; and no timestamp is
+ *    consulted, so no clock can misorder it.
  *
- * The epoch is a real instant rather than a rank over status values, which
- * matters because the statuses are not monotonic: `reopen` takes an event
- * from `closed` back to `live`, so any "later status wins" table would be
- * wrong in exactly the case an operator most needs to see.
+ * The refusal is never terminal, which is what makes convergence real: the
+ * next poll carries a higher `requestSeq` and a fresh generation, so a
+ * missed push is always picked up on the following refresh.
  */
 export function mergeSupervisionRefresh(
   prev: DashboardView | null,
-  incoming: EventDetailResponse
+  incoming: EventDetailResponse,
+  fence: LifecycleFence
 ): DashboardView {
   // Nothing held, or a different event entirely: version counters are
   // per-event, so there is nothing meaningful to compare against.
-  if (!prev || prev.detail.event.id !== incoming.event.id) return viewFromDetail(incoming);
+  if (!prev || prev.detail.event.id !== incoming.event.id) {
+    return { detail: incoming, lifecycleGeneration: 0, lifecycleRequestSeq: fence.requestSeq };
+  }
 
-  const incomingEpoch = lifecycleEpochOf(incoming);
-  const lifecycleIsNewer = incomingEpoch >= prev.lifecycleAtMs;
+  const notOvertakenByPush = fence.generationAtStart === prev.lifecycleGeneration;
+  const notOvertakenByRefresh = fence.requestSeq > prev.lifecycleRequestSeq;
+  const lifecycleIsUsable = notOvertakenByPush && notOvertakenByRefresh;
   const countingIsNewer = incoming.event.version >= prev.detail.event.version;
 
   return {
@@ -227,13 +230,16 @@ export function mergeSupervisionRefresh(
         // Counting, only if this response has not been overtaken.
         version: countingIsNewer ? incoming.event.version : prev.detail.event.version,
         capacity: countingIsNewer ? incoming.event.capacity : prev.detail.event.capacity,
-        // Lifecycle, on its own clock.
-        status: lifecycleIsNewer ? incoming.event.status : prev.detail.event.status,
-        updatedAtMs: lifecycleIsNewer ? incoming.event.updatedAtMs : prev.detail.event.updatedAtMs,
+        // Lifecycle, behind the fence. `updatedAtMs` travels with the
+        // status it belongs to — it no longer decides anything, but the two
+        // must not be left describing different moments.
+        status: lifecycleIsUsable ? incoming.event.status : prev.detail.event.status,
+        updatedAtMs: lifecycleIsUsable ? incoming.event.updatedAtMs : prev.detail.event.updatedAtMs,
       },
       occupancy: countingIsNewer ? incoming.occupancy : prev.detail.occupancy,
     },
-    lifecycleAtMs: lifecycleIsNewer ? incomingEpoch : prev.lifecycleAtMs,
+    lifecycleGeneration: prev.lifecycleGeneration,
+    lifecycleRequestSeq: lifecycleIsUsable ? fence.requestSeq : prev.lifecycleRequestSeq,
   };
 }
 
@@ -253,36 +259,31 @@ export function mergeSupervisionRefresh(
 export function acceptSupervisionResponse(
   prev: DashboardView | null,
   incoming: EventDetailResponse,
-  currentEventId: string | null
+  currentEventId: string | null,
+  fence: LifecycleFence
 ): DashboardView | null {
   if (currentEventId === null || incoming.event.id !== currentEventId) return null;
-  return mergeSupervisionRefresh(prev, incoming);
+  return mergeSupervisionRefresh(prev, incoming, fence);
 }
 
 /**
  * Applies an SSE state frame — **counting only**.
  *
- * A state frame carries `eventStatus`, and RC2-B used it, ordered by the
- * frame's `serverTimeMs`. That was unsound at the producer, and measurably
- * so. `getCompactEventState` reads the event row, issues two further
- * queries, and only then calls `Date.now()`; `/device/bootstrap` does the
- * same across six reads. A transition committing in that gap is invisible to
- * the status already in hand but earlier than the timestamp about to be
- * stamped on it, so the frame carries an **old status with a new epoch** —
- * exactly the inversion the ordering was supposed to make impossible. Racing
- * a frame build against a transition reproduces it 400 times out of 400
+ * A state frame carries `eventStatus`, and an earlier revision of this file
+ * used it, ordered by the frame's `serverTimeMs`. That was unsound at the
+ * producer, and measurably so. `getCompactEventState` reads the event row,
+ * issues two further queries, and only then calls `Date.now()`;
+ * `/device/bootstrap` does the same across six reads. A transition
+ * committing in that gap is invisible to the status already in hand but
+ * earlier than the timestamp about to be stamped on it, so the frame carries
+ * an **old status with a new epoch**. Racing a frame build against a
+ * transition reproduces it 400 times out of 400
  * (`tests/integration/lifecycle-signal-provenance.test.ts`); the 50–100ms
- * coalescing window in `broadcastState` only widens the gap. The batch
- * endpoint's fallback frame goes further still and hardcodes
- * `eventStatus: 'live'` when there is no state to report.
+ * coalescing window in `broadcastState` only widens the gap, and the batch
+ * endpoint's fallback frame hardcodes `eventStatus: 'live'` outright.
  *
  * `serverTimeMs` is also load-bearing for offline freshness (Phase 6,
  * RC2-A), so it is left exactly as it is and simply not read for lifecycle.
- *
- * Lifecycle now arrives only from sources where the status and its timestamp
- * come from the same row or the same write: `event-status` messages, and the
- * `/state` refresh. `version` still orders counting, which is what it is
- * for.
  */
 export function applyLiveState(
   prev: DashboardView | null,
@@ -319,33 +320,40 @@ export interface LifecycleMessage {
 }
 
 /**
- * Applies an `event-status` message — **lifecycle only**.
+ * Applies an `event-status` message — **lifecycle only**, authoritatively.
  *
- * This is the one push channel whose timestamp is provably the timestamp of
- * the status beside it: each transition writes `updatedAtMs: now` and
- * broadcasts `timestampMs: now` in the same handler, from the same `now`
- * (`routes/events.ts`). So a message and a `/state` response are ordered
- * against each other by the same quantity, and a message can never carry an
- * old status under a new epoch the way a state frame can.
+ * This is the push channel for transitions, and it is taken at face value
+ * rather than compared against anything. Two facts make that safe. Messages
+ * are written straight to each client's stream by `broadcastMessage` in call
+ * order, with no coalescing, so a single SSE connection delivers them in the
+ * order the server produced them. And a reconnection replays nothing: the
+ * stream opens with a `state` snapshot only, which carries no lifecycle
+ * here — so there is no path by which a stale transition arrives late.
  *
- * Ordered by `>=`, which is safe precisely because the two sides carry the
- * same number for the same transition: an equal epoch means the same
- * transition, hence the same status, so accepting it changes nothing.
+ * `timestampMs` is carried for display and diagnostics; it is deliberately
+ * not used to decide precedence, which is what makes a rolled-back server
+ * clock harmless.
+ *
+ * The generation is supplied by the caller, which increments its own counter
+ * as it dispatches the message, so a refresh that started before this point
+ * can be recognised as overtaken.
  */
 export function applyLifecycleMessage(
   prev: DashboardView | null,
-  message: LifecycleMessage
+  message: LifecycleMessage,
+  generation: number
 ): DashboardView | null {
   if (!prev) return prev;
-  // A message for another event says nothing about the one on screen.
+  // A message for another event says nothing about the one on screen, and
+  // must not move the fence.
   if (message.eventId !== prev.detail.event.id) return prev;
-  if (message.timestampMs < prev.lifecycleAtMs) return prev;
 
   return {
     detail: {
       ...prev.detail,
       event: { ...prev.detail.event, status: message.status, updatedAtMs: message.timestampMs },
     },
-    lifecycleAtMs: message.timestampMs,
+    lifecycleGeneration: generation,
+    lifecycleRequestSeq: prev.lifecycleRequestSeq,
   };
 }

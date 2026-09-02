@@ -74,6 +74,17 @@ export const Dashboard: React.FC = () => {
   // an ordering signal of its own. See `supervision.ts`.
   const [dashboardView, setDashboardView] = useState<DashboardView | null>(null);
   const eventDetail = dashboardView?.detail ?? null;
+
+  // The lifecycle fence. Both counters live in refs because a refresh has to
+  // read them at the moment it *starts*, which is outside any render.
+  //
+  // `lifecycleGenerationRef` is bumped as an `event-status` message is
+  // dispatched; a refresh that observed an older value was overtaken in
+  // flight. `requestSeqRef` numbers the refreshes themselves, so that two
+  // concurrent ones — the poll, and the one `LifecycleControls` fires
+  // through `onChanged` — cannot land out of order and regress the status.
+  const lifecycleGenerationRef = useRef(0);
+  const requestSeqRef = useRef(0);
   const [loading, setLoading] = useState(true);
 
   // Load events list
@@ -123,6 +134,11 @@ export const Dashboard: React.FC = () => {
   const refreshDetails = useCallback(async () => {
     const requestedEventId = selectedEventIdRef.current;
     if (!requestedEventId) return;
+    // Captured before the request leaves, never after it returns.
+    const fence = {
+      generationAtStart: lifecycleGenerationRef.current,
+      requestSeq: ++requestSeqRef.current,
+    };
     try {
       const details = await apiFetch<EventDetailResponse>(`/api/v1/events/${requestedEventId}/state`);
       setDashboardView((prev) =>
@@ -130,7 +146,7 @@ export const Dashboard: React.FC = () => {
         // state and a lifecycle status, either of which SSE may already have
         // moved past while it was in flight. It is dropped entirely if the
         // operator has since switched events.
-        acceptSupervisionResponse(prev, details, selectedEventIdRef.current) ?? prev
+        acceptSupervisionResponse(prev, details, selectedEventIdRef.current, fence) ?? prev
       );
     } catch (err) {
       console.debug('Supervision refresh failed; keeping the last known state:', err);
@@ -144,6 +160,10 @@ export const Dashboard: React.FC = () => {
   // the timer is cleared when the event changes or the dashboard unmounts.
   useEffect(() => {
     if (!selectedEventId) return;
+    // A new event starts its own fence: the counters describe the lifecycle
+    // of the event on screen, not of the one just left.
+    lifecycleGenerationRef.current = 0;
+    requestSeqRef.current = 0;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -178,12 +198,19 @@ export const Dashboard: React.FC = () => {
     // the `/state` refresh by the same quantity.
     onMessage: (message) => {
       if (message.type !== 'event-status') return;
+      // Bumped as the message is dispatched, so any refresh already in
+      // flight is recognised as overtaken when it returns.
+      const generation = ++lifecycleGenerationRef.current;
       setDashboardView((prev) =>
-        applyLifecycleMessage(prev, {
-          eventId: message.data.eventId,
-          status: message.data.status,
-          timestampMs: message.data.timestampMs,
-        })
+        applyLifecycleMessage(
+          prev,
+          {
+            eventId: message.data.eventId,
+            status: message.data.status,
+            timestampMs: message.data.timestampMs,
+          },
+          generation
+        )
       );
     },
   });
