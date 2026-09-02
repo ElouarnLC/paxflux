@@ -145,18 +145,47 @@ export function resolveEffectiveStatus(
 /**
  * Stores the stable pairing configuration and its state in one step, so a
  * fresh bootstrap can never leave the two describing different pairings.
+ *
+ * The configuration and the authoritative baseline are written inside a
+ * single transaction spanning both tables. They were two separate
+ * transactions before, which is how a device could end up holding a
+ * configuration for one pairing beside a baseline belonging to another.
+ *
+ * ## The identity boundary
+ *
+ * Freshness ordering — newer `version`, then newer `serverTimeMs` — is the
+ * right rule *within* one pairing: a late SSE frame or batch response must
+ * never roll the gauge backwards.
+ *
+ * It is the wrong rule at the moment a **new** pairing is established, and a
+ * database restore is where that shows. A restore deliberately moves the
+ * server back to an earlier `event.version`; the browser's IndexedDB is not
+ * rolled back with it. Pairing the same browser again against the restored
+ * server then produced a bootstrap for a new device session carrying a
+ * *lower* version than the state already stored — which the freshness filter
+ * rejected as stale. The counter went on displaying the pre-restore
+ * occupancy while the server, the dashboard and every new tap agreed on the
+ * restored one, and no amount of reloading fixed it because the stale row
+ * was the one being read back.
+ *
+ * So the authenticated bootstrap that *establishes* a new device session is
+ * the new baseline, whatever its version says. This is not a licence for
+ * arbitrary stale state to win: it applies only to the one response that
+ * completes a handoff this device asked for, for an identity it is waiting
+ * on. Every other path — including a second bootstrap for the session
+ * already established — still goes through the ordering above.
  */
 export async function persistBootstrap(bootstrap: DeviceBootstrapResponse): Promise<boolean> {
-  // A bootstrap request in flight when a re-pairing happens comes back
-  // describing the *previous* device session. Committing it would undo the
-  // handoff and put the retired identity back in charge — the very thing
-  // `beginPairingHandoff` exists to prevent — so the commit is conditional
-  // on the response describing the identity this device is currently
-  // waiting for (or already has).
-  const accepted = await localDb.transaction('rw', localDb.device_config, async () => {
+  return localDb.transaction('rw', localDb.device_config, localDb.event_state, async () => {
     const config = await localDb.device_config.get('current');
     const expectedSessionId = config?.pendingSessionId ?? config?.bootstrap?.deviceSession.id ?? null;
 
+    // A bootstrap request in flight when a re-pairing happens comes back
+    // describing the *previous* device session. Committing it would undo the
+    // handoff and put the retired identity back in charge — the very thing
+    // `beginPairingHandoff` exists to prevent — so the commit is conditional
+    // on the response describing the identity this device is currently
+    // waiting for (or already has).
     if (expectedSessionId !== null && expectedSessionId !== bootstrap.deviceSession.id) {
       console.debug(
         `Ignoring a bootstrap for session ${bootstrap.deviceSession.id}; this device expects ${expectedSessionId}`
@@ -164,18 +193,39 @@ export async function persistBootstrap(bootstrap: DeviceBootstrapResponse): Prom
       return false;
     }
 
+    // True only for the response that completes a handoff: the device asked
+    // to become this session and is hearing back about it for the first
+    // time. A refresh for an already-established session is not a boundary.
+    const establishesNewPairing = config?.pendingSessionId === bootstrap.deviceSession.id;
+
     await localDb.device_config.put({
       key: 'current',
       bootstrap,
       updatedAtMs: Date.now(),
     });
+
+    if (establishesNewPairing) {
+      await localDb.event_state.put({
+        key: 'current',
+        eventId: bootstrap.event.id,
+        state: bootstrap.state,
+        updatedAtMs: Date.now(),
+        // No lifecycle marker is carried across the boundary. One recorded
+        // before a restore describes a transition that, on the restored
+        // database, has not happened; keeping it would hold a status the
+        // server no longer reports over the baseline that replaced it.
+        // `resolveEffectiveStatus` falls back to the bootstrap's own status,
+        // which is the one the server just sent.
+      });
+    } else {
+      // Dexie joins a nested transaction whose scope is a subset of the one
+      // already open, so this commits with the write above rather than
+      // opening a second one.
+      await persistAuthoritativeState(bootstrap.event.id, bootstrap.state, 'bootstrap');
+    }
+
     return true;
   });
-
-  if (accepted) {
-    await persistAuthoritativeState(bootstrap.event.id, bootstrap.state, 'bootstrap');
-  }
-  return accepted;
 }
 
 /**
