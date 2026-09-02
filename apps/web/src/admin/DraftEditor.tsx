@@ -453,22 +453,28 @@ export const DraftEditor: React.FC = () => {
                       onChange={(e) => updateSpace(space.id, { name: e.target.value })}
                       className="w-full sm:flex-1"
                     />
-                    <Input
-                      type="number"
-                      min="0"
-                      aria-label={`Capacité de la zone ${space.name}`}
-                      placeholder="Capacité"
-                      value={space.capacity.capacity}
-                      onChange={(e) =>
-                        updateSpace(space.id, {
-                          capacity: overrideCapacity(
-                            space.capacity,
-                            e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0
-                          ),
-                        })
-                      }
-                      className="flex-1 font-mono sm:w-32 sm:flex-none"
-                    />
+                    {/* An aggregate zone's occupancy is the sum of its
+                        children, so it has no capacity of its own to type —
+                        and `saveSpace` would not send one. Showing the field
+                        anyway would be a control that quietly does nothing. */}
+                    {hasEditableCapacity(space) ? (
+                      <Input
+                        type="number"
+                        min="0"
+                        aria-label={`Capacité de la zone ${space.name}`}
+                        placeholder="Capacité"
+                        value={space.capacity.capacity}
+                        onChange={(e) =>
+                          updateSpace(space.id, {
+                            capacity: overrideCapacity(
+                              space.capacity,
+                              e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0
+                            ),
+                          })
+                        }
+                        className="flex-1 font-mono sm:w-32 sm:flex-none"
+                      />
+                    ) : null}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -486,14 +492,16 @@ export const DraftEditor: React.FC = () => {
                     </Button>
                     {/* Linking is an explicit choice, never inferred from a
                         matching number or a familiar name. */}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => updateSpace(space.id, { capacity: relinkCapacity(capacity) })}
-                      disabled={save.kind === 'saving'}
-                    >
-                      Même capacité que l’événement
-                    </Button>
+                    {hasEditableCapacity(space) ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => updateSpace(space.id, { capacity: relinkCapacity(capacity) })}
+                        disabled={save.kind === 'saving'}
+                      >
+                        Même capacité que l’événement
+                      </Button>
+                    ) : null}
                   </div>
                 </>
               )}
