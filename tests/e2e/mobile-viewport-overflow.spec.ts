@@ -122,7 +122,7 @@ test('les statistiques et l’état système tiennent dans le viewport', async (
   await loginAsAdmin(page);
 
   await page.goto(`/admin/events/${topo.eventId}/analytics`);
-  await expect(page.getByRole('heading', { name: 'Statistiques & Analyse de Flux' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Statistiques et analyse de flux' })).toBeVisible();
   await assertScreenFitsViewport(page, '/admin/events/:id/analytics');
 
   await page.goto('/admin/system');

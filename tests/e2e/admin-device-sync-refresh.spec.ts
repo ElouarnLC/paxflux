@@ -53,7 +53,7 @@ test('l\'admin voit un appareil redevenir synchronisé pendant `closing`, sans r
   await adminPage.goto(`/admin?event=${topo.eventId}`);
 
   // Scoped to the lifecycle section: the dashboard also renders its own,
-  // separate "Appareils et Portes Actives" table with the same "Hors
+  // separate "Appareils et portes actives" table with the same "Hors
   // ligne"/"En ligne" wording, which would otherwise make these locators
   // ambiguous.
   const lifecycleSection = adminPage
