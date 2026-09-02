@@ -10,6 +10,7 @@ import {
   acceptSupervisionResponse,
   applyLiveState,
   applyLifecycleMessage,
+  isLifecyclePushForEvent,
   mergeSupervisionRefresh,
   summariseSyncQuality,
   viewFromDetail,
@@ -102,8 +103,11 @@ function liveState(
       { id: SPACE_A, name: 'Extérieur', kind: 'external', occupancy: 0, capacity: null },
       { id: SPACE_B, name: 'Site', kind: 'leaf', occupancy, capacity: 500 },
     ],
-    // The moment the server minted this frame, and therefore a moment at
-    // which the status it carries was true.
+    // When the server *stamped* this frame — which the producer test shows
+    // is not when its `eventStatus` was read: `getCompactEventState` reads
+    // the event row, issues two more queries, and only then calls
+    // `Date.now()`. A frame can therefore carry an old status under a newer
+    // timestamp, which is why nothing here reads it for lifecycle.
     serverTimeMs: lifecycle.atMs ?? 1_000 + version,
     closingStartedAtMs: null,
   };
@@ -121,9 +125,17 @@ function detailWith(
   };
 }
 
-/** A fence that permits the lifecycle: nothing overtook the request. */
-function openFence(prev: DashboardView | null, requestSeq = 1) {
-  return { generationAtStart: prev?.lifecycleGeneration ?? 0, requestSeq };
+/**
+ * A fence for a request no push overtook: the generation read when it was
+ * issued equals the one read when its response arrived.
+ */
+function openFence(generation = 0, requestSeq = 1) {
+  return { generationAtStart: generation, generationAtEnd: generation, requestSeq };
+}
+
+/** A fence for a request a push overtook while it was in flight. */
+function overtakenFence(generationAtStart: number, generationAtEnd: number, requestSeq = 1) {
+  return { generationAtStart, generationAtEnd, requestSeq };
 }
 
 /** What the dashboard holds, wrapped for the tests. */
@@ -207,7 +219,7 @@ describe('mergeSupervisionRefresh — supervision must not drag counting backwar
       syncQuality: 'uncertain',
     });
 
-    const merged = mergeSupervisionRefresh(prev, incoming, openFence(prev));
+    const merged = mergeSupervisionRefresh(prev, incoming, openFence(0, 1));
 
     expect(merged.detail.event.version).toBe(21);
     expect(merged.detail.occupancy.global).toBe(15);
@@ -224,7 +236,7 @@ describe('mergeSupervisionRefresh — supervision must not drag counting backwar
       syncQuality: 'uncertain',
     });
 
-    const merged = mergeSupervisionRefresh(prev, incoming, openFence(prev));
+    const merged = mergeSupervisionRefresh(prev, incoming, openFence(0, 1));
 
     expect(merged.detail.event.version, 'the newer version is kept').toBe(20);
     expect(merged.detail.occupancy.global, 'the newer occupancy is kept').toBe(14);
@@ -240,7 +252,7 @@ describe('mergeSupervisionRefresh — supervision must not drag counting backwar
     const prev = view(detail(20, 14));
     const incoming = detailWith(20, 14, { status: 'closing' });
 
-    expect(mergeSupervisionRefresh(prev, incoming, openFence(prev)).detail.event.status).toBe('closing');
+    expect(mergeSupervisionRefresh(prev, incoming, openFence(0, 1)).detail.event.status).toBe('closing');
   });
 
   it('adopts a response for a different event wholesale', () => {
@@ -251,14 +263,14 @@ describe('mergeSupervisionRefresh — supervision must not drag counting backwar
       event: { ...eventModel(2), id: OTHER_EVENT_ID },
     };
 
-    const merged = mergeSupervisionRefresh(prev, incoming, openFence(prev));
+    const merged = mergeSupervisionRefresh(prev, incoming, openFence(0, 1));
     expect(merged.detail.event.id).toBe(OTHER_EVENT_ID);
     expect(merged.detail.event.version).toBe(2);
     expect(merged.detail.occupancy.global).toBe(3);
   });
 
   it('adopts the first response when nothing is held yet', () => {
-    expect(mergeSupervisionRefresh(null, detail(5, 2), openFence(null)).detail.event.version).toBe(5);
+    expect(mergeSupervisionRefresh(null, detail(5, 2), openFence(0, 1)).detail.event.version).toBe(5);
   });
 });
 
@@ -266,7 +278,18 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
   // A refresh carries the generation it observed when it *started*. If a
   // pushed transition landed while it was in flight, its lifecycle is stale
   // by construction, whatever its timestamps say.
-  const fence = (generationAtStart: number, requestSeq: number) => ({ generationAtStart, requestSeq });
+  // A request no push crossed: the counter reads the same at both ends.
+  const fence = (generation: number, requestSeq: number) => ({
+    generationAtStart: generation,
+    generationAtEnd: generation,
+    requestSeq,
+  });
+  // A request a push crossed while it was in flight.
+  const crossed = (start: number, end: number, requestSeq: number) => ({
+    generationAtStart: start,
+    generationAtEnd: end,
+    requestSeq,
+  });
 
   it('does not let an older HTTP response undo a closing seen over SSE', () => {
     //   held:      v20 / live, generation 0
@@ -274,16 +297,18 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     //   server transitions to closing; the message applies, generation -> 1
     //   the older HTTP response, describing `live`, completes last
     const held = view(detail(20, 14));
-    const started = fence(held.lifecycleGeneration, 1);
+    // The request was issued at generation 0; the push takes it to 1 before
+    // the response lands, so its two ends disagree.
+    const overtaken = crossed(0, 1, 1);
 
-    const afterPush = applyLifecycleMessage(
-      held,
-      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 },
-      held.lifecycleGeneration + 1
-    );
+    const afterPush = applyLifecycleMessage(held, {
+      eventId: EVENT_ID,
+      status: 'closing',
+      timestampMs: 2_000,
+    });
     expect(afterPush?.detail.event.status).toBe('closing');
 
-    const merged = mergeSupervisionRefresh(afterPush, detailWith(20, 14, { status: 'live' }), started);
+    const merged = mergeSupervisionRefresh(afterPush, detailWith(20, 14, { status: 'live' }), overtaken);
     expect(merged.detail.event.status, 'the fence rejects a response the push overtook').toBe('closing');
   });
 
@@ -291,18 +316,18 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     // Timestamps are not consulted at all now, so neither an equal nor an
     // inverted one can resurrect the old status.
     const held = view(detail(20, 14));
-    const started = fence(held.lifecycleGeneration, 1);
-    const afterPush = applyLifecycleMessage(
-      held,
-      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 },
-      held.lifecycleGeneration + 1
-    );
+    const overtaken = crossed(0, 1, 1);
+    const afterPush = applyLifecycleMessage(held, {
+      eventId: EVENT_ID,
+      status: 'closing',
+      timestampMs: 2_000,
+    });
 
     for (const updatedAtMs of [2_000, 9_999]) {
       const merged = mergeSupervisionRefresh(
         afterPush,
         detailWith(20, 14, { status: 'live', updatedAtMs }),
-        started
+        overtaken
       );
       expect(merged.detail.event.status, `updatedAtMs ${updatedAtMs}`).toBe('closing');
     }
@@ -316,22 +341,17 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     // a later mutation ever writes above 2000 once the event is closed.
     const closing = applyLifecycleMessage(
       view(detail(20, 14)),
-      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 },
-      1
+      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 }
     );
 
-    const viaPush = applyLifecycleMessage(
-      closing,
-      { eventId: EVENT_ID, status: 'closed', timestampMs: 1_900 },
-      2
-    );
+    const viaPush = applyLifecycleMessage(closing, { eventId: EVENT_ID, status: 'closed', timestampMs: 1_900 });
     expect(viaPush?.detail.event.status, 'a push is authoritative regardless of its clock').toBe('closed');
 
     // ...and the same is true if only the poll sees it.
     const viaHttp = mergeSupervisionRefresh(
       closing,
       detailWith(20, 14, { status: 'closed', updatedAtMs: 1_900 }),
-      fence(closing!.lifecycleGeneration, 1)
+      fence(0, 1)
     );
     expect(viaHttp.detail.event.status, 'the poll converges on a rolled-back clock too').toBe('closed');
   });
@@ -343,7 +363,7 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     const merged = mergeSupervisionRefresh(
       held,
       detailWith(20, 14, { status: 'closing' }),
-      fence(held.lifecycleGeneration, 1)
+      fence(0, 1)
     );
 
     expect(merged.detail.event.status).toBe('closing');
@@ -357,18 +377,18 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     // An equal timestamp proves nothing about which came first, so the old
     // response must not be able to restore `live`.
     const held = view(detail(20, 14));
-    const started = fence(held.lifecycleGeneration, 1);
+    const overtaken = crossed(0, 1, 1);
 
-    const afterPush = applyLifecycleMessage(
-      held,
-      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 },
-      held.lifecycleGeneration + 1
-    );
+    const afterPush = applyLifecycleMessage(held, {
+      eventId: EVENT_ID,
+      status: 'closing',
+      timestampMs: 2_000,
+    });
 
     const staleCountResponse = {
       ...detailWith(21, 15, { status: 'live', updatedAtMs: 2_000 }),
     };
-    const merged = mergeSupervisionRefresh(afterPush, staleCountResponse, started);
+    const merged = mergeSupervisionRefresh(afterPush, staleCountResponse, overtaken);
 
     expect(merged.detail.event.status, 'lifecycle holds').toBe('closing');
     // ...while its counting, ordered by version, is still adopted.
@@ -381,8 +401,8 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     // already in flight, so two HTTP responses can land out of order with no
     // push between them — the archive case, which emits no `event-status`.
     const held = view(detail(20, 14));
-    const first = fence(held.lifecycleGeneration, 1);
-    const second = fence(held.lifecycleGeneration, 2);
+    const first = fence(0, 1);
+    const second = fence(0, 2);
 
     // The later request completes first and carries the newer truth.
     const afterSecond = mergeSupervisionRefresh(
@@ -409,12 +429,12 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     const afterSecond = mergeSupervisionRefresh(
       held,
       detailWith(20, 14, { status: 'closed' }),
-      fence(held.lifecycleGeneration, 2)
+      fence(0, 2)
     );
     const next = mergeSupervisionRefresh(
       afterSecond,
       detailWith(20, 14, { status: 'archived' }),
-      fence(afterSecond.lifecycleGeneration, 3)
+      fence(0, 3)
     );
 
     expect(next.detail.event.status).toBe('archived');
@@ -425,13 +445,12 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     // calls `closeAllForEvent` — the stream is torn down rather than told.
     const closed = applyLifecycleMessage(
       view(detail(20, 14)),
-      { eventId: EVENT_ID, status: 'closed', timestampMs: 3_000 },
-      1
+      { eventId: EVENT_ID, status: 'closed', timestampMs: 3_000 }
     );
     const merged = mergeSupervisionRefresh(
       closed,
       detailWith(20, 14, { status: 'archived', updatedAtMs: 3_500 }),
-      fence(closed!.lifecycleGeneration, 1)
+      fence(0, 1)
     );
 
     expect(merged.detail.event.status).toBe('archived');
@@ -440,21 +459,16 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
   it('handles reopen, where the status ordering runs backwards', () => {
     const closed = applyLifecycleMessage(
       view(detail(20, 14)),
-      { eventId: EVENT_ID, status: 'closed', timestampMs: 3_000 },
-      1
+      { eventId: EVENT_ID, status: 'closed', timestampMs: 3_000 }
     );
 
-    const viaPush = applyLifecycleMessage(
-      closed,
-      { eventId: EVENT_ID, status: 'live', timestampMs: 4_000 },
-      2
-    );
+    const viaPush = applyLifecycleMessage(closed, { eventId: EVENT_ID, status: 'live', timestampMs: 4_000 });
     expect(viaPush?.detail.event.status).toBe('live');
 
     const viaHttp = mergeSupervisionRefresh(
       closed,
       detailWith(20, 14, { status: 'live', updatedAtMs: 4_000 }),
-      fence(closed!.lifecycleGeneration, 1)
+      fence(0, 1)
     );
     expect(viaHttp.detail.event.status).toBe('live');
   });
@@ -462,20 +476,18 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
   it('ignores the lifecycle a state frame carries, whatever timestamp it bears', () => {
     const held = applyLifecycleMessage(
       view(detail(20, 14)),
-      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 },
-      1
+      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 }
     );
     const inverted = applyLiveState(held, liveState(20, 14, { status: 'live', atMs: 2_050 }));
 
     expect(inverted?.detail.event.status, 'a state frame may never set the status').toBe('closing');
-    expect(inverted?.lifecycleGeneration, 'nor move the fence').toBe(held?.lifecycleGeneration);
+    expect(inverted?.lifecycleRequestSeq, 'nor touch the fence').toBe(held?.lifecycleRequestSeq);
   });
 
   it('still applies the counting a state frame carries', () => {
     const held = applyLifecycleMessage(
       view(detail(20, 14)),
-      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 },
-      1
+      { eventId: EVENT_ID, status: 'closing', timestampMs: 2_000 }
     );
     const next = applyLiveState(held, liveState(21, 15, { status: 'live', atMs: 2_050 }));
 
@@ -486,16 +498,10 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
 
   it('ignores an event-status message about a different event', () => {
     const held = view(detail(20, 14));
-    const next = applyLifecycleMessage(
-      held,
-      { eventId: OTHER_EVENT_ID, status: 'closed', timestampMs: 9_000 },
-      1
-    );
+    const next = applyLifecycleMessage(held, { eventId: OTHER_EVENT_ID, status: 'closed', timestampMs: 9_000 });
 
     expect(next?.detail.event.status).toBe('live');
-    expect(next?.lifecycleGeneration, 'a foreign message must not move the fence').toBe(
-      held.lifecycleGeneration
-    );
+    expect(next, 'a foreign message returns the held view untouched').toBe(held);
   });
 
   it('keeps counting and lifecycle on their own rules', () => {
@@ -503,12 +509,92 @@ describe('lifecycle ordering — a generation fence, not a clock', () => {
     const merged = mergeSupervisionRefresh(
       held,
       detailWith(18, 9, { status: 'closing' }),
-      fence(held.lifecycleGeneration, 1)
+      fence(0, 1)
     );
 
     expect(merged.detail.event.status, 'lifecycle advances').toBe('closing');
     expect(merged.detail.event.version, 'counting does not roll back').toBe(20);
     expect(merged.detail.occupancy.global).toBe(14);
+  });
+});
+
+describe('the fence survives having no baseline to apply a push to', () => {
+  it('does not desynchronise when a push arrives before the first view exists', () => {
+    // dashboardView = null, generation ref = 0
+    //   /state starts        -> generationAtStart 0
+    //   event-status arrives -> ref becomes 1, but there is no view to
+    //                           apply it to, so nothing is stored
+    //   /state returns       -> generationAtEnd 1
+    //
+    // The response is the only thing that can establish a baseline, so it
+    // does — but the fence saw the push, so its lifecycle is not trusted,
+    // and the very next poll must be able to correct it.
+    const first = mergeSupervisionRefresh(
+      null,
+      detailWith(20, 14, { status: 'live' }),
+      overtakenFence(0, 1, 1)
+    );
+    expect(first.detail.event.status, 'a baseline is still established').toBe('live');
+
+    // The next poll runs entirely after the push: start and end agree.
+    const second = mergeSupervisionRefresh(first, detailWith(20, 14, { status: 'closing' }), openFence(1, 2));
+
+    expect(second.detail.event.status, 'the fence must not be stuck rejecting').toBe('closing');
+  });
+
+  it('keeps converging on every later poll, not just the next one', () => {
+    let held = mergeSupervisionRefresh(null, detailWith(20, 14, { status: 'live' }), overtakenFence(0, 1, 1));
+    held = mergeSupervisionRefresh(held, detailWith(20, 14, { status: 'live' }), openFence(1, 2));
+    held = mergeSupervisionRefresh(held, detailWith(20, 14, { status: 'closing' }), openFence(1, 3));
+
+    expect(held.detail.event.status).toBe('closing');
+  });
+
+  it('converges after A → B when B’s push precedes B’s first detail', () => {
+    //   held view describes A
+    //   operator selects B; B's /state starts
+    //   B's event-status arrives before B's first detail — it cannot be
+    //   applied, because the held view is still A's
+    //   B's /state establishes B
+    const viewOfA = view(detail(20, 14));
+    const detailOfB: EventDetailResponse = {
+      ...detailWith(4, 2, { status: 'live' }),
+      event: { ...eventModel(4, 'live'), id: OTHER_EVENT_ID },
+    };
+
+    const establishedB = mergeSupervisionRefresh(viewOfA, detailOfB, overtakenFence(0, 1, 1));
+    expect(establishedB.detail.event.id).toBe(OTHER_EVENT_ID);
+
+    // B's next poll, wholly after the push, carries the transition.
+    const closingB: EventDetailResponse = {
+      ...detailWith(4, 2, { status: 'closing' }),
+      event: { ...eventModel(4, 'closing'), id: OTHER_EVENT_ID },
+    };
+    const converged = mergeSupervisionRefresh(establishedB, closingB, openFence(1, 2));
+
+    expect(converged.detail.event.status, 'B converges without a stuck fence').toBe('closing');
+  });
+
+  it('a push for another event must not be allowed to move this event’s fence', () => {
+    // The caller asks this *before* it touches the counter. Bumping first
+    // and checking identity afterwards would let a message about some other
+    // event invalidate an in-flight refresh of the one on screen, whose two
+    // fence readings would then disagree for no reason at all.
+    expect(isLifecyclePushForEvent({ eventId: EVENT_ID }, EVENT_ID)).toBe(true);
+    expect(isLifecyclePushForEvent({ eventId: OTHER_EVENT_ID }, EVENT_ID)).toBe(false);
+    expect(isLifecyclePushForEvent({ eventId: EVENT_ID }, null)).toBe(false);
+  });
+
+  it('a message for another event leaves the held lifecycle untouched', () => {
+    const held = view(detail(20, 14));
+    const next = applyLifecycleMessage(held, {
+      eventId: OTHER_EVENT_ID,
+      status: 'closed',
+      timestampMs: 9_000,
+    });
+
+    expect(next?.detail.event.status).toBe('live');
+    expect(next, 'the held view is returned unchanged').toBe(held);
   });
 });
 
@@ -521,16 +607,16 @@ describe('acceptSupervisionResponse — a refresh loop must not follow the wrong
     });
     const lateForOldEvent = detail(99, 77, { syncQuality: 'uncertain' });
 
-    expect(acceptSupervisionResponse(prev, lateForOldEvent, OTHER_EVENT_ID, openFence(prev))).toBeNull();
+    expect(acceptSupervisionResponse(prev, lateForOldEvent, OTHER_EVENT_ID, openFence(0, 1))).toBeNull();
   });
 
   it('drops any response once no event is selected', () => {
-    expect(acceptSupervisionResponse(null, detail(1, 0), null, openFence(null))).toBeNull();
+    expect(acceptSupervisionResponse(null, detail(1, 0), null, openFence(0, 1))).toBeNull();
   });
 
   it('accepts a response for the event currently on screen', () => {
     const held = view(detail(20, 14));
-    const merged = acceptSupervisionResponse(held, detail(21, 15), EVENT_ID, openFence(held));
+    const merged = acceptSupervisionResponse(held, detail(21, 15), EVENT_ID, openFence(0, 1));
     expect(merged?.detail.event.version).toBe(21);
   });
 
@@ -540,7 +626,7 @@ describe('acceptSupervisionResponse — a refresh loop must not follow the wrong
       held,
       detail(18, 9, { syncQuality: 'uncertain' }),
       EVENT_ID,
-      openFence(held)
+      openFence(0, 1)
     );
     expect(merged?.detail.occupancy.global).toBe(14);
     expect(merged?.detail.syncQuality).toBe('uncertain');

@@ -14,6 +14,7 @@ import {
   acceptSupervisionResponse,
   applyLifecycleMessage,
   applyLiveState,
+  isLifecyclePushForEvent,
   summariseSyncQuality,
 } from './supervision.js';
 import {
@@ -78,11 +79,15 @@ export const Dashboard: React.FC = () => {
   // The lifecycle fence. Both counters live in refs because a refresh has to
   // read them at the moment it *starts*, which is outside any render.
   //
-  // `lifecycleGenerationRef` is bumped as an `event-status` message is
-  // dispatched; a refresh that observed an older value was overtaken in
-  // flight. `requestSeqRef` numbers the refreshes themselves, so that two
-  // concurrent ones — the poll, and the one `LifecycleControls` fires
-  // through `onChanged` — cannot land out of order and regress the status.
+  // `lifecycleGenerationRef` counts lifecycle pushes for the event on
+  // screen. A refresh reads it twice — as it is issued and as its response
+  // arrives — and a difference means a push crossed it in flight. Reading
+  // both ends from this one counter is what keeps the fence correct even
+  // when a push lands before there is any view to apply it to.
+  //
+  // `requestSeqRef` numbers the refreshes themselves, so two concurrent ones
+  // — the poll, and the one `LifecycleControls` fires through `onChanged` —
+  // cannot land out of order and regress the status.
   const lifecycleGenerationRef = useRef(0);
   const requestSeqRef = useRef(0);
   const [loading, setLoading] = useState(true);
@@ -134,13 +139,18 @@ export const Dashboard: React.FC = () => {
   const refreshDetails = useCallback(async () => {
     const requestedEventId = selectedEventIdRef.current;
     if (!requestedEventId) return;
-    // Captured before the request leaves, never after it returns.
-    const fence = {
-      generationAtStart: lifecycleGenerationRef.current,
-      requestSeq: ++requestSeqRef.current,
-    };
+    const generationAtStart = lifecycleGenerationRef.current;
+    const requestSeq = ++requestSeqRef.current;
     try {
       const details = await apiFetch<EventDetailResponse>(`/api/v1/events/${requestedEventId}/state`);
+      // Read again now the response is here: if the counter moved, a
+      // transition was pushed while this request was in flight and the
+      // lifecycle it carries is stale, whatever it says.
+      const fence = {
+        generationAtStart,
+        generationAtEnd: lifecycleGenerationRef.current,
+        requestSeq,
+      };
       setDashboardView((prev) =>
         // Merged rather than assigned: the response also carries counting
         // state and a lifecycle status, either of which SSE may already have
@@ -198,19 +208,19 @@ export const Dashboard: React.FC = () => {
     // the `/state` refresh by the same quantity.
     onMessage: (message) => {
       if (message.type !== 'event-status') return;
-      // Bumped as the message is dispatched, so any refresh already in
-      // flight is recognised as overtaken when it returns.
-      const generation = ++lifecycleGenerationRef.current;
+      // Identity first, then the counter: a message about another event must
+      // not move this event's fence.
+      if (!isLifecyclePushForEvent(message.data, selectedEventIdRef.current)) return;
+      // Bumped before any React state is touched, so a refresh already in
+      // flight sees the change when it reads the counter again — even if
+      // there is no view here yet for the transition to be applied to.
+      lifecycleGenerationRef.current += 1;
       setDashboardView((prev) =>
-        applyLifecycleMessage(
-          prev,
-          {
-            eventId: message.data.eventId,
-            status: message.data.status,
-            timestampMs: message.data.timestampMs,
-          },
-          generation
-        )
+        applyLifecycleMessage(prev, {
+          eventId: message.data.eventId,
+          status: message.data.status,
+          timestampMs: message.data.timestampMs,
+        })
       );
     },
   });

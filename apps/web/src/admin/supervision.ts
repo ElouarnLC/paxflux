@@ -143,39 +143,50 @@ function describeVerdict(
 export interface DashboardView {
   detail: EventDetailResponse;
   /**
-   * Incremented every time a pushed lifecycle transition is applied.
-   *
-   * A refresh records this when it *starts*. If it differs when the response
-   * arrives, a transition overtook the request in flight and its lifecycle
-   * is stale by construction — whatever its timestamps say.
-   */
-  lifecycleGeneration: number;
-  /**
    * The sequence number of the newest refresh whose lifecycle was applied.
    *
    * Two refreshes can be in flight at once — the poll, and the one
    * `LifecycleControls` fires through `onChanged` after a transition — with
-   * no push between them to move the generation. `archive` is exactly that
-   * case: it writes the row, revokes the device sessions and calls
-   * `closeAllForEvent`, broadcasting no `event-status` at all. Ordering by
-   * request sequence stops the earlier response from winning.
+   * no push between them. `archive` is exactly that case: it writes the row,
+   * revokes the device sessions and calls `closeAllForEvent`, broadcasting
+   * no `event-status` at all. Ordering by request sequence stops the earlier
+   * response from winning.
    */
   lifecycleRequestSeq: number;
 }
 
 /**
- * What a refresh observed when it started, carried back to its response.
+ * What a refresh observed about pushes, from before it was issued until
+ * after its response arrived.
+ *
+ * Both numbers are read from the *same* event-scoped counter in the
+ * dashboard, never from anything stored in the view. That is the whole
+ * point: the question is "did a lifecycle push land while this particular
+ * request was in flight", and the answer must not depend on whether React
+ * had a baseline for that push to be applied to.
+ *
+ * An earlier revision compared the generation at request start against a
+ * copy kept inside the view, and the two could part company permanently. A
+ * push arriving before the first `/state` response bumped the counter, but
+ * `applyLifecycleMessage` had no view to write to and stored nothing; the
+ * response then established a view at generation 0 while the counter stood
+ * at 1, and every later poll compared 1 against 0 and refused the lifecycle
+ * for good. Switching events reproduced it the same way, with a push for the
+ * new event arriving before its first detail. Comparing start against end
+ * removes the stored copy — and with it that entire class of drift.
  */
 export interface LifecycleFence {
-  /** `lifecycleGeneration` at the moment the request was issued. */
+  /** The push counter, read as the request was issued. */
   generationAtStart: number;
+  /** The push counter, read as the response arrived. */
+  generationAtEnd: number;
   /** Monotonic id of this request, from the dashboard's own counter. */
   requestSeq: number;
 }
 
 /** Wraps a first response, before anything has been merged into it. */
 export function viewFromDetail(detail: EventDetailResponse, requestSeq = 0): DashboardView {
-  return { detail, lifecycleGeneration: 0, lifecycleRequestSeq: requestSeq };
+  return { detail, lifecycleRequestSeq: requestSeq };
 }
 
 /**
@@ -212,11 +223,17 @@ export function mergeSupervisionRefresh(
 ): DashboardView {
   // Nothing held, or a different event entirely: version counters are
   // per-event, so there is nothing meaningful to compare against.
+  // A response is the only thing that can establish a baseline, so it does
+  // even when a push overtook it — otherwise the screen would have nothing
+  // to show. Its `lifecycleRequestSeq` is left at 0 in that case, so the
+  // next poll (a higher sequence, and a fence no push crossed) is free to
+  // correct the status it brought.
   if (!prev || prev.detail.event.id !== incoming.event.id) {
-    return { detail: incoming, lifecycleGeneration: 0, lifecycleRequestSeq: fence.requestSeq };
+    const trustworthy = fence.generationAtStart === fence.generationAtEnd;
+    return { detail: incoming, lifecycleRequestSeq: trustworthy ? fence.requestSeq : 0 };
   }
 
-  const notOvertakenByPush = fence.generationAtStart === prev.lifecycleGeneration;
+  const notOvertakenByPush = fence.generationAtStart === fence.generationAtEnd;
   const notOvertakenByRefresh = fence.requestSeq > prev.lifecycleRequestSeq;
   const lifecycleIsUsable = notOvertakenByPush && notOvertakenByRefresh;
   const countingIsNewer = incoming.event.version >= prev.detail.event.version;
@@ -238,7 +255,6 @@ export function mergeSupervisionRefresh(
       },
       occupancy: countingIsNewer ? incoming.occupancy : prev.detail.occupancy,
     },
-    lifecycleGeneration: prev.lifecycleGeneration,
     lifecycleRequestSeq: lifecycleIsUsable ? fence.requestSeq : prev.lifecycleRequestSeq,
   };
 }
@@ -320,6 +336,22 @@ export interface LifecycleMessage {
 }
 
 /**
+ * Whether a lifecycle push concerns the event on screen.
+ *
+ * Separated out because the caller has to answer it *before* it touches the
+ * push counter. Incrementing first and checking identity afterwards would
+ * let a message about a different event invalidate a perfectly good refresh
+ * of this one — the counter would move, so the in-flight request's two ends
+ * would disagree, and its lifecycle would be discarded for no reason.
+ */
+export function isLifecyclePushForEvent(
+  message: Pick<LifecycleMessage, 'eventId'>,
+  selectedEventId: string | null
+): boolean {
+  return selectedEventId !== null && message.eventId === selectedEventId;
+}
+
+/**
  * Applies an `event-status` message — **lifecycle only**, authoritatively.
  *
  * This is the push channel for transitions, and it is taken at face value
@@ -334,14 +366,13 @@ export interface LifecycleMessage {
  * not used to decide precedence, which is what makes a rolled-back server
  * clock harmless.
  *
- * The generation is supplied by the caller, which increments its own counter
- * as it dispatches the message, so a refresh that started before this point
- * can be recognised as overtaken.
+ * The caller increments its push counter *before* calling this, and only
+ * for a message belonging to the event on screen, so a refresh in flight is
+ * recognised as overtaken even when there is no view here to write to.
  */
 export function applyLifecycleMessage(
   prev: DashboardView | null,
-  message: LifecycleMessage,
-  generation: number
+  message: LifecycleMessage
 ): DashboardView | null {
   if (!prev) return prev;
   // A message for another event says nothing about the one on screen, and
@@ -353,7 +384,6 @@ export function applyLifecycleMessage(
       ...prev.detail,
       event: { ...prev.detail.event, status: message.status, updatedAtMs: message.timestampMs },
     },
-    lifecycleGeneration: generation,
     lifecycleRequestSeq: prev.lifecycleRequestSeq,
   };
 }
