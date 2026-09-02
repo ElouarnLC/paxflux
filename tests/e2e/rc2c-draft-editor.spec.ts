@@ -449,3 +449,26 @@ test('une porte sans aucun sens de passage n’est pas enregistrable', async ({ 
   expect(checkpoints[0].allowAToB).toBe(true);
   expect(checkpoints[0].allowBToA).toBe(true);
 });
+
+test('sans deuxième zone, « Ajouter une porte » le dit au lieu de ne rien faire', async ({ page }) => {
+  const topo = await draft('RC2C Porte impossible');
+  const spaces = await getEventSpaces(session, topo.eventId);
+  const site = spaces.find((s: any) => s.id === topo.siteSpaceId);
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  // Strip the draft back to the boundary sentinel alone: the door first,
+  // because the zone cannot go while it is referenced.
+  await page.getByRole('button', { name: 'Supprimer la porte Porte Principale' }).click();
+  await expectSaved(page);
+  await page.getByRole('button', { name: `Supprimer la zone ${site.name}` }).click();
+  await expectSaved(page);
+
+  await page.getByRole('button', { name: 'Ajouter une porte' }).click();
+
+  await expect(page.getByTestId('draft-save-state')).toContainText(
+    'Une porte relie deux zones : ajoutez d’abord une zone intérieure.'
+  );
+  expect(await getEventCheckpoints(session, topo.eventId)).toHaveLength(0);
+});

@@ -23,6 +23,7 @@ import {
   EditableCheckpoint,
   EditableSpace,
   applyEventCapacity,
+  defaultDirectionLabel,
   describeDirection,
   describePreflightError,
   describeSpace,
@@ -230,7 +231,17 @@ export const DraftEditor: React.FC = () => {
     const zones = draft?.spaces.filter((s) => s.kind !== 'aggregate') ?? [];
     const first = zones.find((s) => s.kind === 'external') ?? zones[0];
     const second = zones.find((s) => s.id !== first?.id);
-    if (!first || !second) return Promise.resolve(false);
+
+    // A door connects two zones; with fewer than two there is nothing to
+    // connect. Saying so beats a button that appears to work and does
+    // nothing.
+    if (!first || !second) {
+      setSave({
+        kind: 'failed',
+        detail: 'Une porte relie deux zones : ajoutez d’abord une zone intérieure.',
+      });
+      return Promise.resolve(false);
+    }
 
     return mutate(() =>
       apiFetch(`/api/v1/events/${eventId}/checkpoints`, {
@@ -241,8 +252,10 @@ export const DraftEditor: React.FC = () => {
           spaceBId: second.id,
           allowAToB: true,
           allowBToA: true,
-          labelAToB: 'ENTRÉE +1',
-          labelBToA: 'SORTIE −1',
+          // Generated from the zones it actually connects, so an internal
+          // door does not claim to be an "entrée".
+          labelAToB: defaultDirectionLabel(first, second),
+          labelBToA: defaultDirectionLabel(second, first),
           sortOrder: (draft?.checkpoints.length ?? 0) + 1,
         }),
       })
