@@ -169,6 +169,59 @@ export async function waitForServiceWorkerControl(page: Page, timeoutMs = 20_000
 }
 
 /** The stored snapshot record, for asserting on migration outcomes. */
+/**
+ * Overwrites the stored authoritative state with a version the server has
+ * moved *behind*.
+ *
+ * This is the client half of a database restore, and the only half a browser
+ * test can stage: the server really is rolled back by `npm run db:restore`,
+ * but a Playwright spec cannot stop the web server mid-run to do it. What
+ * matters for the defect is the resulting asymmetry — an IndexedDB row whose
+ * `version` is ahead of the server's — so the row is written directly, in the
+ * stored shape, exactly as a pre-restore device would still be carrying it.
+ */
+export async function seedAheadOfServerEventState(
+  page: Page,
+  record: { eventId: string; version: number; eventOccupancy: number; serverTimeMs: number }
+): Promise<void> {
+  await page.evaluate(
+    async ({ dbName, seed }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open(dbName);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const existing = await new Promise<any>((resolve, reject) => {
+        const req = db.transaction('event_state', 'readonly').objectStore('event_state').get('current');
+        req.onsuccess = () => resolve(req.result ?? null);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction('event_state', 'readwrite');
+        tx.objectStore('event_state').put({
+          key: 'current',
+          eventId: seed.eventId,
+          updatedAtMs: Date.now(),
+          state: {
+            ...(existing?.state ?? {}),
+            version: seed.version,
+            eventStatus: existing?.state?.eventStatus ?? 'live',
+            eventOccupancy: seed.eventOccupancy,
+            eventCapacity: existing?.state?.eventCapacity ?? 500,
+            spaces: existing?.state?.spaces ?? [],
+            serverTimeMs: seed.serverTimeMs,
+            closingStartedAtMs: existing?.state?.closingStartedAtMs ?? null,
+          },
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    },
+    { dbName: DB_NAME, seed: record }
+  );
+}
+
 export async function readEventStateRecord(page: Page): Promise<Record<string, unknown> | null> {
   return page.evaluate(async (dbName) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
