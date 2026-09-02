@@ -2,6 +2,7 @@ import {
   CompactEventState,
   EventDetailResponse,
   EventDeviceSummary,
+  EventStatus,
   SyncQuality,
 } from '@paxflux/shared';
 
@@ -160,6 +161,10 @@ export interface DashboardView {
  * same update that sets the new status, so the timestamp always belongs to
  * the status beside it. Counting also bumps it, which is harmless: it moves
  * the epoch forward while carrying the status unchanged.
+ *
+ * The same is emphatically *not* true of `CompactEventState.serverTimeMs`,
+ * which is why SSE state frames no longer carry lifecycle here — see
+ * `applyLiveState`.
  */
 function lifecycleEpochOf(detail: EventDetailResponse): number {
   return detail.event.updatedAtMs;
@@ -255,27 +260,36 @@ export function acceptSupervisionResponse(
 }
 
 /**
- * Applies an SSE state frame to what the dashboard holds.
+ * Applies an SSE state frame — **counting only**.
  *
- * Both clocks are honoured here too. Counting is ordered by `version`, and
- * the frame's lifecycle by `serverTimeMs` — the instant the server minted
- * the frame, and therefore an instant at which the status it carries was
- * true, on the same clock as `updatedAtMs`.
+ * A state frame carries `eventStatus`, and RC2-B used it, ordered by the
+ * frame's `serverTimeMs`. That was unsound at the producer, and measurably
+ * so. `getCompactEventState` reads the event row, issues two further
+ * queries, and only then calls `Date.now()`; `/device/bootstrap` does the
+ * same across six reads. A transition committing in that gap is invisible to
+ * the status already in hand but earlier than the timestamp about to be
+ * stamped on it, so the frame carries an **old status with a new epoch** —
+ * exactly the inversion the ordering was supposed to make impossible. Racing
+ * a frame build against a transition reproduces it 400 times out of 400
+ * (`tests/integration/lifecycle-signal-provenance.test.ts`); the 50–100ms
+ * coalescing window in `broadcastState` only widens the gap. The batch
+ * endpoint's fallback frame goes further still and hardcodes
+ * `eventStatus: 'live'` when there is no state to report.
  *
- * A frame can never claim a *later* epoch while carrying an *older* status:
- * a frame minted after a transition reads the new status, and one minted
- * before it has an epoch below that transition's `updatedAtMs`. That is what
- * makes the two sources safe to compare against each other.
+ * `serverTimeMs` is also load-bearing for offline freshness (Phase 6,
+ * RC2-A), so it is left exactly as it is and simply not read for lifecycle.
+ *
+ * Lifecycle now arrives only from sources where the status and its timestamp
+ * come from the same row or the same write: `event-status` messages, and the
+ * `/state` refresh. `version` still orders counting, which is what it is
+ * for.
  */
 export function applyLiveState(
   prev: DashboardView | null,
   state: CompactEventState
 ): DashboardView | null {
   if (!prev) return prev;
-
-  const countingIsNewer = state.version >= prev.detail.event.version;
-  const lifecycleIsNewer = state.serverTimeMs >= prev.lifecycleAtMs;
-  if (!countingIsNewer && !lifecycleIsNewer) return prev;
+  if (state.version < prev.detail.event.version) return prev;
 
   const spaceOccupancies: Record<string, number> = {};
   for (const space of state.spaces) {
@@ -283,18 +297,55 @@ export function applyLiveState(
   }
 
   return {
+    ...prev,
     detail: {
       ...prev.detail,
-      occupancy: countingIsNewer
-        ? { global: state.eventOccupancy, spaces: spaceOccupancies }
-        : prev.detail.occupancy,
+      occupancy: { global: state.eventOccupancy, spaces: spaceOccupancies },
       event: {
         ...prev.detail.event,
-        status: lifecycleIsNewer ? state.eventStatus : prev.detail.event.status,
-        capacity: countingIsNewer ? state.eventCapacity : prev.detail.event.capacity,
-        version: countingIsNewer ? state.version : prev.detail.event.version,
+        // Deliberately no `status`: see above.
+        capacity: state.eventCapacity,
+        version: state.version,
       },
     },
-    lifecycleAtMs: lifecycleIsNewer ? state.serverTimeMs : prev.lifecycleAtMs,
+  };
+}
+
+/** The lifecycle half of an `event-status` SSE message. */
+export interface LifecycleMessage {
+  eventId: string;
+  status: EventStatus;
+  timestampMs: number;
+}
+
+/**
+ * Applies an `event-status` message — **lifecycle only**.
+ *
+ * This is the one push channel whose timestamp is provably the timestamp of
+ * the status beside it: each transition writes `updatedAtMs: now` and
+ * broadcasts `timestampMs: now` in the same handler, from the same `now`
+ * (`routes/events.ts`). So a message and a `/state` response are ordered
+ * against each other by the same quantity, and a message can never carry an
+ * old status under a new epoch the way a state frame can.
+ *
+ * Ordered by `>=`, which is safe precisely because the two sides carry the
+ * same number for the same transition: an equal epoch means the same
+ * transition, hence the same status, so accepting it changes nothing.
+ */
+export function applyLifecycleMessage(
+  prev: DashboardView | null,
+  message: LifecycleMessage
+): DashboardView | null {
+  if (!prev) return prev;
+  // A message for another event says nothing about the one on screen.
+  if (message.eventId !== prev.detail.event.id) return prev;
+  if (message.timestampMs < prev.lifecycleAtMs) return prev;
+
+  return {
+    detail: {
+      ...prev.detail,
+      event: { ...prev.detail.event, status: message.status, updatedAtMs: message.timestampMs },
+    },
+    lifecycleAtMs: message.timestampMs,
   };
 }

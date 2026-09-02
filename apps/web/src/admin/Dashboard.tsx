@@ -12,6 +12,7 @@ import {
 import {
   DashboardView,
   acceptSupervisionResponse,
+  applyLifecycleMessage,
   applyLiveState,
   summariseSyncQuality,
 } from './supervision.js';
@@ -165,8 +166,25 @@ export const Dashboard: React.FC = () => {
   useSSE({
     url: selectedEventId ? `/api/v1/events/${selectedEventId}/stream` : '',
     enabled: !!selectedEventId,
+    // Counting only. A state frame's `eventStatus` is not read: its
+    // `serverTimeMs` is stamped after the event row was fetched, so a frame
+    // can carry a status the server has already superseded under a
+    // timestamp that looks newer than the transition. See `supervision.ts`.
     onState: (state: CompactEventState) => {
       setDashboardView((prev) => applyLiveState(prev, state));
+    },
+    // The lifecycle channel: every transition broadcasts this message with
+    // the same `now` it writes to the event row, so it is ordered against
+    // the `/state` refresh by the same quantity.
+    onMessage: (message) => {
+      if (message.type !== 'event-status') return;
+      setDashboardView((prev) =>
+        applyLifecycleMessage(prev, {
+          eventId: message.data.eventId,
+          status: message.data.status,
+          timestampMs: message.data.timestampMs,
+        })
+      );
     },
   });
 

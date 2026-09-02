@@ -9,6 +9,7 @@ import {
   DashboardView,
   acceptSupervisionResponse,
   applyLiveState,
+  applyLifecycleMessage,
   mergeSupervisionRefresh,
   summariseSyncQuality,
   viewFromDetail,
@@ -272,13 +273,17 @@ describe('lifecycle ordering — a lifecycle change does not bump event.version'
     //   held:      v20 / live
     //   GET /state starts and reads the row: v20 / live, updatedAtMs 1_000
     //   server transitions to closing at 2_000 — version stays 20
-    //   SSE frame minted at 2_050 carries closing, and is applied
+    //   the `event-status` message for that transition arrives and applies
     //   the older HTTP response completes last
     //
     // Version alone cannot separate these two: both say 20. The HTTP
     // response describes the event as it stood *before* the transition.
     const held = view(detail(20, 14), 1_000);
-    const afterSse = applyLiveState(held, liveState(20, 14, { status: 'closing', atMs: 2_050 }));
+    const afterSse = applyLifecycleMessage(held, {
+      eventId: EVENT_ID,
+      status: 'closing',
+      timestampMs: 2_000,
+    });
     expect(afterSse?.detail.event.status).toBe('closing');
 
     const staleHttp = viewDetail(20, 14, { status: 'live', updatedAtMs: 1_000 });
@@ -315,11 +320,100 @@ describe('lifecycle ordering — a lifecycle change does not bump event.version'
     expect(mergeSupervisionRefresh(afterReopen, staleClosed).detail.event.status).toBe('live');
   });
 
-  it('does not let an older SSE frame undo a newer lifecycle either', () => {
+  it('ignores the lifecycle a state frame carries, whatever timestamp it bears', () => {
+    // The reviewer's case, and the one the producer test shows is real:
+    //
+    //   held:     closing, lifecycle epoch 2000
+    //   incoming: a state frame whose eventStatus is `live` and whose
+    //             serverTimeMs is 2050 — but whose event row was read
+    //             before the transition at 2000.
+    //
+    // The frame's timestamp is later than the transition it predates, so no
+    // comparison against it can be trusted. The status is not read at all.
     const held = view(detailWith(20, 14, { status: 'closing', updatedAtMs: 2_000 }), 2_000);
-    const olderFrame = applyLiveState(held, liveState(20, 14, { status: 'live', atMs: 1_500 }));
+    const invertedFrame = applyLiveState(held, liveState(20, 14, { status: 'live', atMs: 2_050 }));
 
-    expect(olderFrame?.detail.event.status).toBe('closing');
+    expect(invertedFrame?.detail.event.status, 'a state frame may never set the status').toBe('closing');
+    expect(invertedFrame?.lifecycleAtMs, 'nor move the lifecycle epoch').toBe(2_000);
+  });
+
+  it('still applies the counting a state frame carries', () => {
+    // Dropping lifecycle from frames must not drop the gauge with it.
+    const held = view(detailWith(20, 14, { status: 'closing', updatedAtMs: 2_000 }), 2_000);
+    const next = applyLiveState(held, liveState(21, 15, { status: 'live', atMs: 2_050 }));
+
+    expect(next?.detail.occupancy.global).toBe(15);
+    expect(next?.detail.event.version).toBe(21);
+    expect(next?.detail.event.status).toBe('closing');
+  });
+
+  it('takes a lifecycle transition from the event-status message', () => {
+    const held = view(detail(20, 14), 1_000);
+    const next = applyLifecycleMessage(held, {
+      eventId: EVENT_ID,
+      status: 'closing',
+      timestampMs: 2_000,
+    });
+
+    expect(next?.detail.event.status).toBe('closing');
+    expect(next?.lifecycleAtMs).toBe(2_000);
+  });
+
+  it('refuses an event-status message older than the lifecycle already held', () => {
+    const held = view(detailWith(20, 14, { status: 'closing', updatedAtMs: 2_000 }), 2_000);
+    const next = applyLifecycleMessage(held, { eventId: EVENT_ID, status: 'live', timestampMs: 1_500 });
+
+    expect(next?.detail.event.status).toBe('closing');
+  });
+
+  it('ignores an event-status message about a different event', () => {
+    const held = view(detail(20, 14), 1_000);
+    const next = applyLifecycleMessage(held, {
+      eventId: OTHER_EVENT_ID,
+      status: 'closed',
+      timestampMs: 9_000,
+    });
+
+    expect(next?.detail.event.status).toBe('live');
+    expect(next?.lifecycleAtMs).toBe(1_000);
+  });
+
+  it('treats an equal epoch as the same transition, so it is a no-op', () => {
+    // A message and a `/state` response carry the *same number* for the same
+    // transition: `timestampMs` and `updatedAtMs` are both that handler's
+    // `now`. Equality therefore means the same transition and the same
+    // status, and accepting it changes nothing.
+    const afterMessage = applyLifecycleMessage(view(detail(20, 14), 1_000), {
+      eventId: EVENT_ID,
+      status: 'closing',
+      timestampMs: 2_000,
+    });
+    const sameTransitionOverHttp = detailWith(20, 14, { status: 'closing', updatedAtMs: 2_000 });
+
+    const merged = mergeSupervisionRefresh(afterMessage, sameTransitionOverHttp);
+    expect(merged.detail.event.status).toBe('closing');
+    expect(merged.lifecycleAtMs).toBe(2_000);
+  });
+
+  it('converges after reopen from either channel', () => {
+    // `closed → live`: no ordering over status values could express this.
+    const closed = view(detailWith(20, 14, { status: 'closed', updatedAtMs: 3_000 }), 3_000);
+
+    const viaMessage = applyLifecycleMessage(closed, {
+      eventId: EVENT_ID,
+      status: 'live',
+      timestampMs: 4_000,
+    });
+    expect(viaMessage?.detail.event.status).toBe('live');
+
+    const viaHttp = mergeSupervisionRefresh(closed, detailWith(20, 14, { status: 'live', updatedAtMs: 4_000 }));
+    expect(viaHttp.detail.event.status).toBe('live');
+
+    // ...and a state frame minted before the reopen cannot close it again.
+    const afterReopen = applyLifecycleMessage(closed, { eventId: EVENT_ID, status: 'live', timestampMs: 4_000 });
+    expect(applyLiveState(afterReopen, liveState(21, 15, { status: 'closed', atMs: 5_000 }))?.detail.event.status).toBe(
+      'live'
+    );
   });
 
   it('keeps counting and lifecycle on their own clocks', () => {
@@ -368,7 +462,7 @@ describe('acceptSupervisionResponse — a refresh loop must not follow the wrong
   });
 });
 
-describe('applyLiveState — SSE frames are ordered too', () => {
+describe('applyLiveState — counting frames', () => {
   it('applies a newer frame', () => {
     const next = applyLiveState(view(detail(20, 14)), liveState(21, 15));
     expect(next?.detail.event.version).toBe(21);
