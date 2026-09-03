@@ -7,6 +7,8 @@ import {
   formatCount,
   formatSignedDelta,
   readOccupancyTruth,
+  readPendingDisclosure,
+  ZONE_PENDING_ONLY_MESSAGE,
 } from './occupancy-truth.js';
 
 /**
@@ -179,5 +181,33 @@ describe('acknowledgement converges without a second jump', () => {
     // And the delta is never applied twice: 12 would mean the acknowledged
     // action was still being projected on top of the server's own total.
     expect(after.displayed).not.toBe(12);
+  });
+});
+
+describe('one sentence about what is pending, not one per number', () => {
+  it('names the delta when the global gauge is the thing that moved', () => {
+    expect(readPendingDisclosure(3, [1, 2])).toBe('global');
+    expect(readPendingDisclosure(-2, [null, -2])).toBe('global');
+  });
+
+  it('still speaks up when only the zones moved', () => {
+    // The sharp case. An internal transfer is −1 here and +1 there: the
+    // global gauge is at the server's own figure and correct, while both
+    // zone badges under it are projected. Saying nothing would present them
+    // as confirmed.
+    expect(readPendingDisclosure(0, [-1, 1])).toBe('zones-only');
+  });
+
+  it('says nothing when nothing is pending', () => {
+    expect(readPendingDisclosure(0, [0, 0])).toBe('none');
+    // No projection yet, or an `external` endpoint that holds no occupancy.
+    expect(readPendingDisclosure(0, [null, null])).toBe('none');
+  });
+
+  it('puts no figure on the zones-only sentence', () => {
+    // Any number here would be read as a change to the global gauge, which
+    // is exactly what has *not* happened.
+    expect(ZONE_PENDING_ONLY_MESSAGE).not.toMatch(/[0-9+−-]/);
+    expect(ZONE_PENDING_ONLY_MESSAGE).toContain('sur cet appareil');
   });
 });

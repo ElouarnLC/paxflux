@@ -58,9 +58,11 @@ async function pairDevice(browser: Browser, token: string): Promise<Page> {
 }
 
 async function zoneValue(page: Page, testId: 'space-a-occupancy' | 'space-b-occupancy'): Promise<number> {
-  const text = await page.getByTestId(testId).innerText();
-  const match = text.match(/(-?\d+)\s*$/);
-  return match ? Number(match[1]) : NaN;
+  // Read from `data-occupancy` rather than off the end of the badge's text:
+  // RC2-E appends a screen-reader sentence when the zone carries something
+  // unacknowledged, and a trailing-number regex silently returned NaN for it.
+  const raw = await page.getByTestId(testId).getAttribute('data-occupancy');
+  return raw === null ? NaN : Number(raw);
 }
 
 async function waitForDrained(page: Page, timeoutMs = 30_000): Promise<void> {

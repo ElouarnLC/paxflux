@@ -147,6 +147,46 @@ export function describePendingDelta(truth: OccupancyTruth): string {
 }
 
 /**
+ * Which pending statement, if any, the counter owes the operator.
+ *
+ * The trap this exists to avoid is repeating the pending count beside every
+ * number that happens to be projected — the global gauge, then both zone
+ * badges, then the sync badge — which turns one fact into four claims an
+ * operator has to reconcile under pressure.
+ *
+ * So there is exactly one sentence, and this decides which:
+ *
+ *   global      the global gauge is projected: name the delta, `+3`
+ *   zones-only  the sharp case. An internal transfer moves one zone by −1
+ *               and another by +1, so the global gauge is *correct* at the
+ *               server's own figure while both badges below it are not.
+ *               Saying `+0 en attente` would be false; saying nothing would
+ *               present projected zone counts as confirmed ones.
+ *   none        nothing pending on this device
+ *
+ * The zone badges themselves carry a marker rather than a number: the
+ * sentence has already said it, and per-badge arithmetic is the duplication
+ * this is here to prevent.
+ */
+export type PendingDisclosure = 'none' | 'global' | 'zones-only';
+
+export function readPendingDisclosure(
+  globalDelta: number,
+  zoneDeltas: readonly (number | null)[]
+): PendingDisclosure {
+  if (globalDelta !== 0) return 'global';
+  return zoneDeltas.some((delta) => delta !== null && delta !== 0) ? 'zones-only' : 'none';
+}
+
+/**
+ * The `zones-only` half of the sentence.
+ *
+ * Deliberately unnumbered: the count that is pending is not a change to the
+ * global gauge, and putting any figure here would invite reading it as one.
+ */
+export const ZONE_PENDING_ONLY_MESSAGE = 'transferts en attente sur cet appareil';
+
+/**
  * The anomaly, said compactly enough for a phone held at a door.
  *
  * Never suggests an action the person holding this device cannot take: a

@@ -243,9 +243,16 @@ export async function readEventStateRecord(page: Page): Promise<Record<string, u
   }, DB_NAME);
 }
 
-/** The occupancy figure the counter displays, as a number. */
+/**
+ * The occupancy figure the counter displays, as a number.
+ *
+ * The counter writes a negative with U+2212 — the same minus as the
+ * `SORTIE −1` button beside it — so it is normalised here before parsing.
+ * Reading `−1` as `1` would make a no-clamp assertion pass on a clamped
+ * display, which is the one failure this helper must not produce.
+ */
 export async function displayedOccupancy(page: Page): Promise<number> {
-  const text = await page.getByTestId('global-occupancy').innerText();
+  const text = (await page.getByTestId('global-occupancy').innerText()).replace(/\u2212/g, '-');
   return Number(text.replace(/[^\d-]/g, ''));
 }
 
