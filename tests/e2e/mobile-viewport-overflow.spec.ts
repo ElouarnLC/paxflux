@@ -31,6 +31,17 @@ test.beforeAll(async () => {
   await startEvent(session, topo.eventId);
 });
 
+/**
+ * The wizard names a direction's label field for the movement it describes
+ * ("De Extérieur vers …"), not for A/B. Both doors this spec creates keep
+ * the seeded Extérieur <-> first-zone endpoints, so both share these two
+ * labels and the positional selectors below still tell them apart.
+ */
+const inboundLabel = (page: Page) =>
+  page.getByLabel(`Libellé du bouton : De Extérieur vers ${LONG_FIXTURE_NAMES.siteSpace}`);
+const outboundLabel = (page: Page) =>
+  page.getByLabel(`Libellé du bouton : De ${LONG_FIXTURE_NAMES.siteSpace} vers Extérieur`);
+
 async function loginAsAdmin(page: Page) {
   await page.goto('/login');
   await page.getByPlaceholder('admin').fill(ADMIN_USERNAME);
@@ -90,12 +101,12 @@ test('les quatre étapes du wizard tiennent dans le viewport', async ({ page }) 
   await page.getByRole('button', { name: 'Suivant' }).click();
   await expect(page.getByRole('heading', { name: '3. Portes & Checkpoints' })).toBeVisible();
   await page.getByLabel('Nom de la porte').first().fill(LONG_FIXTURE_NAMES.mainCheckpoint);
-  await page.getByLabel('Libellé A vers B').first().fill(LONG_FIXTURE_NAMES.labelAToB);
-  await page.getByLabel('Libellé B vers A').first().fill(LONG_FIXTURE_NAMES.labelBToA);
+  await inboundLabel(page).first().fill(LONG_FIXTURE_NAMES.labelAToB);
+  await outboundLabel(page).first().fill(LONG_FIXTURE_NAMES.labelBToA);
   await page.getByRole('button', { name: 'Ajouter une porte' }).click();
   await page.getByLabel('Nom de la porte').nth(1).fill(LONG_FIXTURE_NAMES.innerCheckpoint);
-  await page.getByLabel('Libellé A vers B').nth(1).fill(LONG_FIXTURE_NAMES.innerLabelAToB);
-  await page.getByLabel('Libellé B vers A').nth(1).fill(LONG_FIXTURE_NAMES.innerLabelBToA);
+  await inboundLabel(page).nth(1).fill(LONG_FIXTURE_NAMES.innerLabelAToB);
+  await outboundLabel(page).nth(1).fill(LONG_FIXTURE_NAMES.innerLabelBToA);
   await assertScreenFitsViewport(page, '/admin/events/new — étape 3 (Portes)');
 
   // Step 4 — the topology summary, where every long string appears at once.

@@ -8,6 +8,7 @@ import { SetupPage } from '../admin/SetupPage.js';
 import { LoginPage } from '../admin/LoginPage.js';
 import { Dashboard } from '../admin/Dashboard.js';
 import { EventWizard } from '../admin/EventWizard.js';
+import { DraftEditor } from '../admin/DraftEditor.js';
 import { DevicesManagement } from '../admin/DevicesManagement.js';
 import { AnalyticsView } from '../admin/AnalyticsView.js';
 import { SystemPanel } from '../admin/SystemPanel.js';
@@ -59,6 +60,7 @@ export const App: React.FC = () => {
         <Route element={<AuthProvider />}>
           <Route path="/admin" element={<Dashboard />} />
           <Route path="/admin/events/new" element={<EventWizard />} />
+          <Route path="/admin/events/:id/edit" element={<DraftEditor />} />
           <Route path="/admin/events/:id/devices" element={<DevicesManagement />} />
           <Route path="/admin/events/:id/analytics" element={<AnalyticsView />} />
           <Route path="/admin/system" element={<SystemPanel />} />

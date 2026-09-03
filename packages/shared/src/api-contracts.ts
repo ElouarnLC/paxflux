@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { StaffUser, EventModel, SpaceModel, SpaceKind, CheckpointModel, SyncQuality } from './models.js';
+import { FALLBACK_TIMEZONE, TimezoneSchema } from './timezone.js';
 import { CompactEventState } from './offline-protocol.js';
 
 // Setup
@@ -36,7 +37,10 @@ export interface MetaResponse {
 // Events
 export const CreateEventRequestSchema = z.object({
   name: z.string().min(1).max(120),
-  timezone: z.string().min(1).max(50).default('Europe/Paris'),
+  // A real IANA zone, not a free string: an event's day boundaries and its
+  // exports are drawn in it, and a fixed offset would be an hour wrong for
+  // half the year.
+  timezone: TimezoneSchema.default(FALLBACK_TIMEZONE),
   capacity: z.number().int().min(0),
   warningRatio1: z.number().min(0).max(1).default(0.80),
   warningRatio2: z.number().min(0).max(1).default(0.90),
@@ -48,10 +52,40 @@ export type CreateEventRequest = z.infer<typeof CreateEventRequestSchema>;
 export const UpdateEventRequestSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   capacity: z.number().int().min(0).optional(),
+  /**
+   * Changeable only while the event is a draft, and only to a real IANA zone.
+   *
+   * Deliberately laxer here than at creation, and the route is what tightens
+   * it. Events created before RC2-C could store any 1–50 character string,
+   * `GMT` and `EST` among them, and a schema that rejected those outright
+   * would make such an event uneditable: every save resends the timezone,
+   * so a legacy value would block a rename. So the schema accepts what the
+   * column accepts, and the route requires IANA validity only when the value
+   * actually *changes* — an unchanged legacy zone rides along, a new one
+   * never does. Creation stays strict (`CreateEventRequestSchema`).
+   *
+   * Once counting has started the timezone is the frame every recorded
+   * movement has already been read in; moving it would silently redraw the
+   * day boundaries of a ledger that is append-only by design, so the route
+   * refuses a change past `draft` with `TIMEZONE_LOCKED`.
+   */
+  timezone: z.string().min(1).max(50).optional(),
   warningRatio1: z.number().min(0).max(1).optional(),
   warningRatio2: z.number().min(0).max(1).optional(),
   startsAtMs: z.number().int().positive().nullable().optional(),
   endsAtMs: z.number().int().positive().nullable().optional(),
+  /**
+   * A precondition, not a field: reject this write unless the event is still
+   * a draft when it is applied.
+   *
+   * The draft editor always sends it. Without it a stale editor — opened on
+   * a draft, left open while somebody else started the event — could still
+   * PATCH a live event's name and capacity, because this route legitimately
+   * allows exactly that for the supervision surface. The server checks it
+   * inside the same SQLite transaction that writes, so a refetch immediately
+   * before the request cannot substitute for it.
+   */
+  expectedStatus: z.literal('draft').optional(),
 });
 export type UpdateEventRequest = z.infer<typeof UpdateEventRequestSchema>;
 
@@ -89,6 +123,20 @@ export type CreateCheckpointRequest = z.infer<typeof CreateCheckpointRequestSche
 
 export const UpdateCheckpointRequestSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  /**
+   * The endpoints this door connects.
+   *
+   * Editable while the event is a draft so an operator can correct a door
+   * they wired to the wrong zone, rather than deleting and recreating it —
+   * which would churn an id that device invites and sessions already point
+   * at. The route re-runs the full creation-time topology validation against
+   * the *proposed* endpoints, and refuses outright while a device is paired
+   * to this checkpoint: the paired counter caches these endpoints and
+   * projects its taps across them, so changing them under it would silently
+   * change what its taps mean.
+   */
+  spaceAId: z.string().uuid().optional(),
+  spaceBId: z.string().uuid().optional(),
   allowAToB: z.boolean().optional(),
   allowBToA: z.boolean().optional(),
   labelAToB: z.string().min(1).max(50).optional(),

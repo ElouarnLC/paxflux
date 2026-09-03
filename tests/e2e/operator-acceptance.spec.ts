@@ -215,8 +215,8 @@ test('B. préparation de l’événement : 3 espaces, 4 portes, draft persistant
   }
   // The fourth door is the internal transfer Site <-> VIP; the first three
   // keep the seeded Extérieur <-> Site endpoints.
-  await page.getByLabel('Espace A').nth(3).selectOption({ label: 'Site' });
-  await page.getByLabel('Espace B').nth(3).selectOption({ label: 'VIP' });
+  await page.getByLabel('Première zone de la porte').nth(3).selectOption({ label: 'Site' });
+  await page.getByLabel('Deuxième zone de la porte').nth(3).selectOption({ label: 'VIP' });
 
   // 10. The operator reviews the topology before committing to it.
   await page.getByRole('button', { name: 'Suivant' }).click();

@@ -1,11 +1,10 @@
 import { FastifyInstance, FastifyReply } from 'fastify';
-import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import type { ZodIssue } from 'zod';
 import { AppDb } from '../db/index.js';
 import { Env } from '../config/env.js';
-import { events, spaces, checkpoints, spaceState } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { spaces, checkpoints } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
 import {
   CreateSpaceRequestSchema,
   UpdateSpaceRequestSchema,
@@ -15,9 +14,18 @@ import {
   createProblemDetails,
 } from '@paxflux/shared';
 import { requireStaffAuth } from '../auth/staff-sessions.js';
-import { validateSpaceRules } from '../domain/spaces.js';
-import { validateCheckpointRules } from '../domain/checkpoints.js';
 import { createEventDraftAtomic } from '../domain/topology.js';
+import { withEventLock } from '../domain/event-lock.js';
+import {
+  DraftRefusal,
+  DraftResult,
+  createCheckpointSync,
+  createSpaceSync,
+  deleteCheckpointSync,
+  deleteSpaceSync,
+  patchCheckpointSync,
+  patchSpaceSync,
+} from '../domain/draft-topology.js';
 
 export async function registerTopologyRoutes(app: FastifyInstance, sqlite: DatabaseSync, db: AppDb, env: Env) {
   // POST /api/v1/events/drafts — Phase 4: create a draft event and its full
@@ -65,6 +73,33 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     return reply.status(201).send(result);
   });
 
+  /**
+   * Every draft-only mutation below has the same three-step shape:
+   *
+   *   1. authorize and parse — awaited, and touching nothing that can change;
+   *   2. take the event lock, so `POST /start` cannot run between our
+   *      precondition and our write (`domain/event-lock.ts`);
+   *   3. decide and write in one synchronous SQLite transaction, which
+   *      re-reads the draft status and the checkpoint's active pairings
+   *      inside the same transaction that writes (`domain/draft-topology.ts`).
+   *
+   * Step 3 is what makes the decision indivisible against device pairing,
+   * which takes no lock but runs its own synchronous `BEGIN IMMEDIATE`.
+   */
+  function sendRefusal(reply: FastifyReply, refusal: DraftRefusal) {
+    return reply
+      .status(refusal.status)
+      .send(createProblemDetails(refusal.status, refusal.code, refusal.title, refusal.detail));
+  }
+
+  function settle<T>(reply: FastifyReply, result: DraftResult<T>, okStatus: number) {
+    return result.ok ? reply.status(okStatus).send(result.row) : sendRefusal(reply, result);
+  }
+
+  function invalidBody(reply: FastifyReply, detail: string) {
+    return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Paramètres invalides', detail));
+  }
+
   // GET /api/v1/events/:id/spaces
   app.get('/api/v1/events/:id/spaces', async (req, reply) => {
     const sessionData = await requireStaffAuth(req, reply, db, env);
@@ -81,56 +116,12 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     if (!sessionData) return;
 
     const { id: eventId } = req.params as { id: string };
-    const eventRecord = await db.select().from(events).where(eq(events.id, eventId)).get();
-
-    if (!eventRecord) {
-      return reply.status(404).send(createProblemDetails(404, 'EVENT_NOT_FOUND', 'Événement introuvable', 'Événement introuvable.'));
-    }
-    if (eventRecord.status !== 'draft') {
-      return reply.status(409).send(createProblemDetails(409, 'TOPOLOGY_LOCKED', 'Topologie verrouillée', 'La topologie ne peut être modifiée qu’en mode brouillon.'));
-    }
-
     const parseResult = CreateSpaceRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Paramètres invalides', 'Données d’espace invalides.'));
-    }
+    if (!parseResult.success) return invalidBody(reply, 'Données d’espace invalides.');
 
-    const { name, kind, parentId, capacity, sortOrder } = parseResult.data;
-    const existingSpaces = await db.select().from(spaces).where(eq(spaces.eventId, eventId)).all();
-
-    const ruleError = validateSpaceRules({ kind, parentId, capacity }, existingSpaces);
-    if (ruleError) {
-      return reply.status(400).send(createProblemDetails(400, (ruleError.code as any) || 'VALIDATION_ERROR', 'Règle topologique enfreinte', ruleError.message));
-    }
-
-    const spaceId = crypto.randomUUID();
-    const now = Date.now();
-
-    await db.insert(spaces).values({
-      id: spaceId,
-      eventId,
-      parentId: parentId || null,
-      name: name.trim(),
-      kind,
-      capacity: capacity ?? null,
-      sortOrder: sortOrder ?? 0,
-      isActive: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-    });
-
-    // Initialize space_state if leaf
-    if (kind === 'leaf') {
-      await db.insert(spaceState).values({
-        eventId,
-        spaceId,
-        occupancy: 0,
-        updatedAtMs: now,
-      });
-    }
-
-    const created = await db.select().from(spaces).where(eq(spaces.id, spaceId)).get();
-    return reply.status(201).send(created);
+    return withEventLock(eventId, async () =>
+      settle(reply, createSpaceSync(sqlite, eventId, parseResult.data), 201)
+    );
   });
 
   // GET /api/v1/events/:id/checkpoints
@@ -149,69 +140,13 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     if (!sessionData) return;
 
     const { id: eventId } = req.params as { id: string };
-    const eventRecord = await db.select().from(events).where(eq(events.id, eventId)).get();
-
-    if (!eventRecord) {
-      return reply.status(404).send(createProblemDetails(404, 'EVENT_NOT_FOUND', 'Événement introuvable', 'Événement introuvable.'));
-    }
-    if (eventRecord.status !== 'draft') {
-      return reply.status(409).send(createProblemDetails(409, 'TOPOLOGY_LOCKED', 'Topologie verrouillée', 'La topologie ne peut être modifiée qu’en mode brouillon.'));
-    }
-
     const parseResult = CreateCheckpointRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Paramètres invalides', 'Données de checkpoint invalides.'));
-    }
+    if (!parseResult.success) return invalidBody(reply, 'Données de checkpoint invalides.');
 
-    const { name, spaceAId, spaceBId, allowAToB, allowBToA, labelAToB, labelBToA, sortOrder } = parseResult.data;
-    const existingSpaces = await db.select().from(spaces).where(eq(spaces.eventId, eventId)).all();
-    const spacesMap = new Map(existingSpaces.map((s) => [s.id, s]));
-
-    const cpError = validateCheckpointRules({ spaceAId, spaceBId, allowAToB, allowBToA }, spacesMap);
-    if (cpError) {
-      return reply.status(400).send(createProblemDetails(400, (cpError.code as any) || 'VALIDATION_ERROR', 'Checkpoint invalide', cpError.message));
-    }
-
-    const cpId = crypto.randomUUID();
-    const now = Date.now();
-
-    await db.insert(checkpoints).values({
-      id: cpId,
-      eventId,
-      name: name.trim(),
-      spaceAId,
-      spaceBId,
-      allowAToB: allowAToB ?? true,
-      allowBToA: allowBToA ?? true,
-      labelAToB: labelAToB.trim(),
-      labelBToA: labelBToA.trim(),
-      sortOrder: sortOrder ?? 0,
-      isActive: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-    });
-
-    const created = await db.select().from(checkpoints).where(eq(checkpoints.id, cpId)).get();
-    return reply.status(201).send(created);
+    return withEventLock(eventId, async () =>
+      settle(reply, createCheckpointSync(sqlite, eventId, parseResult.data), 201)
+    );
   });
-
-  // Shared guard for the draft-only editing routes below: 404 if the event
-  // doesn't exist, 409 TOPOLOGY_LOCKED once it has left `draft` — the same
-  // rule already enforced by POST /spaces and POST /checkpoints above.
-  async function requireDraftEvent(reply: FastifyReply, eventId: string) {
-    const eventRecord = await db.select().from(events).where(eq(events.id, eventId)).get();
-    if (!eventRecord) {
-      reply.status(404).send(createProblemDetails(404, 'EVENT_NOT_FOUND', 'Événement introuvable', 'Événement introuvable.'));
-      return null;
-    }
-    if (eventRecord.status !== 'draft') {
-      reply
-        .status(409)
-        .send(createProblemDetails(409, 'TOPOLOGY_LOCKED', 'Topologie verrouillée', 'La topologie ne peut être modifiée qu’en mode brouillon.'));
-      return null;
-    }
-    return eventRecord;
-  }
 
   // PATCH /api/v1/events/:id/spaces/:spaceId
   app.patch('/api/v1/events/:id/spaces/:spaceId', async (req, reply) => {
@@ -219,42 +154,12 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     if (!sessionData) return;
 
     const { id: eventId, spaceId } = req.params as { id: string; spaceId: string };
-    if (!(await requireDraftEvent(reply, eventId))) return;
-
-    const existingSpace = await db.select().from(spaces).where(and(eq(spaces.id, spaceId), eq(spaces.eventId, eventId))).get();
-    if (!existingSpace) {
-      return reply.status(404).send(createProblemDetails(404, 'SPACE_NOT_FOUND', 'Espace introuvable', 'Espace introuvable.'));
-    }
-
     const parseResult = UpdateSpaceRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Paramètres invalides', 'Données d’espace invalides.'));
-    }
+    if (!parseResult.success) return invalidBody(reply, 'Données d’espace invalides.');
 
-    const patch = parseResult.data;
-    const otherSpaces = await db.select().from(spaces).where(and(eq(spaces.eventId, eventId), eq(spaces.isActive, true))).all();
-
-    const parentId = patch.parentId !== undefined ? patch.parentId : existingSpace.parentId;
-    const capacity = patch.capacity !== undefined ? patch.capacity : existingSpace.capacity;
-    const ruleError = validateSpaceRules({ kind: existingSpace.kind, parentId, capacity }, otherSpaces, spaceId);
-    if (ruleError) {
-      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Règle topologique enfreinte', ruleError.message));
-    }
-
-    await db
-      .update(spaces)
-      .set({
-        ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
-        ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
-        ...(patch.capacity !== undefined ? { capacity: patch.capacity } : {}),
-        ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
-        ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
-        updatedAtMs: Date.now(),
-      })
-      .where(eq(spaces.id, spaceId));
-
-    const updated = await db.select().from(spaces).where(eq(spaces.id, spaceId)).get();
-    return reply.status(200).send(updated);
+    return withEventLock(eventId, async () =>
+      settle(reply, patchSpaceSync(sqlite, eventId, spaceId, parseResult.data), 200)
+    );
   });
 
   // DELETE /api/v1/events/:id/spaces/:spaceId
@@ -263,42 +168,7 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     if (!sessionData) return;
 
     const { id: eventId, spaceId } = req.params as { id: string; spaceId: string };
-    if (!(await requireDraftEvent(reply, eventId))) return;
-
-    const existingSpace = await db.select().from(spaces).where(and(eq(spaces.id, spaceId), eq(spaces.eventId, eventId))).get();
-    if (!existingSpace) {
-      return reply.status(404).send(createProblemDetails(404, 'SPACE_NOT_FOUND', 'Espace introuvable', 'Espace introuvable.'));
-    }
-
-    const referencingCheckpoint = await db
-      .select()
-      .from(checkpoints)
-      .where(and(eq(checkpoints.eventId, eventId), eq(checkpoints.spaceAId, spaceId)))
-      .get();
-    const referencingCheckpointB = await db
-      .select()
-      .from(checkpoints)
-      .where(and(eq(checkpoints.eventId, eventId), eq(checkpoints.spaceBId, spaceId)))
-      .get();
-    const childSpace = await db.select().from(spaces).where(and(eq(spaces.eventId, eventId), eq(spaces.parentId, spaceId))).get();
-
-    if (referencingCheckpoint || referencingCheckpointB || childSpace) {
-      return reply
-        .status(409)
-        .send(
-          createProblemDetails(
-            409,
-            'SPACE_IN_USE',
-            'Espace utilisé',
-            'Cet espace est référencé par un checkpoint ou un espace enfant ; supprimez-les d’abord.'
-          )
-        );
-    }
-
-    await db.delete(spaceState).where(and(eq(spaceState.eventId, eventId), eq(spaceState.spaceId, spaceId)));
-    await db.delete(spaces).where(eq(spaces.id, spaceId));
-
-    return reply.status(200).send({ success: true });
+    return withEventLock(eventId, async () => settle(reply, deleteSpaceSync(sqlite, eventId, spaceId), 200));
   });
 
   // PATCH /api/v1/events/:id/checkpoints/:checkpointId
@@ -307,52 +177,12 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     if (!sessionData) return;
 
     const { id: eventId, checkpointId } = req.params as { id: string; checkpointId: string };
-    if (!(await requireDraftEvent(reply, eventId))) return;
-
-    const existingCheckpoint = await db
-      .select()
-      .from(checkpoints)
-      .where(and(eq(checkpoints.id, checkpointId), eq(checkpoints.eventId, eventId)))
-      .get();
-    if (!existingCheckpoint) {
-      return reply.status(404).send(createProblemDetails(404, 'CHECKPOINT_NOT_FOUND', 'Checkpoint introuvable', 'Checkpoint introuvable.'));
-    }
-
     const parseResult = UpdateCheckpointRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Paramètres invalides', 'Données de checkpoint invalides.'));
-    }
+    if (!parseResult.success) return invalidBody(reply, 'Données de checkpoint invalides.');
 
-    const patch = parseResult.data;
-    const allowAToB = patch.allowAToB !== undefined ? patch.allowAToB : existingCheckpoint.allowAToB;
-    const allowBToA = patch.allowBToA !== undefined ? patch.allowBToA : existingCheckpoint.allowBToA;
-
-    const existingSpaces = await db.select().from(spaces).where(eq(spaces.eventId, eventId)).all();
-    const spacesMap = new Map(existingSpaces.map((s) => [s.id, s]));
-    const cpError = validateCheckpointRules(
-      { spaceAId: existingCheckpoint.spaceAId, spaceBId: existingCheckpoint.spaceBId, allowAToB, allowBToA },
-      spacesMap
+    return withEventLock(eventId, async () =>
+      settle(reply, patchCheckpointSync(sqlite, eventId, checkpointId, parseResult.data), 200)
     );
-    if (cpError) {
-      return reply.status(400).send(createProblemDetails(400, 'VALIDATION_ERROR', 'Checkpoint invalide', cpError.message));
-    }
-
-    await db
-      .update(checkpoints)
-      .set({
-        ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
-        ...(patch.allowAToB !== undefined ? { allowAToB: patch.allowAToB } : {}),
-        ...(patch.allowBToA !== undefined ? { allowBToA: patch.allowBToA } : {}),
-        ...(patch.labelAToB !== undefined ? { labelAToB: patch.labelAToB.trim() } : {}),
-        ...(patch.labelBToA !== undefined ? { labelBToA: patch.labelBToA.trim() } : {}),
-        ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
-        ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
-        updatedAtMs: Date.now(),
-      })
-      .where(eq(checkpoints.id, checkpointId));
-
-    const updated = await db.select().from(checkpoints).where(eq(checkpoints.id, checkpointId)).get();
-    return reply.status(200).send(updated);
   });
 
   // DELETE /api/v1/events/:id/checkpoints/:checkpointId
@@ -361,18 +191,8 @@ export async function registerTopologyRoutes(app: FastifyInstance, sqlite: Datab
     if (!sessionData) return;
 
     const { id: eventId, checkpointId } = req.params as { id: string; checkpointId: string };
-    if (!(await requireDraftEvent(reply, eventId))) return;
-
-    const existingCheckpoint = await db
-      .select()
-      .from(checkpoints)
-      .where(and(eq(checkpoints.id, checkpointId), eq(checkpoints.eventId, eventId)))
-      .get();
-    if (!existingCheckpoint) {
-      return reply.status(404).send(createProblemDetails(404, 'CHECKPOINT_NOT_FOUND', 'Checkpoint introuvable', 'Checkpoint introuvable.'));
-    }
-
-    await db.delete(checkpoints).where(eq(checkpoints.id, checkpointId));
-    return reply.status(200).send({ success: true });
+    return withEventLock(eventId, async () =>
+      settle(reply, deleteCheckpointSync(sqlite, eventId, checkpointId), 200)
+    );
   });
 }
