@@ -1,7 +1,109 @@
-# PaxFlux — Phase 10 Acceptance Report
+# PaxFlux — Acceptance report
+
+**Current status: READY FOR PHYSICAL RC2 FIELD ACCEPTANCE.**
+Not "ready for production", and not "production proven" — see
+[Part I §4](#4-physical-field-evidence--pending).
+
+This document has two parts, and the distinction between them is the point:
+
+* **[Part I — RC2](#part-i--rc2)** is the current state of the product: the
+  five RC2 remediation phases, the evidence the automated suite produces
+  today, and the physical field acceptance that is still **PENDING**.
+* **[Part II — Phase 10 (historical, 2026-09-01)](#part-ii--phase-10-acceptance-historical-2026-09-01)**
+  is preserved verbatim because its packaging and recovery evidence is still
+  the best account of how PaxFlux installs and restores. **Its verdict,
+  baseline and test counts are historical.** They were measured on
+  `3fcb8d37` (`v1.0.0-rc.1`) and five phases of work have landed since;
+  nothing in Part II should be read as a current figure.
+
+---
+
+# Part I — RC2
+
+## 1. What RC2 is
+
+`v1.0.0-rc.1` (`3fcb8d376cd0c88bcd2d63e82e25735bd9a6684c`, Phase 10 merge)
+was tagged and then used. RC2 is the answer to what that use revealed: five
+scoped remediation phases, each its own branch and pull request, none of them
+a rewrite.
+
+The tag is immutable and is not moved by any of this work.
+
+| Phase | Subject | PR | Merged at |
+| :--- | :--- | :--- | :--- |
+| RC2-A | Restore and client rebaseline: a restored instance and a device that pairs again converge on the restored truth | [#13](https://github.com/ElouarnLC/paxflux/pull/13) | `b5818c9` |
+| RC2-B | Live supervision and analytics without reloading the dashboard | [#14](https://github.com/ElouarnLC/paxflux/pull/14) | `4ca5767` |
+| RC2-C | Draft editor and topology: an event is fully editable until it goes live, and locked once it is | [#15](https://github.com/ElouarnLC/paxflux/pull/15) | `046cf63` |
+| RC2-D | PWA launch contract and device identity: a paired phone reopens as its counter, and can be named | [#16](https://github.com/ElouarnLC/paxflux/pull/16) | `90621ad` |
+| RC2-E | Counter truth, no-clamp anomalies, haptic diagnostics, HTTPS and field-acceptance documentation | *this pull request* | *not merged* |
+
+## 2. What RC2-E changed
+
+* The counter states what the server holds and what the handset still owes
+  it, instead of presenting the sum as a single confirmed number. Optimistic
+  counting is unchanged.
+* An incoherent occupancy — negative, or above capacity — is reported in
+  words and never clamped, on the counter and in supervision (ADR-004).
+* An acknowledgement no longer moves the displayed gauge: the outbox
+  deletion and the new authoritative state commit together, and the counter
+  reads both from one live query.
+* Vibration is a diagnostic (`unsupported` / `accepted` / `refused`) with a
+  `Tester la vibration` action on the pairing screen. Counting has never
+  depended on it and does not now.
+* HTTPS deployment, the QR origin contract and the SSE / `/api` proxy
+  requirements are documented in the README.
+* `docs/FIELD_ACCEPTANCE_RC2.md` is the physical runbook, and it is
+  **PENDING**.
+
+## 3. Current automated evidence
+
+Measured on this pull request's head. **CI on Node 24 is the authority**; the
+figures below are filled in from that run, not from a developer machine.
+
+| | |
+| :--- | :--- |
+| Head SHA | *filled from the PR run* |
+| CI run | *filled from the PR run* |
+| `npm run typecheck` | *filled from the PR run* |
+| `npm run lint` (Biome) | *filled from the PR run* |
+| `npm test` (Vitest) | *filled from the PR run* |
+| `npm run test:e2e` (Playwright, 8 projects) | *filled from the PR run* |
+| Docker image build + fresh-boot smoke | *filled from the PR run* |
+| Compose install → restart → restore | *filled from the PR run* |
+
+No test was removed, skipped, weakened, retried or made conditional in any
+RC2 phase.
+
+## 4. Physical field evidence — PENDING
+
+**No physical acceptance has been performed.** No PaxFlux installation on a
+real Android or iOS handset, over a real HTTPS origin, has been observed by
+anyone producing this report.
+
+This matters because the things RC2-D and RC2-E are about are precisely the
+things a headless Linux runner cannot establish: a browser's own install
+prompt, a home-screen launch, a service worker surviving a dead radio, and a
+vibration motor.
+
+The runbook is [`docs/FIELD_ACCEPTANCE_RC2.md`](FIELD_ACCEPTANCE_RC2.md).
+Until its release gates are marked by the owner, RC2 is **ready for physical
+field acceptance** and is not production-proven.
+
+---
+
+# Part II — Phase 10 acceptance (historical, 2026-09-01)
+
+> **Historical.** Everything from here to the end of the document was measured
+> on 2026-09-01 against `remediation/phase-10-acceptance`, which became
+> `v1.0.0-rc.1`. Its verdict was correct for that commit. Its baselines, its
+> test counts (245 Vitest / 229 Playwright) and its environment table are
+> **not current** — Part I §3 carries the current figures. It is kept because
+> its packaging, restart and restore evidence (§5) remains the most detailed
+> account of those paths, and re-running them for RC2 is a CI gate rather than
+> a hand-written report.
 
 **Date**: 2026-09-01
-**Verdict**: **ACCEPTED** — see §12. No Phase 10 blocker remains; three ordinary limitations are recorded in §10.
+**Verdict (historical, for `3fcb8d37`)**: **ACCEPTED** — see §12. No Phase 10 blocker remained; three ordinary limitations are recorded in §10.
 **Baseline**: `main @ 126ef29c4118a5f4e194e4dab09e19a939c01e65` (Phase 9 merge, CI run #39 green)
 **Branch under acceptance**: `remediation/phase-10-acceptance`
 **Specification**: `PaxFlux_SPECIFICATION_v1.1.md`
@@ -396,7 +498,9 @@ names where it is verified **in this branch** rather than restating a claim.
 
 ## 12. Verdict
 
-**ACCEPTED.**
+**ACCEPTED — for Phase 10, on `3fcb8d37`, on 2026-09-01.** The current status
+of the product is in [Part I](#part-i--rc2), which is
+*ready for physical RC2 field acceptance*, not accepted for production.
 
 The reference operator journey works end to end on a virgin instance, the
 published install works, and both recovery paths return a coherent installation
@@ -412,3 +516,8 @@ that operators need to plan for rather than avoid.
 
 Deploy with §10.4 understood — a restore signs everyone out — and revisit §10.1
 when `drizzle-kit` publishes a fix.
+
+> **Read against RC2.** Five phases have landed since this verdict. Where
+> Part II describes behaviour RC2 changed — the draft editor, the PWA root,
+> device identity, the counter's presentation of occupancy — Part I is what
+> the product does now.

@@ -1,4 +1,11 @@
 /**
+ * What an occupancy figure actually means, and when it is incoherent.
+ *
+ * Named for the counter because that is the surface the split matters most
+ * on, but supervision reads it too (`admin/Dashboard.tsx`) so that the two
+ * cannot come to different conclusions about what counts as an anomaly or
+ * describe it in different words.
+ *
  * What the counter's big number actually means.
  *
  * PaxFlux counts optimistically on purpose: a tap moves the gauge before the
@@ -191,21 +198,27 @@ export const ZONE_PENDING_ONLY_MESSAGE = 'transferts en attente sur cet appareil
  *
  * Never suggests an action the person holding this device cannot take: a
  * counter operator cannot make a supervised adjustment, so they are asked to
- * report it rather than to fix it. `ADR-004` is what the second sentence is
- * about — the movements stand as counted, and nothing is quietly corrected.
+ * report it rather than to fix it. `comptages conservés` is ADR-004 said in
+ * two words — the movements stand as they were counted and nothing was
+ * quietly corrected.
+ *
+ * Kept to one sentence because of where it is read. On a 320px handset every
+ * line of this notice sits between the gauge and the two count buttons, and
+ * an explanation that pushes `SORTIE` off the fold has cost more than it
+ * bought. The supervisor wording below has room and says more.
  */
 export function describeAnomalyForCounter(anomaly: OccupancyAnomaly, capacity: number): string {
   const value = formatCount(anomaly.value);
 
   if (anomaly.scope === 'projected') {
     return anomaly.kind === 'negative'
-      ? `Occupation projetée négative (${value}). Comptages conservés, en attente de confirmation du serveur.`
-      : `Capacité projetée dépassée (${value} / ${formatCount(capacity)}). Comptages conservés, en attente de confirmation du serveur.`;
+      ? `Occupation projetée négative (${value}) : comptages conservés, en attente du serveur.`
+      : `Capacité projetée dépassée (${value} / ${formatCount(capacity)}) : comptages conservés, en attente du serveur.`;
   }
 
   return anomaly.kind === 'negative'
-    ? `Occupation négative (${value}). PaxFlux conserve les comptages tels quels : signalez-le à la supervision.`
-    : `Capacité dépassée (${value} / ${formatCount(capacity)}). PaxFlux conserve les comptages tels quels : signalez-le à la supervision.`;
+    ? `Occupation négative (${value}) : comptages conservés, signalez-le à la supervision.`
+    : `Capacité dépassée (${value} / ${formatCount(capacity)}) : comptages conservés, signalez-le à la supervision.`;
 }
 
 /**

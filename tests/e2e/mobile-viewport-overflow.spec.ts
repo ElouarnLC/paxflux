@@ -100,7 +100,7 @@ test('les quatre étapes du wizard tiennent dans le viewport', async ({ page }) 
 
   // Step 3 — doors: two endpoints and two directional labels per door.
   await page.getByRole('button', { name: 'Suivant' }).click();
-  await expect(page.getByRole('heading', { name: '3. Portes & Checkpoints' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '3. Portes' })).toBeVisible();
   await page.getByLabel('Nom de la porte').first().fill(LONG_FIXTURE_NAMES.mainCheckpoint);
   await inboundLabel(page).first().fill(LONG_FIXTURE_NAMES.labelAToB);
   await outboundLabel(page).first().fill(LONG_FIXTURE_NAMES.labelBToA);
@@ -120,7 +120,7 @@ test('les quatre étapes du wizard tiennent dans le viewport', async ({ page }) 
 test('la gestion des appareils et le QR généré tiennent dans le viewport', async ({ page }) => {
   await loginAsAdmin(page);
   await page.goto(`/admin/events/${topo.eventId}/devices`);
-  await expect(page.getByRole('heading', { name: 'Gestion des Appareils et QR Codes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Gestion des appareils et QR codes' })).toBeVisible();
   await assertScreenFitsViewport(page, '/admin/events/:id/devices');
 
   // The generated QR panel: a 180px code, a badge, explanatory copy and a
@@ -138,7 +138,7 @@ test('les statistiques et l’état système tiennent dans le viewport', async (
   await assertScreenFitsViewport(page, '/admin/events/:id/analytics');
 
   await page.goto('/admin/system');
-  await expect(page.getByRole('heading', { name: 'État Système & Sauvegardes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'État système et sauvegardes' })).toBeVisible();
   await assertScreenFitsViewport(page, '/admin/system');
 });
 

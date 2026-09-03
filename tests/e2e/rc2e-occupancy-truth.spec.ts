@@ -1,5 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import {
+  ADMIN_PASSWORD,
+  ADMIN_USERNAME,
   AdminSession,
   addInternalTransferCheckpoint,
   adjustSpaceOccupancy,
@@ -247,4 +249,49 @@ test('5 · un transfert interne ne bouge pas la jauge globale et reste visible',
   expect(occupancy.global, 'an internal transfer is a global delta of zero').toBe(4);
   expect(occupancy.spaces[topo.siteSpaceId]).toBe(3);
   expect(occupancy.spaces[zoneSpaceId]).toBe(1);
+});
+
+test('6 · la supervision nomme l’anomalie et pointe vers la correction qu’elle a', async ({
+  browser,
+}) => {
+  // Both surfaces read the same module, so a supervisor and an operator can
+  // never disagree about what is incoherent. What differs is the advice: an
+  // operator is asked to report it, a supervisor is pointed at the
+  // supervised adjustment they can actually make.
+  const topo = await liveEvent('RC2E anomalie supervision', 200);
+
+  const deviceContext = await browser.newContext();
+  const devicePage = await deviceContext.newPage();
+  try {
+    await pairOn(devicePage, topo.eventId, topo.mainCheckpointId);
+    await devicePage.getByTestId('count-b-to-a').click();
+    await outboxDrained(devicePage);
+    await expect.poll(() => serverOccupancy(topo.eventId), { timeout: 15_000 }).toBe(-1);
+  } finally {
+    await deviceContext.close();
+  }
+
+  const page = await browser.newPage();
+  try {
+    await page.goto('/login');
+    await page.getByPlaceholder('admin').fill(ADMIN_USERNAME);
+    await page.getByPlaceholder('••••••••••••').fill(ADMIN_PASSWORD);
+    await page.getByRole('button', { name: 'Connexion' }).click();
+    await page.waitForURL('**/admin');
+    await page.goto(`/admin?event=${topo.eventId}`);
+
+    const anomaly = page.getByTestId('dashboard-occupancy-anomaly');
+    await expect(anomaly).toBeVisible();
+    await expect(anomaly).toHaveAttribute('data-anomaly-kind', 'negative');
+    await expect(anomaly).toContainText('Occupation négative (−1)');
+    await expect(anomaly).toContainText('conservé tel quel');
+    // The advice a supervisor can act on, which the counter deliberately
+    // does not offer.
+    await expect(anomaly).toContainText('ajustement supervisé');
+
+    // And the gauge itself still says −1: supervision does not clamp either.
+    await expect(page.getByText('−1', { exact: true }).first()).toBeVisible();
+  } finally {
+    await page.close();
+  }
 });

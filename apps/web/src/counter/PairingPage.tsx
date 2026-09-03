@@ -201,7 +201,7 @@ export const PairingPage: React.FC = () => {
     <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
       <CenteredPanel
         icon={Smartphone}
-        title="Appairage Compteur"
+        title="Appairage compteur"
         description="Configuration de l’appareil de comptage terrain..."
         className="text-center"
       >
@@ -262,9 +262,21 @@ export const PairingPage: React.FC = () => {
               </Button>
             ) : null}
 
-            {/* A diagnostic, deliberately secondary: it re-pairs nothing,
-                counts nothing and navigates nowhere — the operator stays on
-                this screen and reads the answer. */}
+            <div className="flex flex-col gap-2">
+              <Button onClick={saveNameAndContinue} disabled={renaming || !labelIsValid} block>
+                {renaming ? <Loader2 className="animate-spin" /> : null}
+                Continuer avec ce nom
+              </Button>
+              <Button variant="secondary" onClick={continueToCounter} disabled={renaming} block>
+                Continuer sans renommer
+              </Button>
+            </div>
+
+            {/* Below the way out, on purpose. This is a diagnostic — it
+                re-pairs nothing, counts nothing and navigates nowhere — and
+                on a 320px handset a secondary action that pushes `Continuer`
+                off the fold has made the screen worse to reach a phone's
+                vibration motor. */}
             <Button variant="ghost" onClick={testVibration} data-testid="test-haptics" block>
               <Vibrate />
               Tester la vibration
@@ -281,16 +293,6 @@ export const PairingPage: React.FC = () => {
                 <AlertDescription>{hapticReport.message}</AlertDescription>
               </Alert>
             ) : null}
-
-            <div className="flex flex-col gap-2">
-              <Button onClick={saveNameAndContinue} disabled={renaming || !labelIsValid} block>
-                {renaming ? <Loader2 className="animate-spin" /> : null}
-                Continuer avec ce nom
-              </Button>
-              <Button variant="secondary" onClick={continueToCounter} disabled={renaming} block>
-                Continuer sans renommer
-              </Button>
-            </div>
           </div>
         ) : null}
 

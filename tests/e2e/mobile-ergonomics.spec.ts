@@ -122,11 +122,11 @@ test('les champs de saisie n’imposent pas le zoom iOS au focus', async ({ page
   await assertFieldsDoNotTriggerIosZoom(page, '/admin/events/new — étape 2');
 
   await page.getByRole('button', { name: 'Suivant' }).click();
-  await expect(page.getByRole('heading', { name: '3. Portes & Checkpoints' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '3. Portes' })).toBeVisible();
   await assertFieldsDoNotTriggerIosZoom(page, '/admin/events/new — étape 3');
 
   await page.goto(`/admin/events/${topo.eventId}/devices`);
-  await expect(page.getByRole('heading', { name: 'Gestion des Appareils et QR Codes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Gestion des appareils et QR codes' })).toBeVisible();
   await assertFieldsDoNotTriggerIosZoom(page, '/admin/events/:id/devices');
 });
 
@@ -174,12 +174,12 @@ test('les cibles tactiles des écrans admin sont assez grandes', async ({ page }
   await assertTouchTargets(page, '/admin/events/new — étape 2');
 
   await page.getByRole('button', { name: 'Suivant' }).click();
-  await expect(page.getByRole('heading', { name: '3. Portes & Checkpoints' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '3. Portes' })).toBeVisible();
   await page.getByRole('button', { name: 'Ajouter une porte' }).click();
   await assertTouchTargets(page, '/admin/events/new — étape 3');
 
   await page.goto(`/admin/events/${topo.eventId}/devices`);
-  await expect(page.getByRole('heading', { name: 'Gestion des Appareils et QR Codes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Gestion des appareils et QR codes' })).toBeVisible();
   await page.getByRole('button', { name: /Générer le QR Code/ }).click();
   await expect(page.getByText('QR Code Prêt pour scan')).toBeVisible();
   await assertTouchTargets(page, '/admin/events/:id/devices');
@@ -189,7 +189,7 @@ test('les cibles tactiles des écrans admin sont assez grandes', async ({ page }
   await assertTouchTargets(page, '/admin/events/:id/analytics');
 
   await page.goto('/admin/system');
-  await expect(page.getByRole('heading', { name: 'État Système & Sauvegardes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'État système et sauvegardes' })).toBeVisible();
   await assertTouchTargets(page, '/admin/system');
 });
 

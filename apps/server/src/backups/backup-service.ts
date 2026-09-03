@@ -174,8 +174,16 @@ function quickCheck(dbPath: string, step: string, promoted = false): void {
  *  * the backup is validated *before* anything is replaced, so a corrupt
  *    snapshot cannot destroy a working instance;
  *  * the work happens on a temporary file beside the target and is promoted by
- *    a single rename, so the live database is never left half-restored — if
- *    any step fails, the instance still holds exactly what it held before;
+ *    a single rename, so the live database is never left half-restored — a
+ *    reader sees either the old database or the new one, never a partial
+ *    file. What a failure means depends on which side of that rename it
+ *    happened on, and the two are not interchangeable:
+ *      - **before promotion** the live database has not been touched at all,
+ *        and the instance can simply be started again as it was;
+ *      - **after promotion** the snapshot *is* the database. That is not
+ *        "nothing happened", it is never reported as such, and the service
+ *        must stay stopped until an operator has looked at it.
+ *    `RestoreError.promoted` carries the distinction; see its own note;
  *  * the sessions carried inside the snapshot are revoked before it becomes
  *    live, so a token issued after the snapshot cannot keep writing to the
  *    restored database (specification invariant 17);
@@ -184,7 +192,9 @@ function quickCheck(dbPath: string, step: string, promoted = false): void {
  *  * the file is written by this process, so it belongs to the runtime user
  *    (uid/gid 10001 in the image) rather than to whoever ran the copy.
  *
- * Any problem throws: there is no partial success to report.
+ * Any problem throws a `RestoreError` naming the step it failed at and
+ * whether the promotion had already happened. There is no partially applied
+ * restore, but there are two very different failures.
  */
 export function restoreDatabaseFromFile(
   backupFilePath: string,

@@ -763,7 +763,7 @@ export const CounterView: React.FC = () => {
       {/* 2. Global Occupancy Readout */}
       <section className="px-4 py-3 text-center">
         <div className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-0.5">
-          Jauge Globale
+          Jauge globale
         </div>
         {/* Six-figure gauges exist. The pair wraps rather than widening the
             document, and the capacity drops to its own line if it must. */}

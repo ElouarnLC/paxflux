@@ -80,7 +80,7 @@ describe('anomalies are reported, never corrected', () => {
 
     const message = describeAnomalyForCounter(truth.anomaly!, truth.capacity);
     expect(message).toContain('projetée');
-    expect(message).toContain('en attente de confirmation du serveur');
+    expect(message).toContain('en attente du serveur');
     expect(message.toLowerCase(), 'never claims the server holds this').not.toContain('serveur conserve');
   });
 
@@ -122,7 +122,9 @@ describe('what each surface is told', () => {
     const message = describeAnomalyForCounter(truth.anomaly!, truth.capacity);
 
     expect(message).toContain('Occupation négative (−1)');
-    expect(message).toContain('PaxFlux conserve les comptages tels quels');
+    // ADR-004 in two words, because this sits between the gauge and the
+    // count buttons on a 320px handset.
+    expect(message).toContain('comptages conservés');
     expect(message).toContain('signalez-le à la supervision');
     // A counter operator cannot make a supervised adjustment.
     expect(message.toLowerCase()).not.toContain('ajustement');

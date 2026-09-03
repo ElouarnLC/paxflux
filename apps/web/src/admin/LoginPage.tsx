@@ -40,8 +40,8 @@ export const LoginPage: React.FC = () => {
     <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
       <CenteredPanel
         icon={Lock}
-        title="Espace Responsable"
-        description="Supervision et administration de l'événement."
+        title="Espace responsable"
+        description="Supervision et administration de l’événement."
       >
         {error ? (
           <Alert tone="danger" className="mt-6">
@@ -52,7 +52,7 @@ export const LoginPage: React.FC = () => {
 
         <form onSubmit={handleLogin} className="mt-6 space-y-4 text-left">
           <div className="space-y-1.5">
-            <Label htmlFor="login-username">Nom d'utilisateur</Label>
+            <Label htmlFor="login-username">Nom d’utilisateur</Label>
             <Input
               id="login-username"
               type="text"

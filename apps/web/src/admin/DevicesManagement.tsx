@@ -189,7 +189,7 @@ export const DevicesManagement: React.FC = () => {
 
   return (
     <div className="mx-auto w-full max-w-5xl flex-1 space-y-4 p-4 sm:space-y-6 sm:p-6">
-      <PageHeader title="Gestion des Appareils et QR Codes" />
+      <PageHeader title="Gestion des appareils et QR codes" />
 
       {actionError ? (
         <Alert tone="danger">
@@ -198,10 +198,10 @@ export const DevicesManagement: React.FC = () => {
         </Alert>
       ) : null}
 
-      <Section title="Ajouter un Appareil Compteur">
+      <Section title="Ajouter un appareil compteur">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
           <div className="w-full flex-1 space-y-1.5">
-            <Label htmlFor="checkpoint-picker">Choisir la porte / le checkpoint :</Label>
+            <Label htmlFor="checkpoint-picker">Choisir la porte :</Label>
             <NativeSelect
               id="checkpoint-picker"
               value={selectedCheckpointId}
@@ -221,12 +221,12 @@ export const DevicesManagement: React.FC = () => {
             onClick={handleCreateInvite}
           >
             <QrCode />
-            Générer le QR Code d'appairage
+            Générer le QR Code d’appairage
           </Button>
         </div>
 
         {/* The 180px code keeps its size — smaller scans badly — so the
-            panel's own padding is what gives way at 320px, and the text
+            panel’s own padding is what gives way at 320px, and the text
             column shrinks beside it. */}
         {activeInvite ? (
           <CardPanel className="mt-6 flex flex-col items-center gap-4 border-primary-accent/40 p-4 sm:gap-6 sm:p-6 md:flex-row">
@@ -243,10 +243,10 @@ export const DevicesManagement: React.FC = () => {
                 QR Code Prêt pour scan
               </Badge>
               <p className="text-sm font-bold text-foreground">
-                Scannez ce QR Code avec l'appareil photo du téléphone.
+                Scannez ce QR Code avec l’appareil photo du téléphone.
               </p>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Le secret d'appairage est transmis dans le fragment URL et ne sera pas stocké dans les logs
+                Le secret d’appairage est transmis dans le fragment URL et ne sera pas stocké dans les logs
                 serveur. Valable 30 minutes, à usage unique.
               </p>
 
@@ -255,8 +255,8 @@ export const DevicesManagement: React.FC = () => {
                   <AlertTriangle />
                   <AlertDescription className="mt-0 text-foreground/90">
                     Cette URL pointe vers une adresse locale à ce serveur : un téléphone ne pourra pas
-                    l'ouvrir. Configurez <span className="font-mono">PUBLIC_BASE_URL</span>, ou ouvrez
-                    PaxFlux via l'adresse réseau que les téléphones peuvent joindre.
+                    l’ouvrir. Configurez <span className="font-mono">PUBLIC_BASE_URL</span>, ou ouvrez
+                    PaxFlux via l’adresse réseau que les téléphones peuvent joindre.
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -323,7 +323,7 @@ export const DevicesManagement: React.FC = () => {
                   <TableHead>Libellé</TableHead>
                   <TableHead>Statut</TableHead>
                   <TableHead>En attente</TableHead>
-                  <TableHead>Dernier Contact</TableHead>
+                  <TableHead>Dernier contact</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -371,8 +371,8 @@ export const DevicesManagement: React.FC = () => {
                         />
                       <ConfirmAction
                         title="Révoquer cet appareil ?"
-                        description={`« ${dev.label} » (${dev.checkpointName}) ne pourra plus envoyer de comptages. Les comptages qu'il détient encore devront être régularisés par un responsable.`}
-                        confirmLabel="Révoquer l'appareil"
+                        description={`« ${dev.label} » (${dev.checkpointName}) ne pourra plus envoyer de comptages. Les comptages qu’il détient encore devront être régularisés par un responsable.`}
+                        confirmLabel="Révoquer l’appareil"
                         confirmVariant="destructive"
                         onConfirm={() => handleRevokeDevice(dev.id)}
                         trigger={

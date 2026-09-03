@@ -20,12 +20,14 @@ import {
 import {
   Users,
   Activity,
+  AlertTriangle,
   QrCode,
   Download,
   Plus,
   RefreshCw,
   ExternalLink,
 } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardPanel } from '@/components/ui/card';
@@ -42,6 +44,11 @@ import {
   TableScroller,
 } from '@/components/ui/table';
 import { EmptyState, Section } from '@/components/paxflux/layout';
+import {
+  describeAnomalyForSupervisor,
+  formatCount,
+  readOccupancyTruth,
+} from '../counter/occupancy-truth.js';
 import {
   STATUS,
   StatusBadge,
@@ -261,6 +268,17 @@ export const Dashboard: React.FC = () => {
   const capacityPercentage = capacity > 0 ? (globalOccupancy / capacity) * 100 : 0;
   const remaining = capacity - globalOccupancy;
 
+  // The same reading of the same numbers the counter uses. Supervision has no
+  // outbox of its own, so everything here is the server's own figure and any
+  // anomaly is `authoritative` by construction — but it is read through the
+  // shared module rather than re-derived, so the two surfaces cannot come to
+  // different conclusions about what counts as incoherent.
+  const occupancyTruth = readOccupancyTruth({
+    authoritative: globalOccupancy,
+    pendingDelta: 0,
+    capacity,
+  });
+
   // Derived from the server's verdict *and* the devices it was computed
   // from, so the card can be specific ("1 appareil en ligne sur 2") without
   // ever re-deriving the verdict itself.
@@ -298,7 +316,7 @@ export const Dashboard: React.FC = () => {
             row from `sm` up. */}
         <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
           {/* `min-w-0` is what lets this selector be narrow: a form
-              control's default minimum width is its content, so an event
+              control’s default minimum width is its content, so an event
               named at full length would otherwise stretch the header past
               the viewport rather than shrink. */}
           <NativeSelect
@@ -351,7 +369,7 @@ export const Dashboard: React.FC = () => {
                 capacity does not fit on one line at 320px. */}
             <div className="my-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono">
               <span className="text-4xl font-black tracking-tight text-foreground sm:text-6xl">
-                {globalOccupancy.toLocaleString('fr-FR')}
+                {formatCount(globalOccupancy)}
               </span>
               <span className="text-xl font-bold text-muted-foreground sm:text-2xl">
                 / {capacity.toLocaleString('fr-FR')}
@@ -367,6 +385,25 @@ export const Dashboard: React.FC = () => {
               indicatorClassName={gaugeIndicator}
               aria-label="Taux de remplissage"
             />
+
+            {/* An incoherent gauge, said in words rather than signalled by
+                the bar turning a different colour. ADR-004 keeps the
+                movements exactly as they were counted; a supervisor is the
+                one person who can act on that, so this wording points at the
+                supervised adjustment they actually have. */}
+            {occupancyTruth.anomaly ? (
+              <Alert
+                tone="danger"
+                className="mb-3"
+                data-testid="dashboard-occupancy-anomaly"
+                data-anomaly-kind={occupancyTruth.anomaly.kind}
+              >
+                <AlertTriangle />
+                <AlertDescription>
+                  {describeAnomalyForSupervisor(occupancyTruth.anomaly, capacity)}
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs font-semibold">
               <span className="text-muted-foreground">
@@ -386,9 +423,9 @@ export const Dashboard: React.FC = () => {
               <h2 className="mb-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
                 Qualité de synchronisation
               </h2>
-              {/* Every critical fact is written, not signalled by the badge's
+              {/* Every critical fact is written, not signalled by the badge’s
                   colour alone: how many devices answer, how many counts are
-                  still in flight, and what the server's verdict means. */}
+                  still in flight, and what the server’s verdict means. */}
               <CardPanel className="mt-4 space-y-2">
                 <StatusBadge status={sync.status} />
                 <p data-testid="sync-presence" className="text-sm font-semibold text-foreground">
@@ -406,10 +443,12 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* These two read as navigation rows rather than compact
-                buttons, so they opt out of the Button's `whitespace-nowrap`:
+                buttons, so they opt out of the Button’s `whitespace-nowrap`:
                 at exactly `md` the sync card is a third of the grid and
-                "Gérer les appareils & QR codes" needs 249px in a 182px
-                column. A button that keeps its label on one line is the
+                the label needs more than the 182px column it gets — it was
+                measured at 249px when it read "Gérer les appareils & QR
+                codes", and RC2-E spelling the ampersand out only made it
+                longer. A button that keeps its label on one line is the
                 right default; a full-width row of text is the exception. */}
             <div className="mt-6 flex flex-col gap-2">
               <Button
@@ -421,7 +460,7 @@ export const Dashboard: React.FC = () => {
                 <Link to={`/admin/events/${selectedEventId}/devices`}>
                   <span className="flex min-w-0 items-center gap-2">
                     <QrCode className="shrink-0 text-primary-accent" />
-                    Gérer les appareils &amp; QR codes
+                    Gérer les appareils et QR codes
                   </span>
                   <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
                 </Link>
@@ -446,7 +485,7 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {currentEvent ? (
-          <Section title="Cycle de vie de l'événement">
+          <Section title="Cycle de vie de l’événement">
             <LifecycleControls event={currentEvent} onChanged={refreshDetails} />
           </Section>
         ) : null}
@@ -519,7 +558,7 @@ export const Dashboard: React.FC = () => {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Porte / checkpoint</TableHead>
+                  <TableHead>Porte</TableHead>
                   <TableHead>Appareil</TableHead>
                   <TableHead>Statut</TableHead>
                   <TableHead>Dernier contact</TableHead>
