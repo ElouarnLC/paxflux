@@ -222,16 +222,23 @@ test('un téléphone hors ligne garde son dernier nom connu et converge au retou
   });
 });
 
-test('un libellé en vol ne peut pas franchir une frontière d’appairage', async ({ page }) => {
-  // The Phase 6 ownership boundary, applied to display metadata. A label
-  // response — or a heartbeat carrying one — can be in flight when the
-  // browser re-pairs as a different device. Applying it afterwards would put
-  // one handset's name on another's screen.
+test('renommer l’ancienne session n’atteint pas un navigateur réappairé', async ({ page }) => {
+  // What this proves, end to end: after re-pairing, the heartbeat beats as
+  // B and the server answers about B, so a staff rename of the *retired*
+  // session A never reaches this browser at all.
+  //
+  // It deliberately does NOT claim to exercise a late in-flight write for A
+  // — a browser test cannot hold one response open across a re-pairing and
+  // then release it. That boundary is proved directly against the guarded
+  // helper in `apps/web/src/offline/snapshot.test.ts`
+  // ("a late label response cannot cross a pairing boundary"), where the
+  // identity check can be removed to show the test fails for the right
+  // reason.
   const first = await pairAndStop(page, 'RC2D course renommage A');
   await page.getByRole('button', { name: 'Continuer sans renommer' }).click();
   await page.waitForURL('**/counter');
 
-  // Re-pair this same browser as a second device on another event.
+  // Re-pair this same browser as a second device, on another event.
   const second = await liveEvent('RC2D course renommage B');
   const token = await createDeviceInviteToken(session, second.eventId, second.mainCheckpointId);
   await page.goto(`/pair#${token}`);
@@ -244,32 +251,8 @@ test('un libellé en vol ne peut pas franchir une frontière d’appairage', asy
   const currentSessionId = before.bootstrap.deviceSession.id;
   expect(currentSessionId, 'the browser is now device B').not.toBe(first.sessionId);
 
-  // Now let the *old* session's label response complete, late.
-  const applied = await page.evaluate(
-    async ([staleSessionId, dbName]) => {
-      // Calls the same guarded helper the heartbeat and the rename use,
-      // through the module the app already loaded.
-      const db = await new Promise<IDBDatabase>((resolve, reject) => {
-        const req = indexedDB.open(dbName as string);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-      const record = await new Promise<any>((resolve, reject) => {
-        const r = db.transaction('device_config', 'readonly').objectStore('device_config').get('current');
-        r.onsuccess = () => resolve(r.result ?? null);
-        r.onerror = () => reject(r.error);
-      });
-      db.close();
-      // The guard the helper applies, asserted on the stored record: a label
-      // for a session that is not the stored one must not be written.
-      return record?.bootstrap?.deviceSession?.id === staleSessionId;
-    },
-    [first.sessionId, 'PaxFluxDB'] as const
-  );
-  expect(applied, 'a stale session id must not match the current pairing').toBe(false);
-
-  // Rename the *old* session server-side. Its label must never reach this
-  // browser, which no longer is that device.
+  // Rename the retired session server-side, then let several heartbeats go
+  // by. Nothing about A may surface on a browser that is now B.
   await adminApi(session, 'PATCH', `/api/v1/device-sessions/${first.sessionId}`, {
     label: 'Ancien appareil renommé',
   });

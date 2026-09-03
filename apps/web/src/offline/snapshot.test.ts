@@ -8,6 +8,7 @@ import {
   loadSnapshot,
   persistAuthoritativeState,
   persistBootstrap,
+  persistCurrentDeviceLabel,
   persistLifecycleStatus,
   resolveEffectiveStatus,
 } from './snapshot.js';
@@ -293,5 +294,105 @@ describe('the baseline survives a reload', () => {
     expect(snapshot.bootstrap?.deviceSession.id).toBe(S2);
     expect(snapshot.state?.version).toBe(13);
     expect(snapshot.state?.eventOccupancy, 'the pre-restore value must not reappear').toBe(10);
+  });
+});
+
+describe('a late label response cannot cross a pairing boundary', () => {
+  /**
+   * The Phase 6 ownership boundary, applied to display metadata.
+   *
+   * A rename response — or a heartbeat carrying a canonical label — can be
+   * in flight when the browser re-pairs. By the time it resolves it is
+   * describing a device this browser has retired, and writing its name onto
+   * the new pairing would put one handset's identity on another's screen.
+   *
+   * A and B are deliberately on *different events and different doors*, so
+   * what is asserted is the whole ownership envelope rather than a session
+   * string that happens to match.
+   */
+  const EVENT_B = '66666666-6666-4666-8666-666666666666';
+  const CHECKPOINT_B = '77777777-7777-4777-8777-777777777777';
+
+  function bootstrapOn(
+    sessionId: string,
+    label: string,
+    ids: { eventId: string; checkpointId: string }
+  ): DeviceBootstrapResponse {
+    const base = bootstrap(sessionId, state(10, 3, 10_000));
+    return {
+      ...base,
+      event: { ...base.event, id: ids.eventId },
+      checkpoint: { ...base.checkpoint, id: ids.checkpointId },
+      deviceSession: { id: sessionId, label },
+    };
+  }
+
+  it('refuses a label for the retired session and leaves every owning field on the new pairing', async () => {
+    // A is the active pairing, and it has real counting intent queued.
+    await persistBootstrap(bootstrapOn(S1, 'Appareil A', { eventId: EVENT_ID, checkpointId: CHECKPOINT_ID }));
+    await enqueueCountAction('a_to_b', OWNER_S1);
+    const outboxBefore = await localDb.outbox_actions.toArray();
+    const confirmedBefore = await localDb.confirmed_actions.toArray();
+
+    // — an A label response conceptually becomes in flight here —
+
+    // The browser re-pairs as B, on another event and another door.
+    await beginPairingHandoff(S2);
+    await persistBootstrap(bootstrapOn(S2, 'Appareil B', { eventId: EVENT_B, checkpointId: CHECKPOINT_B }));
+
+    // Now the old A completion executes, late.
+    const applied = await persistCurrentDeviceLabel(S1, 'late A label');
+    expect(applied, 'a label for a retired session must be refused').toBe(false);
+
+    const config = await localDb.device_config.get('current');
+    expect(config?.bootstrap?.deviceSession.id, 'session stays B').toBe(S2);
+    expect(config?.bootstrap?.deviceSession.label, 'label stays B').toBe('Appareil B');
+    expect(config?.bootstrap?.event.id, 'event stays B').toBe(EVENT_B);
+    expect(config?.bootstrap?.checkpoint.id, 'checkpoint stays B').toBe(CHECKPOINT_B);
+
+    expect(await currentOwner(), 'the owner is B, whole').toEqual({
+      deviceSessionId: S2,
+      eventId: EVENT_B,
+      checkpointId: CHECKPOINT_B,
+    });
+
+    // No ownership churn anywhere a count could be misattributed.
+    expect(await localDb.outbox_actions.toArray()).toEqual(outboxBefore);
+    expect(await localDb.confirmed_actions.toArray()).toEqual(confirmedBefore);
+  });
+
+  it('applies B’s own label, changing the display and nothing else', async () => {
+    await persistBootstrap(bootstrapOn(S1, 'Appareil A', { eventId: EVENT_ID, checkpointId: CHECKPOINT_ID }));
+    await beginPairingHandoff(S2);
+    await persistBootstrap(bootstrapOn(S2, 'Appareil B', { eventId: EVENT_B, checkpointId: CHECKPOINT_B }));
+
+    const before = await localDb.device_config.get('current');
+
+    const applied = await persistCurrentDeviceLabel(S2, 'new B label');
+    expect(applied, 'the pairing this browser holds may rename itself').toBe(true);
+
+    const after = await localDb.device_config.get('current');
+    expect(after?.bootstrap?.deviceSession.label).toBe('new B label');
+
+    // Everything that decides what a tap means is byte-identical: only the
+    // one display string moved.
+    expect(after?.bootstrap?.deviceSession.id).toBe(before?.bootstrap?.deviceSession.id);
+    expect(after?.bootstrap?.event).toEqual(before?.bootstrap?.event);
+    expect(after?.bootstrap?.checkpoint).toEqual(before?.bootstrap?.checkpoint);
+    expect(after?.bootstrap?.state).toEqual(before?.bootstrap?.state);
+    expect(await currentOwner()).toEqual({
+      deviceSessionId: S2,
+      eventId: EVENT_B,
+      checkpointId: CHECKPOINT_B,
+    });
+  });
+
+  it('has nothing to rename mid-handoff, and says so', async () => {
+    // `pendingSessionId` with no bootstrap: paired, configuration not yet
+    // arrived. There is no label to update, and inventing one would be
+    // creating configuration out of a display string.
+    await beginPairingHandoff(S2);
+    expect(await persistCurrentDeviceLabel(S2, 'trop tôt')).toBe(false);
+    expect((await localDb.device_config.get('current'))?.bootstrap).toBeUndefined();
   });
 });
