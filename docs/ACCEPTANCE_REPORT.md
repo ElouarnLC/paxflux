@@ -58,18 +58,26 @@ The tag is immutable and is not moved by any of this work.
 ## 3. Current automated evidence
 
 Measured on this pull request's head. **CI on Node 24 is the authority**; the
-figures below are filled in from that run, not from a developer machine.
+figures below are read from that run, not from a developer machine.
 
 | | |
 | :--- | :--- |
-| Head SHA | *filled from the PR run* |
-| CI run | *filled from the PR run* |
-| `npm run typecheck` | *filled from the PR run* |
-| `npm run lint` (Biome) | *filled from the PR run* |
-| `npm test` (Vitest) | *filled from the PR run* |
-| `npm run test:e2e` (Playwright, 8 projects) | *filled from the PR run* |
-| Docker image build + fresh-boot smoke | *filled from the PR run* |
-| Compose install → restart → restore | *filled from the PR run* |
+| Head SHA | `e39b449e3e7d933c1426aee78142494c6a519267` |
+| CI run | [#33799271689](https://github.com/ElouarnLC/paxflux/actions/runs/33799271689) — all four jobs green |
+| `npm run typecheck` | green, 3 workspaces |
+| `npm run lint` (Biome) | **0 diagnostics**, 177 files |
+| `npm test` (Vitest) | **489 / 489**, 38 files |
+| `npm run test:e2e` (Playwright, 8 projects) | **378 / 378** |
+| `npm run build` | green |
+| Docker image build + fresh-boot smoke | green |
+| Compose install → restart → restore | green — a staff session and a device session valid before the snapshot are both rejected after the restore |
+
+Vitest grew from the Phase 10 baseline of 245 to 489 across the five RC2
+phases; RC2-E added 40 of them — 20 in `occupancy-truth.test.ts`, 11 in
+`haptics.test.ts`, 9 in `docs-contract.test.ts`. Playwright grew from 229 to
+378; RC2-E added 32 — the 6 no-clamp scenarios and 5 haptic tests run once on
+`functional`, and the 3 counter-truth mobile tests run on each of the 7
+viewport projects.
 
 No test was removed, skipped, weakened, retried or made conditional in any
 RC2 phase.
