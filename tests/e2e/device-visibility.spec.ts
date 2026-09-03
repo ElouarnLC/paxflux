@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
+  completeDevicePairing,
   createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
   getEventDevices,
+  startEvent,
 } from './helpers.js';
 
 test('un appareil appairé apparaît immédiatement dans la liste des appareils de l\'événement', async ({ page }) => {
@@ -16,8 +17,7 @@ test('un appareil appairé apparaît immédiatement dans la liste des appareils 
   await startEvent(session, topo.eventId);
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
 
   // No wait needed: a freshly paired, non-revoked device must show up
   // right away. Today GET /events/:id/devices (and the devices join in

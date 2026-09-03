@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test';
 import {
-  ADMIN_USERNAME,
   ADMIN_PASSWORD,
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
+  ADMIN_USERNAME,
   beginClosingEvent,
+  completeDevicePairing,
   createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
+  startEvent,
 } from './helpers.js';
 
 // Reproduces the `closing`-UI blocker: LifecycleControls used to fetch the
@@ -29,8 +30,7 @@ test('l\'admin voit un appareil redevenir synchronisé pendant `closing`, sans r
   // hears about this tap until the device reconnects.
   const deviceContext = await browser.newContext();
   const devicePage = await deviceContext.newPage();
-  await devicePage.goto(`/pair#${token}`);
-  await devicePage.waitForURL('**/counter');
+  await completeDevicePairing(devicePage, token);
 
   await deviceContext.setOffline(true);
   await devicePage.getByRole('button', { name: /ENTRÉE/i }).click();

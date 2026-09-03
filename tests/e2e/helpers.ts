@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { APIRequestContext, request as pwRequest } from '@playwright/test';
+import { APIRequestContext, Page, request as pwRequest } from '@playwright/test';
 import { E2E_BASE_URL, E2E_DATA_DIR } from '../../playwright.config.js';
 
 export const ADMIN_USERNAME = 'e2e-admin';
@@ -372,4 +372,21 @@ export async function createLongNamedTopology(
     mainCheckpointId: main.id,
     innerCheckpointId: inner.id,
   };
+}
+
+/**
+ * Pairs the browser behind `page` and lands it on the counter.
+ *
+ * RC2-D replaced the 800ms auto-navigation that used to follow a successful
+ * pairing with a completion step, so the operator can read — and optionally
+ * change — the name this handset was given. Pairing itself is complete
+ * before that step renders; continuing is a deliberate act.
+ *
+ * Every spec that only needs a paired counter goes through here, so the
+ * flow is stated once rather than re-derived in twenty files.
+ */
+export async function completeDevicePairing(page: Page, token: string): Promise<void> {
+  await page.goto(`/pair#${token}`);
+  await page.getByRole('button', { name: 'Continuer sans renommer' }).click();
+  await page.waitForURL('**/counter');
 }

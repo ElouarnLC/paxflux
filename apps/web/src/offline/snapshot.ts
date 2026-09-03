@@ -4,6 +4,7 @@ import {
   EventStatus,
   OutboxActionOwner,
 } from '@paxflux/shared';
+import { LocalDeviceIdentity } from '../app/root-route.js';
 import { localDb } from './db.js';
 
 /**
@@ -328,6 +329,80 @@ export async function currentPairing(): Promise<CurrentPairing | null> {
 export async function observedClosingEpoch(): Promise<number | null> {
   const stored = await localDb.event_state.get('current');
   return stored?.state.closingStartedAtMs ?? null;
+}
+
+/**
+ * What the root route needs to know, and nothing more.
+ *
+ * Deliberately does not return the bootstrap itself: `/` decides where to
+ * send this browser, it does not render a counter, and handing it the whole
+ * configuration would invite decisions that belong in CounterView.
+ *
+ * A read failure is reported as `null` rather than thrown. IndexedDB is
+ * unavailable in some private-browsing modes, and one storage exception must
+ * not become an infinite spinner on the application root.
+ */
+export async function readLocalDeviceIdentity(): Promise<LocalDeviceIdentity | null> {
+  try {
+    const config = await localDb.device_config.get('current');
+    return {
+      hasBootstrap: config?.bootstrap !== undefined,
+      hasPendingSession: config?.pendingSessionId !== undefined,
+    };
+  } catch (err) {
+    console.debug('Local device identity unreadable; treating this browser as unpaired:', err);
+    return null;
+  }
+}
+
+/**
+ * Adopts a canonical device label for the pairing this browser still holds.
+ *
+ * Display metadata only, and guarded by identity for the same reason
+ * `persistBootstrap` is: a rename response — or a heartbeat carrying one —
+ * can be in flight when a re-pairing happens, and would then be describing a
+ * session this browser has retired. Writing its name onto the new pairing
+ * would put one device's identity on another's screen.
+ *
+ * What this can change is one string. It never touches `deviceSession.id`,
+ * the event, the checkpoint, the endpoints, the outbox, its owners, the
+ * event state or the handoff: it reads the stored bootstrap, replaces the
+ * label, and writes the same object back. A device with no bootstrap — mid
+ * handoff, or never paired — has no label to update and is left alone.
+ *
+ * Returns whether the write happened, so a caller can log a refusal rather
+ * than assume success.
+ */
+export async function persistCurrentDeviceLabel(
+  expectedSessionId: string,
+  label: string
+): Promise<boolean> {
+  return localDb.transaction('rw', localDb.device_config, async () => {
+    const config = await localDb.device_config.get('current');
+    if (!config?.bootstrap) return false;
+
+    // The boundary. A response for any session other than the one currently
+    // in charge is dropped, which is what stops a retired identity from
+    // crossing a re-pairing.
+    if (config.bootstrap.deviceSession.id !== expectedSessionId) {
+      console.debug(
+        `Ignoring a label for session ${expectedSessionId}; this device is now ${config.bootstrap.deviceSession.id}`
+      );
+      return false;
+    }
+
+    if (config.bootstrap.deviceSession.label === label) return false;
+
+    await localDb.device_config.put({
+      ...config,
+      bootstrap: {
+        ...config.bootstrap,
+        deviceSession: { ...config.bootstrap.deviceSession, label },
+      },
+      updatedAtMs: Date.now(),
+    });
+    return true;
+  });
 }
 
 /** The identity currently paired on this device, or null if none is. */

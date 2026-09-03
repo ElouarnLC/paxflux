@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
+  completeDevicePairing,
   createDeviceInviteToken,
-  getEventState,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
   getEventDevices,
+  getEventState,
+  startEvent,
 } from './helpers.js';
 import { readEventStateRecord, readOutbox, seedAheadOfServerEventState } from './offline-helpers.js';
 
@@ -41,8 +42,7 @@ test('un appareil ré-appairé après restauration adopte l’état restauré, p
 
   // --- The device counts normally under its first pairing (S1). ---
   const firstToken = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-  await page.goto(`/pair#${firstToken}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, firstToken);
   await expect(page.getByTestId('count-a-to-b')).toBeVisible();
 
   await page.getByTestId('count-a-to-b').click();
@@ -76,8 +76,7 @@ test('un appareil ré-appairé après restauration adopte l’état restauré, p
   // code — in the same browser, which still holds the row above.
   const devicesBefore = await getEventDevices(session, topo.eventId);
   const secondToken = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-  await page.goto(`/pair#${secondToken}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, secondToken);
   await expect(page.getByTestId('count-a-to-b')).toBeVisible();
 
   // --- The new pairing's bootstrap is the new baseline. ---

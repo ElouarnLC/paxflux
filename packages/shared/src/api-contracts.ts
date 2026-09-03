@@ -206,6 +206,22 @@ export interface CreateDeviceInviteResponse {
   pairUrlSource: 'public_base_url' | 'request_origin';
   /** True when pairUrl resolves to a loopback address a phone cannot reach. */
   unreachableFromPhone: boolean;
+  /**
+   * True when the phone will open this URL outside a secure context.
+   *
+   * Pairing itself works over plain HTTP and is not blocked. What does not
+   * work is everything that makes PaxFlux an *installed* counter: service
+   * workers, and therefore the offline outbox, require a secure context, and
+   * browsers grant that to HTTPS and to loopback only. A LAN IP over HTTP is
+   * not an exception — so "Ajouter à l'écran d'accueil" on such an origin
+   * produces a bookmark, not an application, and the operator deserves to
+   * know that before the doors open rather than at the first dropout.
+   *
+   * Judged on the actual URL the phone receives, not on whether
+   * PUBLIC_BASE_URL happens to be set: the request origin is what a QR
+   * carries when it is not.
+   */
+  insecureForInstall: boolean;
   expiresAtMs: number;
 }
 
@@ -266,6 +282,30 @@ export const DeviceHeartbeatRequestSchema = z.object({
   appVersion: z.string().max(50).optional(),
 });
 export type DeviceHeartbeatRequest = z.infer<typeof DeviceHeartbeatRequestSchema>;
+
+/**
+ * What a heartbeat brings back.
+ *
+ * `deviceSession` exists so an open counter learns its canonical label
+ * without a dedicated polling loop: staff rename a device from the
+ * management table, and the phone showing that label would otherwise stay
+ * wrong until someone reloaded it. The heartbeat already runs every 15s,
+ * already proves the session, and already refuses to answer for a session
+ * the cookie does not authenticate — so it is the cheapest honest channel
+ * available.
+ *
+ * The id travels with the label deliberately. It is what lets the client
+ * check the answer describes the pairing it still holds before touching
+ * anything local: a response for a session retired by a re-pairing must not
+ * write its name over the new one.
+ */
+export interface DeviceHeartbeatResponse {
+  serverTimeMs: number;
+  deviceSession: {
+    id: string;
+    label: string;
+  };
+}
 
 // Supervisor Adjustments
 export const CreateAdjustmentRequestSchema = z.object({

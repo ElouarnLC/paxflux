@@ -218,3 +218,143 @@ export function ReasonAction({
     </Dialog>
   );
 }
+
+export interface RenameActionProps extends Omit<ConfirmActionProps, 'onConfirm' | 'description'> {
+  description?: React.ReactNode;
+  /** Field label, e.g. "Nom de l'appareil". */
+  fieldLabel: string;
+  /** The value as it stands. Every opening starts from this, not from the last attempt. */
+  currentValue: string;
+  maxLength: number;
+  placeholder?: string;
+  /** The server's refusal, shown in the dialog so the operator can correct it in place. */
+  errorMessage?: string | null;
+  /**
+   * Called when the dialog opens.
+   *
+   * Lets the caller drop a refusal from a previous attempt: an error the
+   * operator has already closed the dialog on should not greet them when
+   * they open it again.
+   */
+  onOpen?: () => void;
+  /** Resolve to `true` when the save succeeded; the dialog stays open otherwise. */
+  onRename: (value: string) => Promise<boolean>;
+}
+
+/**
+ * Renaming something, in a dialog rather than a `window.prompt`.
+ *
+ * Close cousin of `ReasonAction` and deliberately not the same component:
+ * a reason is written fresh each time and must be long enough to be
+ * auditable, while a name arrives already set and only has to be non-empty
+ * and bounded. Sharing one component would mean a `mode` flag and two sets
+ * of half-applicable rules.
+ *
+ * What it keeps from the rest of this file: cancelling sends nothing, and
+ * the confirm button is unavailable until the value could actually be
+ * accepted. What it adds: the dialog stays open when the server refuses, so
+ * the operator can fix the name where they typed it instead of finding out
+ * from a row that quietly did not change.
+ */
+export function RenameAction({
+  trigger,
+  title,
+  description,
+  confirmLabel,
+  confirmVariant = 'default',
+  disabled,
+  busy,
+  fieldLabel,
+  currentValue,
+  maxLength,
+  placeholder,
+  errorMessage,
+  onOpen,
+  onRename,
+}: RenameActionProps) {
+  const [open, setOpen] = React.useState(false);
+  const [value, setValue] = React.useState(currentValue);
+  const [saving, setSaving] = React.useState(false);
+  const inputId = React.useId();
+
+  // Every opening starts from what is stored now, not from an abandoned
+  // attempt or from a value another row has since changed.
+  React.useEffect(() => {
+    if (open) setValue(currentValue);
+  }, [open, currentValue]);
+
+  // And from a clean slate: a refusal belongs to the attempt that caused it.
+  const onOpenRef = React.useRef(onOpen);
+  onOpenRef.current = onOpen;
+  React.useEffect(() => {
+    if (open) onOpenRef.current?.();
+  }, [open]);
+
+  const trimmed = value.trim();
+  const invalid = trimmed.length === 0 || trimmed.length > maxLength;
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild disabled={disabled}>
+        {trigger}
+      </DialogTrigger>
+      <DialogContent
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          document.getElementById(inputId)?.focus();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {description ? <DialogDescription>{description}</DialogDescription> : null}
+        </DialogHeader>
+        <DialogBody>
+          <form
+            id={`${inputId}-form`}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (invalid || saving) return;
+              setSaving(true);
+              try {
+                // Only a success closes it. A refusal leaves the operator
+                // looking at the name they typed and the reason it was
+                // rejected.
+                if (await onRename(trimmed)) setOpen(false);
+              } finally {
+                setSaving(false);
+              }
+            }}
+            className="space-y-1.5"
+          >
+            <Label htmlFor={inputId}>{fieldLabel}</Label>
+            <Input
+              id={inputId}
+              value={value}
+              maxLength={maxLength}
+              placeholder={placeholder}
+              autoComplete="off"
+              onChange={(e) => setValue(e.target.value)}
+              aria-invalid={invalid ? true : undefined}
+              aria-describedby={`${inputId}-hint`}
+            />
+            <p
+              id={`${inputId}-hint`}
+              className={errorMessage || invalid ? 'text-xs font-semibold text-danger' : 'text-xs text-muted-foreground'}
+            >
+              {errorMessage ?? (invalid ? 'Le nom ne peut pas être vide.' : `${maxLength} caractères maximum.`)}
+            </p>
+          </form>
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline">Annuler</Button>
+          </DialogClose>
+          <Button type="submit" form={`${inputId}-form`} variant={confirmVariant} disabled={busy || saving || invalid}>
+            {busy || saving ? <Loader2 className="animate-spin" /> : null}
+            {confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

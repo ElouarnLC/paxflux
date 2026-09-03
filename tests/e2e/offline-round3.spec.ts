@@ -1,13 +1,14 @@
 import { test, expect, Page, Route } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  addInternalTransferCheckpoint,
-  startEvent,
-  createDeviceInviteToken,
-  getEventState,
-  getEventDevices,
   AdminSession,
+  addInternalTransferCheckpoint,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
+  getEventDevices,
+  getEventState,
+  startEvent,
 } from './helpers.js';
 import { readOutbox, readDeviceConfigRecord, StoredOutboxRow } from './offline-helpers.js';
 
@@ -56,8 +57,7 @@ test.describe('Phase 6 round 3 — identité de l’appairage et taxonomie des r
     const tokenA = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
     const tokenB = await createDeviceInviteToken(session, topo.eventId, internalCheckpointId);
 
-    await page.goto(`/pair#${tokenA}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, tokenA);
 
     // A has a real local pending count that cannot leave.
     const blockBatch = (route: Route) => route.abort('failed');
@@ -87,6 +87,11 @@ test.describe('Phase 6 round 3 — identité de l’appairage et taxonomie des r
     await page.goto(`/pair#${tokenB}`);
     const sessionBId = (await (await pairResponse).json()).deviceSession.id as string;
 
+    // RC2-D: pairing completes on its own, and the operator then continues
+    // from the naming step. The response above is captured before that
+    // click, so this still observes the pairing itself rather than the
+    // navigation that follows it.
+    await page.getByRole('button', { name: 'Continuer sans renommer' }).click();
     await page.waitForURL('**/counter', { timeout: 30_000 });
 
     // The counter is explicitly non-operational rather than falling back to
@@ -137,8 +142,7 @@ test.describe('Phase 6 round 3 — identité de l’appairage et taxonomie des r
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     // Every bad response below is synthesised, never forwarded to the
     // server: the point is what the *client* does with an untrustworthy
@@ -232,8 +236,7 @@ test.describe('Phase 6 round 3 — identité de l’appairage et taxonomie des r
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     let requests = 0;
     await page.route(BATCH_URL, async (route) => {
@@ -277,8 +280,7 @@ test.describe('Phase 6 round 3 — identité de l’appairage et taxonomie des r
       await startEvent(session, topo.eventId);
       const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-      await page.goto(`/pair#${token}`);
-      await page.waitForURL('**/counter');
+      await completeDevicePairing(page, token);
 
       let requests = 0;
       const failWithStatus = async (route: Route) => {

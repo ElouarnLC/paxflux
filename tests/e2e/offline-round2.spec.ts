@@ -1,15 +1,16 @@
 import { test, expect, Page, Route } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  addInternalTransferCheckpoint,
-  startEvent,
-  beginClosingEvent,
-  createDeviceInviteToken,
-  getEventState,
-  getEventDevices,
-  revokeDeviceSession,
   AdminSession,
+  addInternalTransferCheckpoint,
+  beginClosingEvent,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
+  getEventDevices,
+  getEventState,
+  revokeDeviceSession,
+  startEvent,
 } from './helpers.js';
 import {
   readOutbox,
@@ -62,8 +63,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     const tokenA = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
     const tokenB = await createDeviceInviteToken(session, topo.eventId, internalCheckpointId);
 
-    await page.goto(`/pair#${tokenA}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, tokenA);
 
     // A's tap is queued and cannot leave.
     const blockBatch = (route: Route) => route.abort('failed');
@@ -130,8 +130,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     await startEvent(session, topo.eventId);
 
     const tokenA = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-    await page.goto(`/pair#${tokenA}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, tokenA);
 
     const blockBatch = (route: Route) => route.abort('failed');
     await page.route(BATCH_URL, blockBatch);
@@ -141,8 +140,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
 
     // Re-pair as B on the same door, then let the queue settle.
     const tokenB = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-    await page.goto(`/pair#${tokenB}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, tokenB);
     await page.unroute(BATCH_URL, blockBatch);
 
     const afterQuarantine = await waitForOutbox(
@@ -216,8 +214,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
     await expect(page.getByRole('button', { name: /ENTRÉE/ })).toBeEnabled();
 
     await beginClosingEvent(session, topo.eventId);
@@ -245,8 +242,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     // Hold a batch response minted while the event is still live.
     let released: (() => void) | null = null;
@@ -294,8 +290,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     // A perfectly ordinary online tap: acknowledged and gone from the outbox
     // within a second.
@@ -337,8 +332,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     // The server applies the movement; the response is truncated on the way
     // back. The action's fate is genuinely unknown to the client.
@@ -387,8 +381,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     const devices = await getEventDevices(session, topo.eventId);
     const deviceSessionId = devices[0].id;
@@ -516,8 +509,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
 
     await page.unroute('**/api/v1/**');
     // The real pairing still works afterwards.
-    await page.goto(`/pair#${tokenB}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, tokenB);
     await expect(page.getByTestId('global-occupancy')).toHaveText('0');
   });
 
@@ -532,8 +524,7 @@ test.describe('Phase 6 round 2 — identité, cycle de vie et erreurs de flush',
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     await page.getByRole('button', { name: /ENTRÉE/ }).click();
     await expect

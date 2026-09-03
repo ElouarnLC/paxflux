@@ -1,14 +1,15 @@
 import { test, expect, Page } from '@playwright/test';
 import {
-  ADMIN_USERNAME,
   ADMIN_PASSWORD,
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
+  ADMIN_USERNAME,
+  completeDevicePairing,
   createDeviceInvite,
   createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
   getEventDevices,
   revokeDeviceSession,
+  startEvent,
 } from './helpers.js';
 
 async function loginAsAdmin(page: Page) {
@@ -47,6 +48,9 @@ test('cycle appareil complet : appairage sur un second appareil, heartbeat, supe
 
   const pairPath = new URL(invite.pairUrl).pathname + new URL(invite.pairUrl).hash;
   await phone.goto(pairPath);
+  // RC2-D: a successful pairing lands on the naming step; continuing is a
+  // deliberate act rather than an 800ms timer.
+  await phone.getByRole('button', { name: 'Continuer sans renommer' }).click();
   await phone.waitForURL('**/counter');
 
   // The secret must not be left sitting in the address bar after use.
@@ -129,8 +133,7 @@ test('un QR déjà utilisé ne peut pas appairer un second appareil', async ({ b
 
   const firstContext = await browser.newContext();
   const firstPhone = await firstContext.newPage();
-  await firstPhone.goto(`/pair#${token}`);
-  await firstPhone.waitForURL('**/counter');
+  await completeDevicePairing(firstPhone, token);
 
   // A second handset scanning the same (photographed) QR must be refused —
   // SPEC §9.1: single use is what limits the damage of a leaked code.

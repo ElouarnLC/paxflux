@@ -1,14 +1,15 @@
 import { test, expect, Page } from '@playwright/test';
 import {
-  ADMIN_USERNAME,
   ADMIN_PASSWORD,
+  ADMIN_USERNAME,
   AdminSession,
-  getAdminSession,
-  createLongNamedTopology,
-  createDeviceInviteToken,
-  startEvent,
-  LongNamedTopology,
   LONG_FIXTURE_NAMES,
+  LongNamedTopology,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createLongNamedTopology,
+  getAdminSession,
+  startEvent,
 } from './helpers.js';
 import {
   assertFieldsDoNotTriggerIosZoom,
@@ -96,8 +97,7 @@ test('les zones de sécurité sont appliquées une seule fois, à la racine', as
   // And the counter, the only full-bleed screen and therefore the one most
   // likely to be given an inset of its own on top of #root's.
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
   await expect(page.getByTestId('count-a-to-b')).toBeVisible();
   await assertSafeAreaContract(page, '/counter (CounterView)');
 });
@@ -195,8 +195,7 @@ test('les cibles tactiles des écrans admin sont assez grandes', async ({ page }
 
 test('les cibles tactiles du compteur sont assez grandes', async ({ page }) => {
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
   await expect(page.getByTestId('count-a-to-b')).toBeVisible();
 
   // A count, so ANNULER — the one destructive control on the field
@@ -209,8 +208,7 @@ test('les cibles tactiles du compteur sont assez grandes', async ({ page }) => {
 
 test('la surface de comptage reste protégée de la sélection accidentelle', async ({ page }) => {
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
 
   // The inverse of the body assertion above: removing the global rule must
   // not remove it where it is actually needed. Repeated taps on a large

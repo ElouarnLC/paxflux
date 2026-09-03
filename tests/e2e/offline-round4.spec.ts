@@ -1,14 +1,15 @@
 import { test, expect, Page, Route } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
-  beginClosingEvent,
-  tryCloseEvent,
-  createDeviceInviteToken,
-  getEventState,
-  getEventDevices,
   AdminSession,
+  beginClosingEvent,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
+  getEventDevices,
+  getEventState,
+  startEvent,
+  tryCloseEvent,
 } from './helpers.js';
 import { readOutbox, readDeviceConfigRecord, StoredOutboxRow } from './offline-helpers.js';
 
@@ -49,8 +50,7 @@ test.describe('Phase 6 round 4 — époque de fermeture et identité tardive', (
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     // The device is freshly online and the server knows it as fully drained.
     await expect
@@ -121,8 +121,7 @@ test.describe('Phase 6 round 4 — époque de fermeture et identité tardive', (
     const tokenA = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
     const tokenB = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${tokenA}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, tokenA);
 
     // A second tab whose bootstrap request is answered by the server for
     // real — as device A — but whose response is held on the way back.
@@ -158,6 +157,10 @@ test.describe('Phase 6 round 4 — époque de fermeture et identité tardive', (
     );
     await page.goto(`/pair#${tokenB}`);
     const sessionBId = (await (await pairResponse).json()).deviceSession.id as string;
+    // RC2-D: the naming step sits between a successful pairing and the
+    // counter. The response is captured before the click, so this still
+    // observes the pairing rather than the navigation after it.
+    await page.getByRole('button', { name: 'Continuer sans renommer' }).click();
     await page.waitForURL('**/counter', { timeout: 30_000 });
 
     await expect
@@ -193,8 +196,7 @@ test.describe('Phase 6 round 4 — époque de fermeture et identité tardive', (
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
     await expect(page.getByRole('button', { name: /ENTRÉE/ })).toBeEnabled();
 
     // The server tells this device it is reporting as a session the cookie

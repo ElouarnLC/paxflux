@@ -23,6 +23,9 @@ import {
   EventDeviceSummary,
   ErrorCode,
   DEVICE_OFFLINE_THRESHOLD_MS,
+  DeviceHeartbeatResponse,
+  RenameDeviceRequestSchema,
+  RenameDeviceResponse,
 } from '@paxflux/shared';
 import {
   createDeviceInvite,
@@ -171,6 +174,53 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
     return reply.status(200).send(response);
   });
 
+  // PATCH /api/v1/device/session
+  //
+  // A device renames itself, and nothing else.
+  //
+  // Singular and self by construction: there is no id in the path or the
+  // body, so there is no id for a client to substitute. Identity comes from
+  // the HttpOnly session cookie alone, which means the only session this can
+  // ever reach is the one making the request — a device holding a valid
+  // cookie cannot name another device by crafting a payload, because there
+  // is nowhere in the contract to put one.
+  //
+  // `label` is the only writable field. Everything that decides what this
+  // device *is* — its event, its checkpoint, its token, its expiry, its
+  // pending count and sequence — is not in the request schema, so no extra
+  // property in the body can reach a column.
+  app.patch('/api/v1/device/session', async (req, reply) => {
+    // Refuses a revoked, expired or unauthenticated device before anything
+    // is read or written.
+    const deviceSession = await requireDeviceAuth(req, reply, db, env);
+    if (!deviceSession) return;
+
+    const parseResult = RenameDeviceRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return reply
+        .status(400)
+        .send(
+          createProblemDetails(
+            400,
+            'VALIDATION_ERROR',
+            'Nom d’appareil invalide',
+            parseResult.error.errors[0]?.message ?? 'Le nom de l’appareil est invalide.',
+            undefined,
+            parseResult.error.errors.map((e: ZodIssue) => ({ name: 'label', reason: e.message }))
+          )
+        );
+    }
+
+    const label = parseResult.data.label;
+    // Scoped to the authenticated session id, not to anything the caller
+    // sent. A second guard behind the first: even a future refactor that
+    // let an id into the body could not widen this WHERE clause.
+    await db.update(deviceSessions).set({ label }).where(eq(deviceSessions.id, deviceSession.id));
+
+    const response: RenameDeviceResponse = { deviceSession: { id: deviceSession.id, label } };
+    return reply.status(200).send(response);
+  });
+
   // POST /api/v1/device/heartbeat
   app.post('/api/v1/device/heartbeat', async (req, reply) => {
     const deviceSession = await requireDeviceAuth(req, reply, db, env);
@@ -244,7 +294,15 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
       })
       .where(eq(deviceSessions.id, deviceSession.id));
 
-    return reply.status(200).send({ serverTimeMs: now });
+    // The canonical identity travels back on the beat that already proves
+    // the session. That is what lets an open counter pick up a staff rename
+    // without a second polling loop — and the id is what lets the client
+    // refuse an answer describing a pairing it no longer holds.
+    const response: DeviceHeartbeatResponse = {
+      serverTimeMs: now,
+      deviceSession: { id: deviceSession.id, label: deviceSession.label },
+    };
+    return reply.status(200).send(response);
   });
 
   // POST /api/v1/events/:id/device-invites
@@ -347,6 +405,7 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
       ...invite,
       pairUrlSource: base.source,
       unreachableFromPhone: base.unreachableFromPhone,
+      insecureForInstall: base.insecureForInstall,
     };
 
     return reply.status(201).send(response);
@@ -401,16 +460,39 @@ export async function registerDeviceRoutes(app: FastifyInstance, sqlite: Databas
     if (!sessionData) return;
 
     const { id } = req.params as { id: string };
-    const { label } = req.body as { label?: string };
 
-    if (!label || label.trim().length === 0) {
+    const parseResult = RenameDeviceRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
       return reply
         .status(400)
-        .send(createProblemDetails(400, 'VALIDATION_ERROR', 'Label requis', 'Le nom de l’appareil ne peut pas être vide.'));
+        .send(
+          createProblemDetails(
+            400,
+            'VALIDATION_ERROR',
+            'Nom d’appareil invalide',
+            parseResult.error.errors[0]?.message ?? 'Le nom de l’appareil est invalide.',
+            undefined,
+            parseResult.error.errors.map((e: ZodIssue) => ({ name: 'label', reason: e.message }))
+          )
+        );
     }
 
-    await db.update(deviceSessions).set({ label: label.trim() }).where(eq(deviceSessions.id, id));
-    return reply.status(200).send({ success: true, label: label.trim() });
+    // Read before writing so an unknown id is a 404 rather than a write that
+    // matches nothing and reports success. The previous version answered
+    // `{ success: true }` for any UUID at all, which told the management
+    // table a rename had happened when nothing had.
+    const existing = await db.select().from(deviceSessions).where(eq(deviceSessions.id, id)).get();
+    if (!existing) {
+      return reply
+        .status(404)
+        .send(createProblemDetails(404, 'DEVICE_NOT_FOUND', 'Appareil introuvable', 'Cette session appareil n’existe pas.'));
+    }
+
+    const label = parseResult.data.label;
+    await db.update(deviceSessions).set({ label }).where(eq(deviceSessions.id, id));
+
+    const response: RenameDeviceResponse = { deviceSession: { id, label } };
+    return reply.status(200).send(response);
   });
 
   // POST /api/v1/device-sessions/:id/revoke

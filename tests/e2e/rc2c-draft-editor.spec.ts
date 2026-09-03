@@ -1,10 +1,11 @@
 import { test, expect, Page } from '@playwright/test';
 import {
-  ADMIN_USERNAME,
   ADMIN_PASSWORD,
+  ADMIN_USERNAME,
   AdminSession,
-  adminApi,
   DraftEventTopology,
+  adminApi,
+  completeDevicePairing,
   createDeviceInviteToken,
   createDraftEventWithMainCheckpoint,
   getAdminSession,
@@ -244,8 +245,7 @@ test('une porte appairée refuse un déplacement structurel jusqu’à la révoc
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
   const deviceContext = await browser.newContext();
   const devicePage = await deviceContext.newPage();
-  await devicePage.goto(`/pair#${token}`);
-  await devicePage.waitForURL('**/counter');
+  await completeDevicePairing(devicePage, token);
 
   await loginAsAdmin(page);
   await openEditor(page, topo.eventId);

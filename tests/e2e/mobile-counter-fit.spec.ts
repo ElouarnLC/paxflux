@@ -1,13 +1,14 @@
 import { test, expect } from '@playwright/test';
 import {
   AdminSession,
-  getAdminSession,
-  createLongNamedTopology,
-  createDeviceInviteToken,
-  startEvent,
-  beginClosingEvent,
-  LongNamedTopology,
   LONG_FIXTURE_NAMES,
+  LongNamedTopology,
+  beginClosingEvent,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createLongNamedTopology,
+  getAdminSession,
+  startEvent,
 } from './helpers.js';
 import {
   assertFullyVisible,
@@ -37,8 +38,7 @@ test.beforeAll(async () => {
 
 async function pairCounter(page: import('@playwright/test').Page, topo: LongNamedTopology) {
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
   await expect(page.getByTestId('count-a-to-b')).toBeVisible();
 }
 
@@ -75,7 +75,12 @@ test('en état normal, ENTRÉE et SORTIE sont utilisables sans défilement', asy
   }
 
   // And the long names really are on screen while it fits.
-  await expect(page.getByText(LONG_FIXTURE_NAMES.mainCheckpoint)).toBeVisible();
+  //
+  // Addressed as the heading rather than as text: RC2-D added the device
+  // name below it, and the label a freshly paired handset is given contains
+  // the door's own name. Naming the heading is what this assertion always
+  // meant — the door is the identity a count belongs to.
+  await expect(page.getByRole('heading', { name: LONG_FIXTURE_NAMES.mainCheckpoint })).toBeVisible();
   await expect(entry).toContainText(LONG_FIXTURE_NAMES.labelAToB);
 });
 

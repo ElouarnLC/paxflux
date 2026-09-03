@@ -146,6 +146,52 @@ describe('Device pairing: canonical URL, consistency, single-use, heartbeat', ()
       expect(invite.unreachableFromPhone).toBe(true);
     });
 
+    it('flags a plain-HTTP LAN URL as unusable for installation, without blocking pairing', async () => {
+      // RC2-D. Pairing works over HTTP and is deliberately not refused; what
+      // does not work is everything that makes this an installed counter.
+      // Service workers — and therefore the offline outbox — require a
+      // secure context, which browsers grant to HTTPS and to loopback and
+      // never to a LAN IP. An operator told to "Ajouter à l'écran d'accueil"
+      // on such an origin gets a bookmark, not an application.
+      await app.close();
+      sqlite.close();
+      await boot({ PUBLIC_BASE_URL: 'http://192.168.1.42:3000' });
+
+      const { event, checkpoints: cps } = await createDraftEvent('Repro LAN HTTP');
+      const res = await createInvite(event.id, cps[0].id);
+
+      const invite = res.json();
+      expect(res.statusCode, 'pairing is not blocked').toBe(201);
+      expect(invite.pairUrl).toBe(`http://192.168.1.42:3000/pair#${invite.token}`);
+      expect(invite.insecureForInstall).toBe(true);
+      // Reachable, just not secure. The two warnings are about different
+      // problems and must not be conflated.
+      expect(invite.unreachableFromPhone).toBe(false);
+    });
+
+    it('treats HTTPS and loopback as secure contexts', async () => {
+      await app.close();
+      sqlite.close();
+      await boot({ PUBLIC_BASE_URL: 'https://paxflux.example.test' });
+      {
+        const { event, checkpoints: cps } = await createDraftEvent('Repro HTTPS Secure');
+        const invite = (await createInvite(event.id, cps[0].id)).json();
+        expect(invite.insecureForInstall).toBe(false);
+      }
+
+      // Loopback over HTTP is the browser's own development exception, and
+      // the only case where plain HTTP still gets a service worker.
+      await app.close();
+      sqlite.close();
+      await boot({ PUBLIC_BASE_URL: 'http://localhost:3000' });
+      {
+        const { event, checkpoints: cps } = await createDraftEvent('Repro Loopback Secure');
+        const invite = (await createInvite(event.id, cps[0].id)).json();
+        expect(invite.insecureForInstall).toBe(false);
+        expect(invite.unreachableFromPhone, 'still unreachable from a handset').toBe(true);
+      }
+    });
+
     it('falls back to the request origin when PUBLIC_BASE_URL is unset, never to a bare relative path', async () => {
       // Local development has no PUBLIC_BASE_URL; the QR must still encode
       // something a phone on the same LAN can actually open, rather than a

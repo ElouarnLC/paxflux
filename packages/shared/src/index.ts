@@ -4,4 +4,5 @@ export * from './models.js';
 export * from './offline-protocol.js';
 export * from './realtime-protocol.js';
 export * from './timezone.js';
+export * from './device-label.js';
 export * from './api-contracts.js';
