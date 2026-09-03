@@ -90,8 +90,10 @@ test('1 · une occupation serveur négative est affichée telle quelle', async (
   await expect(anomaly(page)).toHaveAttribute('data-anomaly-scope', 'authoritative');
   await expect(anomaly(page)).toHaveAttribute('data-anomaly-kind', 'negative');
   await expect(anomaly(page)).toContainText('Occupation négative');
-  // Not colour alone: the reason is written out.
-  await expect(anomaly(page)).toContainText('conserve les comptages tels quels');
+  // Not colour alone: the reason and the action are written out. ADR-004 in
+  // two words, because this sits between the gauge and the count buttons.
+  await expect(anomaly(page)).toContainText('comptages conservés');
+  await expect(anomaly(page)).toContainText('signalez-le à la supervision');
 
   // Acknowledged, so there is nothing pending to disclose.
   await expect(disclosure(page)).toHaveCount(0);
@@ -116,10 +118,12 @@ test('2 · une projection négative est dite projetée, pas confirmée', async (
 
     await expect(anomaly(page)).toHaveAttribute('data-anomaly-scope', 'projected');
     await expect(anomaly(page)).toContainText('Occupation projetée négative');
-    await expect(anomaly(page)).toContainText('en attente de confirmation du serveur');
+    await expect(anomaly(page)).toContainText('en attente du serveur');
     // The lie this scenario exists to prevent: claiming the server holds a
-    // value it has never seen.
-    await expect(anomaly(page)).not.toContainText('conserve les comptages tels quels');
+    // value it has never seen. The authoritative wording is what would say
+    // so, and it ends by sending the operator to supervision — an escalation
+    // that would be wrong here, since nothing has been recorded yet.
+    await expect(anomaly(page)).not.toContainText('signalez-le à la supervision');
 
     // The server really is still at zero.
     expect(await serverOccupancy(topo.eventId)).toBe(0);
