@@ -1053,11 +1053,15 @@ describe('Draft editor — event, spaces and checkpoints', () => {
   // -------------------------------------------------------------------------
 
   describe('who may edit a draft', () => {
-    it('refuses every editor mutation to a supervisor', async () => {
-      // The dashboard hides the entry point from a supervisor, and this is
-      // the rule it is hiding: the server has always required admin for
-      // these routes, so a half-working editor is all a supervisor could
-      // ever have had.
+    /**
+     * A supervisor account, logged in.
+     *
+     * Supervisors run the event; admins prepare it. Every mutation the draft
+     * editor makes is a preparation mutation, so every one of them is
+     * admin-only — including the one that happens to share a route with the
+     * supervision screen.
+     */
+    async function loginAsSupervisor(): Promise<Record<string, string>> {
       const now = Date.now();
       sqlite
         .prepare(
@@ -1073,17 +1077,104 @@ describe('Draft editor — event, spaces and checkpoints', () => {
       });
       expect(login.statusCode, login.body).toBe(200);
       const raw = login.headers['set-cookie'];
-      const supervisorAuth = {
+      return {
         cookie: (Array.isArray(raw) ? raw : [raw as string]).map((c) => String(c).split(';')[0]).join('; '),
         'x-csrf-token': login.json().csrfToken as string,
       };
+    }
 
-      const { eventId, siteId, checkpointId } = await createDraft();
+    it('refuses the editor’s own event save to a supervisor, changing nothing', async () => {
+      // The hole this closes: authentication on PATCH /events/:id is
+      // deliberately role-free, because the supervision screen adjusts a
+      // live event's capacity through it. `expectedStatus` is what marks a
+      // request as the draft editor's — and until now nothing checked who
+      // was sending it, so a supervisor could rewrite a draft's metadata
+      // through the one preparation mutation that shares a route with
+      // supervision.
+      const { eventId } = await createDraft();
+      const supervisorAuth = await loginAsSupervisor();
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/events/${eventId}`,
+        headers: supervisorAuth,
+        payload: { name: 'Réécrit par un superviseur', capacity: 4242, expectedStatus: 'draft' },
+      });
+
+      expect(res.statusCode, res.body).toBe(403);
+      expect(res.json().code).toBe('FORBIDDEN');
+
+      // Re-read as admin: the refusal evaluated nothing and wrote nothing.
+      const after = await app.inject({ method: 'GET', url: `/api/v1/events/${eventId}`, headers: auth() });
+      expect(after.json().name).toBe('Festival');
+      expect(after.json().capacity).toBe(2000);
+    });
+
+    it('refuses a draft-preconditioned save even when it would otherwise be invalid', async () => {
+      // Authorization comes first. A supervisor sending an editor request
+      // that would fail validation anyway must still be told 403, not shown
+      // which of their fields the server disliked.
+      const { eventId } = await createDraft();
+      const supervisorAuth = await loginAsSupervisor();
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/events/${eventId}`,
+        headers: supervisorAuth,
+        payload: { timezone: '+05:00', expectedStatus: 'draft' },
+      });
+
+      expect(res.statusCode, res.body).toBe(403);
+      expect(res.json().code).toBe('FORBIDDEN');
+    });
+
+    it('leaves the supervision surface’s own event PATCH open to a supervisor', async () => {
+      // The other half of the rule, and the reason the whole route is not
+      // simply admin-only: adjusting a live event's capacity is supervision,
+      // not preparation, and it stays available.
+      const { eventId } = await createDraft();
+      await app.inject({ method: 'POST', url: `/api/v1/events/${eventId}/start`, headers: auth() });
+      const supervisorAuth = await loginAsSupervisor();
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/events/${eventId}`,
+        headers: supervisorAuth,
+        payload: { capacity: 2600 },
+      });
+
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().capacity).toBe(2600);
+    });
+
+    it('refuses every editor mutation to a supervisor', async () => {
+      // Every mutation the draft editor can issue, including the event save
+      // and the checkpoint creation the earlier version of this test left
+      // out. A claim to cover "every" one has to be checkable against the
+      // editor's own request list.
+      const { eventId, siteId, externalId, checkpointId } = await createDraft();
+      const supervisorAuth = await loginAsSupervisor();
 
       const mutations = [
+        {
+          method: 'PATCH' as const,
+          url: `/api/v1/events/${eventId}`,
+          payload: { name: 'X', capacity: 10, expectedStatus: 'draft' },
+        },
         { method: 'POST' as const, url: `/api/v1/events/${eventId}/spaces`, payload: { name: 'X', kind: 'leaf' } },
         { method: 'PATCH' as const, url: `/api/v1/events/${eventId}/spaces/${siteId}`, payload: { name: 'X' } },
         { method: 'DELETE' as const, url: `/api/v1/events/${eventId}/spaces/${siteId}`, payload: undefined },
+        {
+          method: 'POST' as const,
+          url: `/api/v1/events/${eventId}/checkpoints`,
+          payload: {
+            name: 'X',
+            spaceAId: externalId,
+            spaceBId: siteId,
+            labelAToB: 'ENTRÉE +1',
+            labelBToA: 'SORTIE −1',
+          },
+        },
         {
           method: 'PATCH' as const,
           url: `/api/v1/events/${eventId}/checkpoints/${checkpointId}`,
@@ -1101,6 +1192,21 @@ describe('Draft editor — event, spaces and checkpoints', () => {
         });
         expect(res.statusCode, `${mutation.method} ${mutation.url} -> ${res.body}`).toBe(403);
       }
+
+      // And nothing in the draft moved, on any of the seven attempts.
+      const event = (await app.inject({ method: 'GET', url: `/api/v1/events/${eventId}`, headers: auth() })).json();
+      expect(event.name).toBe('Festival');
+      expect(event.capacity).toBe(2000);
+
+      const spaces = (
+        await app.inject({ method: 'GET', url: `/api/v1/events/${eventId}/spaces`, headers: auth() })
+      ).json();
+      const checkpoints = (
+        await app.inject({ method: 'GET', url: `/api/v1/events/${eventId}/checkpoints`, headers: auth() })
+      ).json();
+      expect(spaces).toHaveLength(2);
+      expect(checkpoints).toHaveLength(1);
+      expect(checkpoints[0].name).toBe('Porte principale');
     });
   });
 });

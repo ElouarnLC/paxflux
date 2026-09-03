@@ -149,6 +149,10 @@ export async function registerEventRoutes(app: FastifyInstance, sqlite: Database
   // draft editor, which must never touch anything but a draft. They are told
   // apart by `expectedStatus`, a precondition the editor always sends and
   // the supervision surface never does — so neither constrains the other.
+  //
+  // That split carries authorization with it. Supervision stays open to any
+  // authenticated staff member; the editor path is admin-only, matching
+  // every other mutation the editor makes.
   app.patch('/api/v1/events/:id', async (req, reply) => {
     const sessionData = await requireStaffAuth(req, reply, db, env);
     if (!sessionData) return;
@@ -176,6 +180,27 @@ export async function registerEventRoutes(app: FastifyInstance, sqlite: Database
       }
 
       const { expectedStatus, ...updates } = parseResult.data;
+
+      // The editor path is an admin surface, and this is where that starts.
+      //
+      // Authentication above is deliberately role-free: the supervision
+      // screen legitimately adjusts a live event's capacity, and tightening
+      // the whole route would take that away. But `expectedStatus` is what
+      // marks a request as coming from the draft editor, and every other
+      // mutation that editor makes — spaces, checkpoints — already requires
+      // admin. Without this check a supervisor could reach the one part of
+      // the preparation surface that happens to share a route with
+      // supervision, and rewrite a draft's name, capacity and timezone.
+      //
+      // Checked the moment the request is known to be an editor request:
+      // before the timezone rules, before the precondition, before anything
+      // is written. A 403 here has evaluated nothing and changed nothing.
+      if (expectedStatus === 'draft' && sessionData.user.role !== 'admin') {
+        return reply
+          .status(403)
+          .send(createProblemDetails(403, 'FORBIDDEN', 'Accès interdit', 'Droits administrateur requis.'));
+      }
+
       const now = Date.now();
 
       // Timezone is preparation, not operation.
