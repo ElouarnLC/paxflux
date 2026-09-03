@@ -43,6 +43,47 @@ async function pairThisBrowser(page: Page, name: string): Promise<{ eventId: str
   return { eventId: topo.eventId };
 }
 
+/**
+ * Gets the service worker controlling this page, or reports that it could not.
+ *
+ * The platform's rule is that a worker takes control from the first
+ * navigation *after* it activates — this project uses `registerType:
+ * 'prompt'`, so there is no `clientsClaim`. A single reload issued straight
+ * after pairing can therefore race activation and land before it, leaving
+ * the page uncontrolled with no further navigation coming: that is exactly
+ * how this failed on a loaded CI runner while passing locally.
+ *
+ * So activation is awaited first, and the navigation that claims control is
+ * retried a bounded number of times. The assertion at the call site is
+ * unchanged and still strict — this makes the *setup* deterministic rather
+ * than making the test easier to satisfy.
+ */
+async function ensureServiceWorkerControls(page: Page, attempts = 3): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    // Resolves once a worker is activated for this scope. Without this the
+    // reload below can precede registration entirely.
+    const activated = await page.evaluate(async () => {
+      if (!('serviceWorker' in navigator)) return false;
+      try {
+        await navigator.serviceWorker.ready;
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (!activated) return false;
+
+    // Short poll between attempts: control either arrives on the navigation
+    // just made or needs another one, and waiting out a long timeout before
+    // trying the thing that actually grants it wastes the whole budget.
+    if (await waitForServiceWorkerControl(page, 3_000)) return true;
+
+    // Activated but not yet in control: give it the navigation it needs.
+    await page.reload();
+  }
+  return waitForServiceWorkerControl(page);
+}
+
 const currentPath = (page: Page) => new URL(page.url()).pathname;
 
 test('un téléphone appairé rouvre sur son compteur, pas sur l’administration', async ({ page }) => {
@@ -63,13 +104,7 @@ test('un téléphone appairé rouvre sur son compteur sans réseau', async ({ pa
   // `/meta` request to depend on.
   await pairThisBrowser(page, 'RC2D racine hors ligne');
 
-  // The worker installs on the first visit and takes control from the next
-  // navigation onwards — this project uses `registerType: 'prompt'`, so
-  // there is no `clientsClaim`. The reload is that navigation, exactly as
-  // the Phase 6 offline spec documents. What is under test here is the root
-  // route's behaviour once the worker controls the page, not install timing.
-  await page.reload();
-  const controlled = await waitForServiceWorkerControl(page);
+  const controlled = await ensureServiceWorkerControls(page);
   expect(controlled, 'the service worker must control the page before going offline').toBe(true);
 
   await context.setOffline(true);
