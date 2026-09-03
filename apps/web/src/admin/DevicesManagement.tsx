@@ -226,7 +226,7 @@ export const DevicesManagement: React.FC = () => {
         </div>
 
         {/* The 180px code keeps its size — smaller scans badly — so the
-            panel’s own padding is what gives way at 320px, and the text
+            panel's own padding is what gives way at 320px, and the text
             column shrinks beside it. */}
         {activeInvite ? (
           <CardPanel className="mt-6 flex flex-col items-center gap-4 border-primary-accent/40 p-4 sm:gap-6 sm:p-6 md:flex-row">

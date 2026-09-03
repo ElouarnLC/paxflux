@@ -120,6 +120,13 @@ test('un navigateur sans API de vibration est un fait, pas une panne', async ({ 
   await expect(page.getByTestId('haptic-result')).toHaveAttribute('data-haptic-outcome', 'unsupported');
   await expect(page.getByTestId('haptic-result')).toContainText('iPhone');
   await expect(page.getByTestId('haptic-result')).toContainText('Le comptage fonctionne sans vibration');
+
+  // And the claim is true: this handset pairs and counts exactly as any
+  // other does, with no vibration API on the page at all.
+  await page.getByRole('button', { name: 'Continuer sans renommer' }).click();
+  await page.waitForURL('**/counter');
+  await page.getByTestId('count-a-to-b').click();
+  await expect(page.getByTestId('global-occupancy')).toHaveText('1');
 });
 
 test('une API de vibration qui lève ne casse pas l’écran d’appairage', async ({ page }) => {

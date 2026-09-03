@@ -504,7 +504,7 @@ export const EventWizard: React.FC = () => {
                   </div>
 
                   {/* Directions read as the movement they are. "A → B" is
-                      the ledger’s vocabulary, not the field’s: someone at a
+                      the ledger's vocabulary, not the field's: someone at a
                       door thinks "from the outside into the site". And for an
                       internal transfer there is no global entrée/sortie —
                       Site → VIP is neither. */}

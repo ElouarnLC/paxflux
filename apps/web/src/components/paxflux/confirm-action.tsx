@@ -227,7 +227,7 @@ export interface RenameActionProps extends Omit<ConfirmActionProps, 'onConfirm' 
   currentValue: string;
   maxLength: number;
   placeholder?: string;
-  /** The server’s refusal, shown in the dialog so the operator can correct it in place. */
+  /** The server's refusal, shown in the dialog so the operator can correct it in place. */
   errorMessage?: string | null;
   /**
    * Called when the dialog opens.

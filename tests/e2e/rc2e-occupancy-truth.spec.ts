@@ -272,6 +272,13 @@ test('6 · la supervision nomme l’anomalie et pointe vers la correction qu’e
   }
 
   const page = await browser.newPage();
+  // A negative occupancy is outside the progress bar's 0–100 scale, and Radix
+  // answers an out-of-range value with a console.error and an unrendered
+  // bar — so the anomaly state was the one state the gauge gave up in.
+  const consoleErrors: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(msg.text());
+  });
   try {
     await page.goto('/login');
     await page.getByPlaceholder('admin').fill(ADMIN_USERNAME);
@@ -291,6 +298,8 @@ test('6 · la supervision nomme l’anomalie et pointe vers la correction qu’e
 
     // And the gauge itself still says −1: supervision does not clamp either.
     await expect(page.getByText('−1', { exact: true }).first()).toBeVisible();
+
+    expect(consoleErrors, 'the anomaly state renders cleanly').toEqual([]);
   } finally {
     await page.close();
   }
