@@ -109,6 +109,10 @@ async function pairPhone(browser: import('@playwright/test').Browser, pairUrl: s
   });
   const page = await context.newPage();
   await page.goto(new URL(pairUrl).pathname + new URL(pairUrl).hash);
+  // RC2-D: the operator continues past the naming step. Skipping the name
+  // is the path an acceptance run takes — naming is optional, and this
+  // scenario is about counting.
+  await page.getByRole('button', { name: 'Continuer sans renommer' }).click();
   await page.waitForURL('**/counter');
   await expect(page.getByTestId('count-a-to-b')).toBeVisible();
   return { context, page };

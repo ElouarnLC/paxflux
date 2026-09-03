@@ -48,6 +48,9 @@ test('cycle appareil complet : appairage sur un second appareil, heartbeat, supe
 
   const pairPath = new URL(invite.pairUrl).pathname + new URL(invite.pairUrl).hash;
   await phone.goto(pairPath);
+  // RC2-D: a successful pairing lands on the naming step; continuing is a
+  // deliberate act rather than an 800ms timer.
+  await phone.getByRole('button', { name: 'Continuer sans renommer' }).click();
   await phone.waitForURL('**/counter');
 
   // The secret must not be left sitting in the address bar after use.
