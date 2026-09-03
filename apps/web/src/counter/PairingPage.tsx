@@ -1,11 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
-import { beginPairingHandoff, persistBootstrap } from '../offline/snapshot.js';
+import { beginPairingHandoff, persistBootstrap, persistCurrentDeviceLabel } from '../offline/snapshot.js';
 import { Loader2, AlertCircle, CheckCircle, Smartphone } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { CenteredPanel } from '@/components/paxflux/layout';
-import { DeviceBootstrapResponse, DeviceSessionModel, ProblemDetails } from '@paxflux/shared';
+import {
+  DEVICE_LABEL_MAX_LENGTH,
+  DeviceBootstrapResponse,
+  DeviceSessionModel,
+  ProblemDetails,
+  RenameDeviceResponse,
+} from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
 
 interface PairDeviceResponse {
@@ -24,6 +33,20 @@ export const PairingPage: React.FC = () => {
   const navigate = useNavigate();
   const [status, setStatus] = useState<'reading' | 'pairing' | 'success' | 'error'>('reading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  /**
+   * The identity this phone was given, and what the operator may rename it
+   * to.
+   *
+   * Pairing is already complete by the time any of this is on screen. The
+   * naming step is a courtesy afterwards, never a condition: the previous
+   * version navigated away on an 800ms timer, which gave a field operator no
+   * chance to say which handset this is and no way to read the name it got.
+   */
+  const [pairedSession, setPairedSession] = useState<Pick<DeviceSessionModel, 'id' | 'label'> | null>(null);
+  const [label, setLabel] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   useEffect(() => {
     async function handlePairing() {
@@ -80,10 +103,9 @@ export const PairingPage: React.FC = () => {
             console.debug('Bootstrap cache pre-fill failed; the counter will fetch it itself:', err);
           }
 
+          setPairedSession(res.deviceSession);
+          setLabel(res.deviceSession.label);
           setStatus('success');
-          setTimeout(() => {
-            navigate('/counter', { replace: true });
-          }, 800);
         }
       } catch (err) {
         setStatus('error');
@@ -93,8 +115,55 @@ export const PairingPage: React.FC = () => {
       }
     }
 
+    // Runs once. `navigate` is deliberately not a dependency any more: the
+    // pairing effect no longer navigates — the operator does, from the
+    // completion step below.
     handlePairing();
-  }, [navigate]);
+  }, []);
+
+  const continueToCounter = () => navigate('/counter', { replace: true });
+
+  /**
+   * Saves the name, then continues — and continues anyway if it fails.
+   *
+   * Pairing succeeded before this button existed. A rename that the server
+   * refuses is a naming problem, not a pairing problem, so it is shown and
+   * the operator can go on counting under the generated label. Nothing here
+   * re-consumes the QR token, re-runs the handoff or creates a session: it
+   * is one authenticated PATCH against the session this phone already holds.
+   */
+  const saveNameAndContinue = async () => {
+    if (!pairedSession) return;
+    const trimmed = label.trim();
+
+    // Nothing to say to the server if the name is unchanged.
+    if (trimmed === pairedSession.label) {
+      continueToCounter();
+      return;
+    }
+
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      const res = await apiFetch<RenameDeviceResponse>('/api/v1/device/session', {
+        method: 'PATCH',
+        body: JSON.stringify({ label: trimmed }),
+      });
+      // The canonical label the server stored, into the local bootstrap the
+      // counter reads. Identity-guarded inside: if the bootstrap pre-fill
+      // never landed there is nothing to update, and the counter's own
+      // bootstrap fetch will carry the new label instead.
+      await persistCurrentDeviceLabel(res.deviceSession.id, res.deviceSession.label);
+      continueToCounter();
+    } catch (err) {
+      setRenameError(errorDetail(err, 'Ce nom n’a pas pu être enregistré.'));
+    } finally {
+      setRenaming(false);
+    }
+  };
+
+  const trimmedLabel = label.trim();
+  const labelIsValid = trimmedLabel.length > 0 && trimmedLabel.length <= DEVICE_LABEL_MAX_LENGTH;
 
   return (
     <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
@@ -111,11 +180,53 @@ export const PairingPage: React.FC = () => {
           </div>
         ) : null}
 
-        {status === 'success' ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-8 text-success">
-            <CheckCircle className="size-10" />
-            <span className="text-base font-semibold">Appairage réussi !</span>
-            <span className="text-xs text-muted-foreground">Ouverture de l’interface de comptage...</span>
+        {status === 'success' && pairedSession ? (
+          <div className="flex flex-col gap-4 py-6 text-left">
+            <div className="flex flex-col items-center gap-2 text-success">
+              <CheckCircle className="size-10" />
+              <span className="text-base font-semibold">Appairage réussi</span>
+            </div>
+
+            {/* Naming is optional and says so. The generated name is already
+                stored and already works; this only exists so the operator
+                can say which physical phone this is. */}
+            <div className="space-y-1.5">
+              <Label htmlFor="device-label">Nom de cet appareil</Label>
+              <Input
+                id="device-label"
+                value={label}
+                maxLength={DEVICE_LABEL_MAX_LENGTH}
+                autoComplete="off"
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="Ex : téléphone entrée nord"
+              />
+              <p className="text-xs text-muted-foreground">
+                Ce nom identifie le téléphone, pas la porte. Il reste modifiable plus tard.
+              </p>
+            </div>
+
+            {renameError ? (
+              <Alert tone="danger" className="text-left">
+                <AlertCircle />
+                <div className="min-w-0">
+                  <AlertTitle>Nom non enregistré</AlertTitle>
+                  <AlertDescription>
+                    {renameError} L’appairage reste valide : vous pouvez continuer avec «&nbsp;
+                    {pairedSession.label}&nbsp;».
+                  </AlertDescription>
+                </div>
+              </Alert>
+            ) : null}
+
+            <div className="flex flex-col gap-2">
+              <Button onClick={saveNameAndContinue} disabled={renaming || !labelIsValid} block>
+                {renaming ? <Loader2 className="animate-spin" /> : null}
+                Continuer avec ce nom
+              </Button>
+              <Button variant="secondary" onClick={continueToCounter} disabled={renaming} block>
+                Continuer sans renommer
+              </Button>
+            </div>
           </div>
         ) : null}
 

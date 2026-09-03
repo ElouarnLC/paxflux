@@ -505,6 +505,22 @@ export const CounterView: React.FC = () => {
             <h1 className="text-base sm:text-xl font-black text-foreground tracking-tight leading-tight line-clamp-2">
               {bootstrap.checkpoint.name}
             </h1>
+            {/* The physical handset, kept distinct from the door it stands
+                at. One door can have several phones on it, and an operator
+                holding one needs to know which one they are holding — but
+                the door is what the count means, so this stays subordinate
+                to it rather than replacing it.
+
+                `break-words` with a clamp because a device name is free
+                text: it wraps to two lines and then stops, inside the same
+                `min-w-0` column that already keeps the sync badge on
+                screen at 320px. */}
+            <p
+              data-testid="counter-device-label"
+              className="mt-0.5 break-words line-clamp-2 text-[11px] font-medium text-muted-foreground"
+            >
+              Appareil : {bootstrap.deviceSession.label}
+            </p>
           </div>
 
           {/* Sync badge. Five distinct states, none of them conflating

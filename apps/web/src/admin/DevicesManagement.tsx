@@ -8,6 +8,8 @@ import {
   CheckpointModel,
   EventDeviceSummary,
   ProblemDetails,
+  DEVICE_LABEL_MAX_LENGTH,
+  RenameDeviceResponse,
 } from '@paxflux/shared';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -25,7 +27,7 @@ import {
   TableRow,
   TableScroller,
 } from '@/components/ui/table';
-import { ConfirmAction } from '@/components/paxflux/confirm-action';
+import { ConfirmAction, RenameAction } from '@/components/paxflux/confirm-action';
 import { PageHeader, Section } from '@/components/paxflux/layout';
 import { StatusText } from '@/components/paxflux/status';
 
@@ -53,6 +55,7 @@ export const DevicesManagement: React.FC = () => {
   const [listState, setListState] = useState<ListState>({ kind: 'loading' });
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string>('');
   const [activeInvite, setActiveInvite] = useState<CreateDeviceInviteResponse | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -139,6 +142,29 @@ export const DevicesManagement: React.FC = () => {
   // `window.confirm`, which on an installed PWA renders as an unbranded
   // system sheet naming the origin — and which Playwright dismisses by
   // default, so the path was effectively untested.
+  /**
+   * Renames one device through the real API, then converges on the server.
+   *
+   * `silent` refresh so the table does not flash back to a loading skeleton
+   * for a one-field change, and so the QR panel currently on screen is not
+   * torn down because a row was renamed. Returns whether it succeeded: the
+   * dialog stays open on a refusal so the name can be corrected in place.
+   */
+  const handleRenameDevice = async (sessionId: string, label: string): Promise<boolean> => {
+    setRenameError(null);
+    try {
+      await apiFetch<RenameDeviceResponse>(`/api/v1/device-sessions/${sessionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ label }),
+      });
+      await fetchDevices({ silent: true });
+      return true;
+    } catch (err) {
+      setRenameError(errorDetail(err, 'Ce nom n’a pas pu être enregistré.'));
+      return false;
+    }
+  };
+
   const handleRevokeDevice = async (sessionId: string) => {
     setActionError(null);
     try {
@@ -226,6 +252,26 @@ export const DevicesManagement: React.FC = () => {
                 </Alert>
               ) : null}
 
+              {/* Judged on the URL the phone actually receives, not on
+                  whether PUBLIC_BASE_URL happens to be set. Pairing is not
+                  blocked: it works over plain HTTP and refusing it would
+                  help nobody. What does not work is everything that makes
+                  this an installed counter — service workers, and so the
+                  offline outbox, need a secure context, which browsers grant
+                  to HTTPS and to loopback but never to a LAN IP over HTTP.
+                  Saying so here is the difference between an operator
+                  choosing to accept that and discovering it at the door. */}
+              {activeInvite.insecureForInstall ? (
+                <Alert tone="warning" className="text-left" data-testid="pairing-insecure-context">
+                  <AlertTriangle />
+                  <AlertDescription className="mt-0 text-foreground/90">
+                    L’appairage peut fonctionner en HTTP, mais l’installation de l’application et le mode hors
+                    ligne nécessitent HTTPS sur un téléphone. Sur cette adresse, «&nbsp;Ajouter à l’écran
+                    d’accueil&nbsp;» créera un raccourci, pas une application installée.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+
               <p className="select-all break-all rounded-lg border border-border bg-background p-2.5 font-mono text-[11px] text-muted-foreground">
                 {activeInvite.pairUrl}
               </p>
@@ -294,6 +340,25 @@ export const DevicesManagement: React.FC = () => {
                       {formatLastSeen(dev.lastSeenAtMs)}
                     </TableCell>
                     <TableCell className="text-right">
+                      {/* Two actions on one row: renaming is routine, so it
+                          is the quiet one; revoking is not. */}
+                      <div className="flex items-center justify-end gap-2">
+                        <RenameAction
+                          title="Renommer cet appareil"
+                          description={`Ce nom identifie le téléphone, pas la porte « ${dev.checkpointName} ».`}
+                          fieldLabel="Nom de l’appareil"
+                          currentValue={dev.label}
+                          maxLength={DEVICE_LABEL_MAX_LENGTH}
+                          placeholder="Ex : téléphone entrée nord"
+                          confirmLabel="Enregistrer le nom"
+                          errorMessage={renameError}
+                          onRename={(label) => handleRenameDevice(dev.id, label)}
+                          trigger={
+                            <Button variant="secondary" size="sm" aria-label={`Renommer ${dev.label}`}>
+                              Renommer
+                            </Button>
+                          }
+                        />
                       <ConfirmAction
                         title="Révoquer cet appareil ?"
                         description={`« ${dev.label} » (${dev.checkpointName}) ne pourra plus envoyer de comptages. Les comptages qu'il détient encore devront être régularisés par un responsable.`}
@@ -306,6 +371,7 @@ export const DevicesManagement: React.FC = () => {
                           </Button>
                         }
                       />
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

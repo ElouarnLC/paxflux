@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { apiFetch } from '../api/client.js';
 import { AuthProvider } from '../auth/AuthProvider.js';
@@ -29,40 +29,41 @@ import { CenteredPanel } from '@/components/paxflux/layout';
  */
 const RootRedirect: React.FC = () => {
   const [destination, setDestination] = useState<RootDestination | null>(null);
-  const [attempt, setAttempt] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  /**
+   * Resolves once. Called on mount and again by the retry button, rather
+   * than re-run through a counter in the dependency list — the retry is a
+   * deliberate action, and saying so keeps it out of React's hands.
+   */
+  const resolve = useCallback(async () => {
+    setDestination(null);
 
-    async function resolve() {
-      const identity = await readLocalDeviceIdentity();
+    const identity = await readLocalDeviceIdentity();
 
-      // A paired phone stops here. No request is made, so an installed
-      // counter opened with no network still reaches its counter.
-      if (identity && (identity.hasBootstrap || identity.hasPendingSession)) {
-        if (!cancelled) setDestination(resolveRootDestination(identity, { kind: 'unreachable' }));
-        return;
-      }
-
-      let meta: MetaOutcome;
-      try {
-        const res = await apiFetch<MetaResponse>('/api/v1/meta');
-        meta = res.isInitialized ? { kind: 'initialized' } : { kind: 'uninitialized' };
-      } catch {
-        // Not an answer, and not treated as one. The old code left `meta`
-        // null here and fell through to `/setup`, offering to create a first
-        // administrator on an instance that already had one.
-        meta = { kind: 'unreachable' };
-      }
-
-      if (!cancelled) setDestination(resolveRootDestination(identity, meta));
+    // A paired phone stops here. No request is made, so an installed
+    // counter opened with no network still reaches its counter.
+    if (identity && (identity.hasBootstrap || identity.hasPendingSession)) {
+      setDestination(resolveRootDestination(identity, { kind: 'unreachable' }));
+      return;
     }
 
+    let meta: MetaOutcome;
+    try {
+      const res = await apiFetch<MetaResponse>('/api/v1/meta');
+      meta = res.isInitialized ? { kind: 'initialized' } : { kind: 'uninitialized' };
+    } catch {
+      // Not an answer, and not treated as one. The old code left `meta`
+      // null here and fell through to `/setup`, offering to create a first
+      // administrator on an instance that already had one.
+      meta = { kind: 'unreachable' };
+    }
+
+    setDestination(resolveRootDestination(identity, meta));
+  }, []);
+
+  useEffect(() => {
     resolve();
-    return () => {
-      cancelled = true;
-    };
-  }, [attempt]);
+  }, [resolve]);
 
   if (destination === null) {
     return (
@@ -93,7 +94,7 @@ const RootRedirect: React.FC = () => {
             </AlertDescription>
           </div>
         </Alert>
-        <Button onClick={() => setAttempt((n) => n + 1)} className="w-full sm:w-auto">
+        <Button onClick={resolve} className="w-full sm:w-auto">
           <RefreshCw />
           Réessayer
         </Button>

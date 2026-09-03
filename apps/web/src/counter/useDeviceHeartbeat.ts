@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { DEVICE_HEARTBEAT_INTERVAL_MS } from '@paxflux/shared';
+import { DEVICE_HEARTBEAT_INTERVAL_MS, DeviceHeartbeatResponse } from '@paxflux/shared';
 import { apiFetch } from '../api/client.js';
 import { getOwnerUnresolvedActionsCount } from '../offline/outbox.js';
-import { currentOwner, observedClosingEpoch } from '../offline/snapshot.js';
+import { currentOwner, observedClosingEpoch, persistCurrentDeviceLabel } from '../offline/snapshot.js';
 import { CLIENT_APP_VERSION } from '../version.js';
 
 export type HeartbeatState = 'idle' | 'running' | 'session-invalid';
@@ -63,7 +63,7 @@ export function useDeviceHeartbeat(enabled: boolean): HeartbeatState {
         // tracks the next sequence to assign, not the last one the server
         // acknowledged, and reporting the former as the latter would tell
         // the supervisor something the client cannot actually vouch for.
-        await apiFetch('/api/v1/device/heartbeat', {
+        const response = await apiFetch<DeviceHeartbeatResponse>('/api/v1/device/heartbeat', {
           method: 'POST',
           body: JSON.stringify({
             pendingCount,
@@ -79,6 +79,25 @@ export function useDeviceHeartbeat(enabled: boolean): HeartbeatState {
             appVersion: CLIENT_APP_VERSION,
           }),
         });
+
+        // The beat brings the canonical label back with it, so a staff
+        // rename reaches an open counter without a second polling loop.
+        //
+        // Guarded twice over. The server already refuses to answer for a
+        // session the cookie does not authenticate, and this refuses to
+        // apply an answer that does not name the identity this beat was
+        // sent for — a response in flight across a re-pairing describes a
+        // device this browser has retired. `persistCurrentDeviceLabel`
+        // checks the stored identity a third time before writing, and
+        // writes nothing but the label.
+        //
+        // Nothing is returned to the caller: `device_config` is read by
+        // CounterView through a Dexie live query, so writing the label is
+        // already how the screen learns about it. A callback would be a
+        // second path to the same render.
+        if (response?.deviceSession && response.deviceSession.id === owner.deviceSessionId) {
+          await persistCurrentDeviceLabel(response.deviceSession.id, response.deviceSession.label);
+        }
       } catch (err) {
         const problem = typeof err === 'object' && err !== null ? (err as { status?: number; code?: string }) : {};
         const isRevoked = problem.status === 401;
