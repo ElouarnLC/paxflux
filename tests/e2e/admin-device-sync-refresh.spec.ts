@@ -58,8 +58,8 @@ test('l\'admin voit un appareil redevenir synchronisé pendant `closing`, sans r
   // ambiguous.
   const lifecycleSection = adminPage
     .locator('section')
-    .filter({ has: adminPage.getByRole('heading', { name: /Cycle de vie de l'événement/i }) });
-  const closeButton = lifecycleSection.getByRole('button', { name: /Clôturer l'événement/i });
+    .filter({ has: adminPage.getByRole('heading', { name: /Cycle de vie de l’événement/i }) });
+  const closeButton = lifecycleSection.getByRole('button', { name: /Clôturer l’événement/i });
 
   await expect(lifecycleSection.getByText(/hors ligne/i)).toBeVisible({ timeout: 15_000 });
   await expect(

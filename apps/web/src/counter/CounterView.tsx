@@ -125,12 +125,12 @@ const ZoneOccupancyBadge: React.FC<{
   if (occupancy === null) return null;
   const pending = pendingDelta !== null && pendingDelta !== 0;
 
+  // `data-occupancy` carries the figure machine-readably: the badge's own
+  // text ends in a screen-reader sentence when something is pending, so
+  // reading the number off the end of it is not sound.
   return (
     <span
       data-testid={testId}
-      // The figure, machine-readable. The badge's own text now ends in a
-      // screen-reader sentence when something is pending, so reading the
-      // number off the end of it is no longer sound.
       data-occupancy={occupancy}
       data-pending={pending ? 'true' : 'false'}
       className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg border border-border bg-card text-foreground/90 font-mono inline-flex items-baseline gap-1"
@@ -138,7 +138,7 @@ const ZoneOccupancyBadge: React.FC<{
       {/* Only the zone name gives way. The occupancy is the reason the badge
           exists, so it never truncates. */}
       <span className="min-w-0 truncate">{name}</span>
-      <strong className="flex-shrink-0 text-foreground">{occupancy}</strong>
+      <strong className="flex-shrink-0 text-foreground">{formatCount(occupancy)}</strong>
       {pending ? (
         <>
           <span aria-hidden="true" className="flex-shrink-0 text-warning">

@@ -40,11 +40,11 @@ const eventName = (label: string) => `${label} · ${test.info().project.name}`;
 async function openWizard(page: Page): Promise<void> {
   await loginAsAdmin(page);
   await page.goto('/admin/events/new');
-  await expect(page.getByLabel("Nom de l'événement *")).toBeVisible();
+  await expect(page.getByLabel("Nom de l’événement *")).toBeVisible();
 }
 
 const capacityField = (page: Page) => page.getByLabel('Capacité maximale (jauge) *');
-const zoneCapacity = (page: Page) => page.getByLabel("Capacité de l'espace");
+const zoneCapacity = (page: Page) => page.getByLabel("Capacité de l’espace");
 const next = (page: Page) => page.getByRole('button', { name: 'Suivant' });
 const back = (page: Page) => page.getByRole('button', { name: 'Retour' });
 
@@ -91,7 +91,7 @@ test('une capacité de zone égale à celle de l’événement n’est jamais in
   // Deliberately the same number the event carries: a value-based rule
   // would adopt this zone and then overwrite it below.
   await page.getByRole('button', { name: 'Ajouter un espace intérieur' }).click();
-  await page.getByLabel("Nom de l'espace intérieur").nth(1).fill('Salle annexe');
+  await page.getByLabel("Nom de l’espace intérieur").nth(1).fill('Salle annexe');
   await zoneCapacity(page).nth(1).fill('2000');
 
   await back(page).click();
@@ -106,18 +106,18 @@ test('les capacités saisies dans l’assistant sont celles qui sont enregistré
   await openWizard(page);
 
   const name = eventName('RC2C Capacités persistées');
-  await page.getByLabel("Nom de l'événement *").fill(name);
+  await page.getByLabel("Nom de l’événement *").fill(name);
   await capacityField(page).fill('2600');
   await next(page).click();
 
-  await page.getByLabel("Nom de l'espace intérieur").first().fill('Grande halle');
+  await page.getByLabel("Nom de l’espace intérieur").first().fill('Grande halle');
   await page.getByRole('button', { name: 'Ajouter un espace intérieur' }).click();
-  await page.getByLabel("Nom de l'espace intérieur").nth(1).fill('Carré VIP');
+  await page.getByLabel("Nom de l’espace intérieur").nth(1).fill('Carré VIP');
   await zoneCapacity(page).nth(1).fill('180');
 
   await next(page).click();
   await next(page).click();
-  await page.getByRole('button', { name: "Créer l'événement (brouillon)" }).click();
+  await page.getByRole('button', { name: "Créer l’événement (brouillon)" }).click();
   await page.waitForURL('**/admin**');
 
   const events = await session.api.get('/api/v1/events').then((r) => r.json());
@@ -164,13 +164,13 @@ test('le fuseau horaire choisi à la création est celui qui est enregistré', a
   await openWizard(page);
 
   const name = eventName('RC2C Fuseau création');
-  await page.getByLabel("Nom de l'événement *").fill(name);
+  await page.getByLabel("Nom de l’événement *").fill(name);
   await page.getByLabel('Fuseau horaire').fill('Indian/Reunion');
 
   await next(page).click();
   await next(page).click();
   await next(page).click();
-  await page.getByRole('button', { name: "Créer l'événement (brouillon)" }).click();
+  await page.getByRole('button', { name: "Créer l’événement (brouillon)" }).click();
   await page.waitForURL('**/admin**');
 
   const events = await session.api.get('/api/v1/events').then((r) => r.json());
@@ -183,7 +183,7 @@ test('les sens de passage de l’assistant se lisent « De X vers Y »', async (
   await openWizard(page);
 
   await next(page).click();
-  await page.getByLabel("Nom de l'espace intérieur").first().fill('Esplanade');
+  await page.getByLabel("Nom de l’espace intérieur").first().fill('Esplanade');
   await next(page).click();
 
   await expect(page.getByText('De Extérieur vers Esplanade', { exact: true })).toBeVisible();
@@ -198,9 +198,9 @@ test('déplacer une extrémité réétiquette une suggestion mais jamais un libe
   await openWizard(page);
 
   await next(page).click();
-  await page.getByLabel("Nom de l'espace intérieur").first().fill('Esplanade');
+  await page.getByLabel("Nom de l’espace intérieur").first().fill('Esplanade');
   await page.getByRole('button', { name: 'Ajouter un espace intérieur' }).click();
-  await page.getByLabel("Nom de l'espace intérieur").nth(1).fill('Terrasse');
+  await page.getByLabel("Nom de l’espace intérieur").nth(1).fill('Terrasse');
   await next(page).click();
 
   const entryLabel = page.getByLabel('Libellé du bouton : De Extérieur vers Esplanade');

@@ -166,9 +166,9 @@ test('les cibles tactiles des écrans admin sont assez grandes', async ({ page }
 
   await page.getByRole('button', { name: 'Suivant' }).click();
   await expect(page.getByRole('heading', { name: '2. Espaces' })).toBeVisible();
-  await page.getByLabel("Nom de l'espace intérieur").first().fill(LONG_FIXTURE_NAMES.siteSpace);
+  await page.getByLabel("Nom de l’espace intérieur").first().fill(LONG_FIXTURE_NAMES.siteSpace);
   await page.getByRole('button', { name: 'Ajouter un espace intérieur' }).click();
-  await page.getByLabel("Nom de l'espace intérieur").nth(1).fill(LONG_FIXTURE_NAMES.vipSpace);
+  await page.getByLabel("Nom de l’espace intérieur").nth(1).fill(LONG_FIXTURE_NAMES.vipSpace);
   // Two rows means the per-row delete button is enabled and therefore a
   // real target — the single-row case is disabled and never tapped.
   await assertTouchTargets(page, '/admin/events/new — étape 2');

@@ -80,7 +80,7 @@ test('une alerte de confirmation tient également dans le viewport', async ({ pa
   await loginAsAdmin(page);
   await page.goto(`/admin?event=${topo.eventId}`);
 
-  await page.getByRole('button', { name: "Clôturer l'événement" }).click();
+  await page.getByRole('button', { name: "Clôturer l’événement" }).click();
   const dialog = page.getByRole('alertdialog');
   await expect(dialog).toBeVisible();
 

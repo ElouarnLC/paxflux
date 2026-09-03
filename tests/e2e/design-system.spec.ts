@@ -77,11 +77,11 @@ test('une transition de cycle de vie ouvre une vraie boîte de dialogue DOM', as
   await loginAsAdmin(page);
   await page.goto(`/admin?event=${topo.eventId}`);
 
-  await page.getByRole('button', { name: "Démarrer l'événement" }).click();
+  await page.getByRole('button', { name: "Démarrer l’événement" }).click();
 
   const dialog = page.getByRole('alertdialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole('heading', { name: "Démarrer l'événement ?" })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: "Démarrer l’événement ?" })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Annuler' })).toBeVisible();
 
   expect(
@@ -100,7 +100,7 @@ test('annuler une confirmation n’envoie aucune transition', async ({ page }) =
   const sent = watchTransitions(page, topo.eventId);
   await page.goto(`/admin?event=${topo.eventId}`);
 
-  await page.getByRole('button', { name: "Démarrer l'événement" }).click();
+  await page.getByRole('button', { name: "Démarrer l’événement" }).click();
   await expect(page.getByRole('alertdialog')).toBeVisible();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Annuler' }).click();
   await expect(page.getByRole('alertdialog')).toBeHidden();
@@ -125,7 +125,7 @@ test('le focus revient au déclencheur après la fermeture du dialogue', async (
   await loginAsAdmin(page);
   await page.goto(`/admin?event=${topo.eventId}`);
 
-  const trigger = page.getByRole('button', { name: "Démarrer l'événement" });
+  const trigger = page.getByRole('button', { name: "Démarrer l’événement" });
   await trigger.click();
   await expect(page.getByRole('alertdialog')).toBeVisible();
 
@@ -214,11 +214,11 @@ test('la réouverture exige elle aussi un motif audité', async ({ page }) => {
   await loginAsAdmin(page);
   await page.goto(`/admin?event=${topo.eventId}`);
 
-  await page.getByRole('button', { name: "Réouvrir l'événement" }).click();
+  await page.getByRole('button', { name: "Réouvrir l’événement" }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
 
-  const confirm = dialog.getByRole('button', { name: "Réouvrir l'événement" });
+  const confirm = dialog.getByRole('button', { name: "Réouvrir l’événement" });
   await expect(confirm).toBeDisabled();
   await dialog.getByRole('textbox').fill('Clôture anticipée par erreur');
   await expect(confirm).toBeEnabled();
@@ -265,7 +265,7 @@ test('révoquer un appareil passe par une confirmation, pas par une boîte navig
   expect(await getEventDevices(session, topo.eventId)).toHaveLength(1);
 
   await page.getByRole('button', { name: 'Révoquer', exact: true }).click();
-  await page.getByRole('alertdialog').getByRole('button', { name: "Révoquer l'appareil" }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: "Révoquer l’appareil" }).click();
 
   await expect
     .poll(async () => (await getEventDevices(session, topo.eventId)).length, { timeout: 10_000 })

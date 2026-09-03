@@ -582,15 +582,22 @@ export async function flushOutbox(): Promise<FlushOutcome> {
 
     // Everything the acknowledgment implies, committed together.
     //
-    // The counter's gauge is `authoritative + pendingDelta`, read from two
-    // live queries: one over `outbox_actions`, one over `event_state`. Two
-    // commits mean two renders, and the one in between is arithmetic that
-    // was never true — the acknowledged action already gone from the outbox
-    // while the state that absorbed it has not landed. On a single pending
-    // entry the gauge visibly fell 1 → 0 → 1 as the ACK arrived; on the
-    // other ordering it would read 1 → 2 → 1, the double jump. Dexie
+    // The counter's gauge is `authoritative + pendingDelta`, one term from
+    // `event_state` and one from `outbox_actions`. Written as two commits,
+    // the database itself passes through a state that was never true — the
+    // acknowledged action already gone from the outbox while the total that
+    // absorbed it has not landed — and any reader observes it. On a single
+    // pending entry the gauge visibly fell 1 → 0 → 1 as the ACK arrived; on
+    // the other ordering it would read 1 → 2 → 1, the double jump. Dexie
     // publishes live queries at commit, so one transaction makes the
-    // intermediate unobservable rather than merely unlikely.
+    // intermediate unobservable rather than merely unlikely. `CounterView`
+    // reads both through a single querier for the matching reason; neither
+    // half is sufficient alone.
+    //
+    // A throw in here now rolls the whole thing back rather than leaving
+    // some actions transitioned and others not: the rows stay `sending`,
+    // `recoverInFlightActions` returns them to `pending` at the next
+    // startup, and `clientActionId` idempotence makes the re-send safe.
     await localDb.transaction(
       'rw',
       localDb.outbox_actions,
