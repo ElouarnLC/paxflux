@@ -105,19 +105,33 @@ export function readOccupancyTruth(input: {
 }
 
 /**
- * A signed count, written the way the counter's own buttons are.
+ * A count, written the way the counter's own buttons are.
  *
  * The minus is U+2212, matching `SORTIE −1` on the count button rather than
  * a hyphen: at arm's length in the dark the two are not equally legible.
+ * `toLocaleString('fr-FR')` is deliberately not asked for the sign — CLDR
+ * gives French the ASCII hyphen-minus, so formatting a negative through it
+ * alone produces a different glyph from the one beside it on screen.
  */
-export function formatSignedDelta(delta: number): string {
-  const magnitude = Math.abs(delta).toLocaleString('fr-FR');
-  return delta < 0 ? `−${magnitude}` : `+${magnitude}`;
+export function formatCount(value: number): string {
+  const magnitude = Math.abs(value).toLocaleString('fr-FR');
+  return value < 0 ? `−${magnitude}` : magnitude;
 }
 
-/** `Serveur : 101` — what the server last confirmed, named as such. */
+/** The same, with the sign always shown, for a delta. */
+export function formatSignedDelta(delta: number): string {
+  return delta < 0 ? formatCount(delta) : `+${formatCount(delta)}`;
+}
+
+/**
+ * `Serveur : 101` — what the server last confirmed, named as such.
+ *
+ * Formatted through `formatCount` because the server's own occupancy can be
+ * negative (ADR-004 records it rather than clamping it), and that case is
+ * precisely the one an operator will be reading aloud to a supervisor.
+ */
 export function describeAuthoritative(truth: OccupancyTruth): string {
-  return `Serveur : ${truth.authoritative.toLocaleString('fr-FR')}`;
+  return `Serveur : ${formatCount(truth.authoritative)}`;
 }
 
 /**
@@ -141,17 +155,17 @@ export function describePendingDelta(truth: OccupancyTruth): string {
  * about — the movements stand as counted, and nothing is quietly corrected.
  */
 export function describeAnomalyForCounter(anomaly: OccupancyAnomaly, capacity: number): string {
-  const value = anomaly.value.toLocaleString('fr-FR');
+  const value = formatCount(anomaly.value);
 
   if (anomaly.scope === 'projected') {
     return anomaly.kind === 'negative'
       ? `Occupation projetée négative (${value}). Comptages conservés, en attente de confirmation du serveur.`
-      : `Capacité projetée dépassée (${value} / ${capacity.toLocaleString('fr-FR')}). Comptages conservés, en attente de confirmation du serveur.`;
+      : `Capacité projetée dépassée (${value} / ${formatCount(capacity)}). Comptages conservés, en attente de confirmation du serveur.`;
   }
 
   return anomaly.kind === 'negative'
     ? `Occupation négative (${value}). PaxFlux conserve les comptages tels quels : signalez-le à la supervision.`
-    : `Capacité dépassée (${value} / ${capacity.toLocaleString('fr-FR')}). PaxFlux conserve les comptages tels quels : signalez-le à la supervision.`;
+    : `Capacité dépassée (${value} / ${formatCount(capacity)}). PaxFlux conserve les comptages tels quels : signalez-le à la supervision.`;
 }
 
 /**
@@ -162,9 +176,9 @@ export function describeAnomalyForCounter(anomaly: OccupancyAnomaly, capacity: n
  * automatically.
  */
 export function describeAnomalyForSupervisor(anomaly: OccupancyAnomaly, capacity: number): string {
-  const value = anomaly.value.toLocaleString('fr-FR');
+  const value = formatCount(anomaly.value);
 
   return anomaly.kind === 'negative'
     ? `Occupation négative (${value}). Le journal est conservé tel quel : vérifiez les passages, puis corrigez par un ajustement supervisé si nécessaire.`
-    : `Capacité dépassée (${value} / ${capacity.toLocaleString('fr-FR')}). Le journal est conservé tel quel : vérifiez les passages, puis corrigez par un ajustement supervisé si nécessaire.`;
+    : `Capacité dépassée (${value} / ${formatCount(capacity)}). Le journal est conservé tel quel : vérifiez les passages, puis corrigez par un ajustement supervisé si nécessaire.`;
 }

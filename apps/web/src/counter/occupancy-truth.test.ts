@@ -4,6 +4,7 @@ import {
   describeAnomalyForSupervisor,
   describeAuthoritative,
   describePendingDelta,
+  formatCount,
   formatSignedDelta,
   readOccupancyTruth,
 } from './occupancy-truth.js';
@@ -132,6 +133,27 @@ describe('what each surface is told', () => {
     expect(message).toContain('Occupation négative (−1)');
     expect(message).toContain('conservé tel quel');
     expect(message).toContain('ajustement supervisé');
+  });
+
+  it('writes every negative with the same minus, wherever it appears', () => {
+    // The one that got away: `(-1).toLocaleString('fr-FR')` returns an ASCII
+    // hyphen, because CLDR gives French `-` and not `−`. So a message built
+    // straight from `toLocaleString` renders a different glyph from the
+    // `SORTIE −1` button beside it, and from `formatSignedDelta` above.
+    // Every rendered count goes through `formatCount` for that reason.
+    const truth = readOccupancyTruth({ authoritative: -1, pendingDelta: 0, capacity: 10 });
+    const rendered = [
+      formatCount(-1),
+      describeAuthoritative(truth),
+      describeAnomalyForCounter(truth.anomaly!, truth.capacity),
+      describeAnomalyForSupervisor(truth.anomaly!, truth.capacity),
+    ];
+
+    for (const text of rendered) {
+      expect(text, `${text} must not carry an ASCII hyphen`).not.toContain('-1');
+      expect(text).toContain('−1');
+    }
+    expect(describeAuthoritative(truth)).toBe('Serveur : −1');
   });
 
   it('names both numbers when capacity is exceeded', () => {

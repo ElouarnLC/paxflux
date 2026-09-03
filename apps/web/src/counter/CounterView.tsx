@@ -26,6 +26,7 @@ import {
   describePendingDelta,
   readOccupancyTruth,
 } from './occupancy-truth.js';
+import { vibrate } from './haptics.js';
 import {
   describeOutboxError,
   isRetryable,
@@ -101,20 +102,6 @@ function describeBlockedAction(
   }
 
   return action.direction === 'a_to_b' ? bootstrap.checkpoint.labelAToB : bootstrap.checkpoint.labelBToA;
-}
-
-/**
- * Haptic confirmation for a tap (SPEC §10.4). Failing is inconsequential —
- * the count is already recorded — and logging on every tap would be noise,
- * so the outcome is deliberately not surfaced.
- */
-function vibrate(pattern: number | number[]): void {
-  if (typeof navigator === 'undefined' || !navigator.vibrate) return;
-  try {
-    navigator.vibrate(pattern);
-  } catch {
-    // Some browsers throw when vibration is disabled by the user.
-  }
 }
 
 export const CounterView: React.FC = () => {
@@ -380,6 +367,9 @@ export const CounterView: React.FC = () => {
     async (direction: Direction) => {
       if (!isCountingAllowed || !owner) return;
 
+      // Fire-and-forget on purpose (SPEC §10.4): the outcome is a diagnostic
+      // for the pairing screen's test button, never a condition here. The
+      // movement below is enqueued whether or not the phone can buzz.
       vibrate(25);
       const action = await enqueueCountAction(direction, owner);
       setLastAction({
