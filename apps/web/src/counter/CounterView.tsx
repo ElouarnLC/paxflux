@@ -21,6 +21,12 @@ import {
 } from '../offline/confirmed-actions.js';
 import { projectPendingActions, projectedSpaceOccupancy } from '../offline/projection.js';
 import {
+  describeAnomalyForCounter,
+  describeAuthoritative,
+  describePendingDelta,
+  readOccupancyTruth,
+} from './occupancy-truth.js';
+import {
   describeOutboxError,
   isRetryable,
   needsReconciliation,
@@ -323,8 +329,25 @@ export const CounterView: React.FC = () => {
     // projection recomputes whenever the outbox actually changes.
   }, [authoritativeState, bootstrap, outboxActions, confirmedActions]);
 
-  const displayedOccupancy = projection?.projectedEventOccupancy ?? authoritativeState?.eventOccupancy ?? 0;
   const capacity = authoritativeState?.eventCapacity ?? bootstrap?.event.capacity ?? 0;
+
+  /**
+   * The three numbers behind the gauge: what the server confirmed, what this
+   * device still holds, and the sum the operator sees.
+   *
+   * The sum is still what the big number shows — a tap must move the gauge
+   * immediately, and that is unchanged. What is new is that the split is
+   * disclosed whenever it is non-zero, so "104" stops meaning two different
+   * things depending on the outbox.
+   */
+  const occupancy = readOccupancyTruth({
+    authoritative: authoritativeState?.eventOccupancy ?? 0,
+    // Straight from the existing projection: no movement arithmetic is
+    // reimplemented here.
+    pendingDelta: projection?.globalDelta ?? 0,
+    capacity,
+  });
+  const displayedOccupancy = occupancy.displayed;
   const remaining = capacity - displayedOccupancy;
 
   const spaceAOccupancy =
@@ -698,6 +721,42 @@ export const CounterView: React.FC = () => {
             {remaining >= 0 ? `${remaining.toLocaleString('fr-FR')} places restantes` : `Dépassement de ${Math.abs(remaining).toLocaleString('fr-FR')}`}
           </span>
         </div>
+
+        {/* What the big number is made of, shown only when it is a sum.
+            A zero delta says nothing here: an internal transfer is pending
+            but moves the global gauge by nothing, and "+0 en attente" would
+            both be noise and imply the transfer is not pending at all — the
+            sync badge above is what carries those. */}
+        {occupancy.disclosePending ? (
+          <p
+            data-testid="occupancy-pending-disclosure"
+            className="mt-1.5 text-[11px] font-semibold text-muted-foreground"
+          >
+            {describeAuthoritative(occupancy)}
+            <span aria-hidden="true"> · </span>
+            <span className="text-warning">{describePendingDelta(occupancy)}</span>
+          </p>
+        ) : null}
+
+        {/* An incoherent total is reported, never corrected: ADR-004 keeps
+            the movements exactly as they were counted. Written in full
+            rather than signalled by the badge's colour, and scoped — the
+            server's own anomaly reads differently from one only this
+            device's unacknowledged arithmetic reaches. */}
+        {occupancy.anomaly ? (
+          <Alert
+            tone={occupancy.anomaly.scope === 'authoritative' ? 'danger' : 'warning'}
+            className="mt-2 text-left"
+            data-testid="occupancy-anomaly"
+            data-anomaly-scope={occupancy.anomaly.scope}
+            data-anomaly-kind={occupancy.anomaly.kind}
+          >
+            <AlertTriangle />
+            <AlertDescription className="mt-0 text-[11px] leading-snug text-foreground/90">
+              {describeAnomalyForCounter(occupancy.anomaly, capacity)}
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         {/* This door's own two zones, projected the same way. An internal
             transfer leaves the global gauge above untouched while these two
