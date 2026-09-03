@@ -15,6 +15,24 @@ export default defineConfig({
         name: 'PaxFlux',
         short_name: 'PaxFlux',
         description: 'Self-hosted realtime crowd flow & occupancy management.',
+        // The launch contract, stated rather than inherited.
+        //
+        // `start_url` and `scope` were already '/' — VitePWA injects both as
+        // defaults — but a default is not a contract: it can move under a
+        // plugin upgrade, and nothing in the repository said what PaxFlux
+        // intends. `id` was genuinely absent, which leaves the browser to
+        // derive application identity from the start URL; declaring it fixes
+        // the identity even if a future start URL ever changes.
+        //
+        // '/' and not '/counter': one application serves staff browsers and
+        // paired handsets alike, and which one this browser is belongs to
+        // the smart root router in `app/root-route.ts`, which reads local
+        // pairing state. A start URL cannot know that, and encoding a
+        // pairing token, session, event or checkpoint in it would put a
+        // secret in a file every installed copy carries.
+        id: '/',
+        start_url: '/',
+        scope: '/',
         // The sRGB rendering of the `--background` token in
         // src/styles/index.css (oklch(0.165 0.020 258)). A manifest cannot
         // read a CSS custom property, so these two literals are kept in

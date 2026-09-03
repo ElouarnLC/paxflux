@@ -37,6 +37,30 @@ export interface PairingBaseUrl {
    * discovering it at the door.
    */
   unreachableFromPhone: boolean;
+  /**
+   * Set when the phone will open this URL outside a secure context.
+   *
+   * Pairing works over plain HTTP; installation and offline do not. Service
+   * workers are gated on a secure context, which browsers grant to HTTPS and
+   * to loopback — a LAN IP over HTTP gets neither, so the handset can pair
+   * and count online while never becoming an installed, offline-capable
+   * counter. Judged on the resolved URL rather than on configuration,
+   * because the request origin is what the QR carries when PUBLIC_BASE_URL
+   * is unset.
+   */
+  insecureForInstall: boolean;
+}
+
+/**
+ * Whether a phone opening this origin gets a secure context.
+ *
+ * `https:` always; `http:` only on loopback, which is the browser's own
+ * development exception and never true of a phone on the LAN.
+ */
+function isSecureContextOrigin(protocol: string, host: string): boolean {
+  const scheme = protocol.replace(/:$/, '').toLowerCase();
+  if (scheme === 'https') return true;
+  return scheme === 'http' && isLoopbackHost(host);
 }
 
 /**
@@ -67,7 +91,17 @@ export function resolvePairingBaseUrl(
       unreachableFromPhone = false;
     }
 
-    return { baseUrl: configured, source: 'public_base_url', unreachableFromPhone };
+    let insecureForInstall = false;
+    try {
+      const parsed = new URL(configured);
+      insecureForInstall = !isSecureContextOrigin(parsed.protocol, parsed.host);
+    } catch {
+      // Unparseable in practice — EnvSchema validates it — and an invented
+      // warning is worse than none.
+      insecureForInstall = false;
+    }
+
+    return { baseUrl: configured, source: 'public_base_url', unreachableFromPhone, insecureForInstall };
   }
 
   if (!requestOrigin?.host) {
@@ -80,6 +114,7 @@ export function resolvePairingBaseUrl(
     baseUrl: `${requestOrigin.protocol}://${requestOrigin.host}`.replace(/\/+$/, ''),
     source: 'request_origin',
     unreachableFromPhone: isLoopbackHost(requestOrigin.host),
+    insecureForInstall: !isSecureContextOrigin(requestOrigin.protocol, requestOrigin.host),
   };
 }
 
