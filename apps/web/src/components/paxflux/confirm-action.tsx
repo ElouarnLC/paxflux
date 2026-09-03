@@ -229,6 +229,14 @@ export interface RenameActionProps extends Omit<ConfirmActionProps, 'onConfirm' 
   placeholder?: string;
   /** The server's refusal, shown in the dialog so the operator can correct it in place. */
   errorMessage?: string | null;
+  /**
+   * Called when the dialog opens.
+   *
+   * Lets the caller drop a refusal from a previous attempt: an error the
+   * operator has already closed the dialog on should not greet them when
+   * they open it again.
+   */
+  onOpen?: () => void;
   /** Resolve to `true` when the save succeeded; the dialog stays open otherwise. */
   onRename: (value: string) => Promise<boolean>;
 }
@@ -261,6 +269,7 @@ export function RenameAction({
   maxLength,
   placeholder,
   errorMessage,
+  onOpen,
   onRename,
 }: RenameActionProps) {
   const [open, setOpen] = React.useState(false);
@@ -273,6 +282,13 @@ export function RenameAction({
   React.useEffect(() => {
     if (open) setValue(currentValue);
   }, [open, currentValue]);
+
+  // And from a clean slate: a refusal belongs to the attempt that caused it.
+  const onOpenRef = React.useRef(onOpen);
+  onOpenRef.current = onOpen;
+  React.useEffect(() => {
+    if (open) onOpenRef.current?.();
+  }, [open]);
 
   const trimmed = value.trim();
   const invalid = trimmed.length === 0 || trimmed.length > maxLength;

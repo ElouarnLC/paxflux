@@ -267,6 +267,69 @@ test('renommer l’ancienne session n’atteint pas un navigateur réappairé', 
   await expect(page.getByTestId('counter-device-label')).toContainText('Appareil B');
 });
 
+test('un refus de renommage ne suit pas l’opérateur d’un appareil à l’autre', async ({ page, browser }) => {
+  // One shared error string for the whole table meant a refusal on device A
+  // was still on screen when the operator opened device B's dialog, blaming
+  // B for something A did.
+  const topo = await liveEvent('RC2D erreur renommage isolée');
+
+  // Two handsets on the same door, each in its own context.
+  const paired: Array<{ label: string }> = [];
+  for (const name of ['A', 'B']) {
+    const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
+    const ctx = await browser.newContext();
+    const phone = await ctx.newPage();
+    await phone.goto(`/pair#${token}`);
+    await phone.getByLabel('Nom de cet appareil').fill(`Téléphone ${name}`);
+    await phone.getByRole('button', { name: 'Continuer avec ce nom' }).click();
+    await phone.waitForURL('**/counter');
+    await ctx.close();
+    paired.push({ label: `Téléphone ${name}` });
+  }
+
+  await loginAsAdmin(page);
+  await page.goto(`/admin/events/${topo.eventId}/devices`);
+  await expect(page.getByRole('button', { name: 'Renommer Téléphone A' })).toBeVisible();
+
+  // The server refuses the next rename, whichever device it is for.
+  await page.route('**/api/v1/device-sessions/*', (route) =>
+    route.request().method() === 'PATCH'
+      ? route.fulfill({
+          status: 400,
+          contentType: 'application/problem+json',
+          body: JSON.stringify({
+            status: 400,
+            code: 'VALIDATION_ERROR',
+            title: 'Nom d’appareil invalide',
+            detail: 'Refus propre à cet appareil.',
+          }),
+        })
+      : route.continue()
+  );
+
+  await page.getByRole('button', { name: 'Renommer Téléphone A' }).click();
+  await page.getByLabel('Nom de l’appareil').fill('Nom refusé');
+  await page.getByRole('button', { name: 'Enregistrer le nom' }).click();
+
+  // The refusal is shown where it happened, and the dialog stays open so the
+  // name can be corrected in place.
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Refus propre à cet appareil.');
+  await dialog.getByRole('button', { name: 'Annuler' }).click();
+  await expect(dialog).toBeHidden();
+
+  // B must not inherit A's error.
+  await page.getByRole('button', { name: 'Renommer Téléphone B' }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('dialog')).not.toContainText('Refus propre à cet appareil.');
+  await expect(page.getByLabel('Nom de l’appareil')).toHaveValue('Téléphone B');
+  await page.getByRole('dialog').getByRole('button', { name: 'Annuler' }).click();
+
+  // Nor does reopening A resurrect an error it has already walked away from.
+  await page.getByRole('button', { name: 'Renommer Téléphone A' }).click();
+  await expect(page.getByRole('dialog')).not.toContainText('Refus propre à cet appareil.');
+});
+
 test('aucune invitation à installer quand le navigateur n’en propose pas', async ({ page }) => {
   // Playwright's Chromium does not fire `beforeinstallprompt` for a test
   // origin, which is exactly the state most field browsers are in — iOS has

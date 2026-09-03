@@ -55,7 +55,16 @@ export const DevicesManagement: React.FC = () => {
   const [listState, setListState] = useState<ListState>({ kind: 'loading' });
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string>('');
   const [activeInvite, setActiveInvite] = useState<CreateDeviceInviteResponse | null>(null);
-  const [renameError, setRenameError] = useState<string | null>(null);
+  /**
+   * The last rename refusal, and which device it belongs to.
+   *
+   * Scoped rather than shared: one `string | null` for the whole table meant
+   * a refusal on device A was still on screen when the operator opened
+   * device B's dialog, blaming B for something A did. It is also cleared
+   * when a dialog opens, so reopening A does not resurrect an error the
+   * operator has already walked away from.
+   */
+  const [renameError, setRenameError] = useState<{ sessionId: string; detail: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -160,7 +169,7 @@ export const DevicesManagement: React.FC = () => {
       await fetchDevices({ silent: true });
       return true;
     } catch (err) {
-      setRenameError(errorDetail(err, 'Ce nom n’a pas pu être enregistré.'));
+      setRenameError({ sessionId, detail: errorDetail(err, 'Ce nom n’a pas pu être enregistré.') });
       return false;
     }
   };
@@ -351,7 +360,8 @@ export const DevicesManagement: React.FC = () => {
                           maxLength={DEVICE_LABEL_MAX_LENGTH}
                           placeholder="Ex : téléphone entrée nord"
                           confirmLabel="Enregistrer le nom"
-                          errorMessage={renameError}
+                          errorMessage={renameError?.sessionId === dev.id ? renameError.detail : null}
+                          onOpen={() => setRenameError(null)}
                           onRename={(label) => handleRenameDevice(dev.id, label)}
                           trigger={
                             <Button variant="secondary" size="sm" aria-label={`Renommer ${dev.label}`}>
