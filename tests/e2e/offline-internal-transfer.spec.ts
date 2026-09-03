@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
   addInternalTransferCheckpoint,
-  startEvent,
+  completeDevicePairing,
   createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
+  startEvent,
 } from './helpers.js';
 
 test('un transfert interne hors-ligne ne doit pas modifier la jauge globale projetée', async ({ page, context }) => {
@@ -20,8 +21,7 @@ test('un transfert interne hors-ligne ne doit pas modifier la jauge globale proj
   await startEvent(session, topo.eventId);
   const token = await createDeviceInviteToken(session, topo.eventId, internalCheckpointId);
 
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
 
   const occupancyValue = page.getByTestId('global-occupancy');
   await expect(occupancyValue).toHaveText('0');

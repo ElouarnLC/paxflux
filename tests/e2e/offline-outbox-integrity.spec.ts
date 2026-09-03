@@ -1,15 +1,16 @@
 import { test, expect, Page } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  addInternalTransferCheckpoint,
-  startEvent,
-  beginClosingEvent,
-  forceCloseEvent,
-  createDeviceInviteToken,
-  adjustSpaceOccupancy,
-  getEventState,
   AdminSession,
+  addInternalTransferCheckpoint,
+  adjustSpaceOccupancy,
+  beginClosingEvent,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  forceCloseEvent,
+  getAdminSession,
+  getEventState,
+  startEvent,
 } from './helpers.js';
 import {
   readOutbox,
@@ -58,8 +59,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     // The device bootstraps at occupancy 0 and caches that snapshot.
     await expect(page.getByTestId('global-occupancy')).toHaveText('0');
@@ -95,8 +95,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     // A genuine refusal, produced by the server rather than injected into
     // the response: the tap is made offline while the event is live, and
@@ -156,8 +155,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     const tokenB = await createDeviceInviteToken(session, topo.eventId, internalCheckpointId);
 
     // Device A: paired on the external boundary (Extérieur ⇄ Site).
-    await page.goto(`/pair#${tokenA}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, tokenA);
 
     // Cut the batch endpoint so A's tap stays queued locally.
     const blockBatch = (route: import('@playwright/test').Route) => route.abort('failed');
@@ -170,8 +168,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
 
     // The same browser is re-paired as device B, on a *different* checkpoint
     // (Site ⇄ VIP). A's queued tap is still sitting in the local outbox.
-    await page.goto(`/pair#${tokenB}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, tokenB);
 
     await page.unroute(BATCH_URL, blockBatch);
     await page.waitForTimeout(8_000);
@@ -217,8 +214,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
       },
     ]);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
     await page.waitForTimeout(8_000);
 
     // The migration must never guess that this row belongs to the device
@@ -243,8 +239,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
     await expect(page.getByTestId('global-occupancy')).toHaveText('0');
 
     const owner = await page.evaluate(async () => {
@@ -294,8 +289,7 @@ test.describe('Phase 6 — intégrité de l’outbox hors ligne', () => {
     await startEvent(session, topo.eventId);
     const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-    await page.goto(`/pair#${token}`);
-    await page.waitForURL('**/counter');
+    await completeDevicePairing(page, token);
 
     const owner = await page.evaluate(async () => {
       const res = await fetch('/api/v1/device/bootstrap', { credentials: 'include' });

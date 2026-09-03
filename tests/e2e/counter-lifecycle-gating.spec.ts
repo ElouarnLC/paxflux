@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
   beginClosingEvent,
+  completeDevicePairing,
   createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
   getEventState,
+  startEvent,
 } from './helpers.js';
 
 test('le compteur indique clairement qu\'un événement en brouillon n\'est pas encore démarré', async ({ page }) => {
@@ -16,8 +17,7 @@ test('le compteur indique clairement qu\'un événement en brouillon n\'est pas 
   });
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
 
   // The buttons are correctly disabled while the event is `draft`, but
   // nothing on screen explains why to the person holding the device —
@@ -35,8 +35,7 @@ test('draft -> live active le compteur immédiatement, sans reload (SSE event-st
   });
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
 
   const entryButton = page.getByRole('button', { name: /ENTRÉE/i });
   await expect(entryButton).toBeDisabled();
@@ -60,8 +59,7 @@ test('un événement en `closing` désactive réellement les boutons de comptage
   await startEvent(session, topo.eventId);
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
 
   const entryButton = page.getByRole('button', { name: /ENTRÉE/i });
   await expect(entryButton).toBeEnabled();
@@ -88,8 +86,7 @@ test('les actions déjà en attente avant `closing` continuent d\'être drainée
   await startEvent(session, topo.eventId);
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
 
   const stateBaseline = await getEventState(session, topo.eventId);
 

@@ -1,16 +1,17 @@
 import { test, expect, Browser, Page } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  addInternalTransferCheckpoint,
-  startEvent,
-  beginClosingEvent,
-  forceCloseEvent,
-  reopenEvent,
-  createDeviceInviteToken,
-  getEventState,
-  getEventDevices,
   AdminSession,
+  addInternalTransferCheckpoint,
+  beginClosingEvent,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  forceCloseEvent,
+  getAdminSession,
+  getEventDevices,
+  getEventState,
+  reopenEvent,
+  startEvent,
 } from './helpers.js';
 import { readOutbox, displayedOccupancy } from './offline-helpers.js';
 
@@ -51,8 +52,7 @@ async function occupancies(session: AdminSession, eventId: string): Promise<Reco
 async function pairDevice(browser: Browser, token: string): Promise<Page> {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
   await expect(page.getByTestId('global-occupancy')).toBeVisible();
   return page;
 }

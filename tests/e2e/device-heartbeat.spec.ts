@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
 import {
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
+  completeDevicePairing,
   createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
   getEventDevices,
+  startEvent,
 } from './helpers.js';
 
 test('un compteur ouvert mais inactif reste signalé en ligne (heartbeat périodique)', async ({ page }) => {
@@ -18,8 +19,7 @@ test('un compteur ouvert mais inactif reste signalé en ligne (heartbeat périod
   await startEvent(session, topo.eventId);
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
 
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
 
   // No taps performed: an idle field device sitting open on the counter
   // screen. The admin dashboard considers a device offline after 45s of

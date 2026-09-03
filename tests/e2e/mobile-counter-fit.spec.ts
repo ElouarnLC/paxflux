@@ -1,13 +1,14 @@
 import { test, expect } from '@playwright/test';
 import {
   AdminSession,
-  getAdminSession,
-  createLongNamedTopology,
-  createDeviceInviteToken,
-  startEvent,
-  beginClosingEvent,
-  LongNamedTopology,
   LONG_FIXTURE_NAMES,
+  LongNamedTopology,
+  beginClosingEvent,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createLongNamedTopology,
+  getAdminSession,
+  startEvent,
 } from './helpers.js';
 import {
   assertFullyVisible,
@@ -37,8 +38,7 @@ test.beforeAll(async () => {
 
 async function pairCounter(page: import('@playwright/test').Page, topo: LongNamedTopology) {
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
   await expect(page.getByTestId('count-a-to-b')).toBeVisible();
 }
 

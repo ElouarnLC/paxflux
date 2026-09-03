@@ -1,14 +1,15 @@
 import { test, expect, Page } from '@playwright/test';
 import {
-  ADMIN_USERNAME,
   ADMIN_PASSWORD,
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
-  startEvent,
-  createDeviceInviteToken,
-  adjustSpaceOccupancy,
-  DraftEventTopology,
+  ADMIN_USERNAME,
   AdminSession,
+  DraftEventTopology,
+  adjustSpaceOccupancy,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
+  startEvent,
 } from './helpers.js';
 
 /**
@@ -55,8 +56,7 @@ test('le tableau de bord converge vers l’état serveur d’un appareil, hors l
 
   const deviceContext = await browser.newContext();
   const devicePage = await deviceContext.newPage();
-  await devicePage.goto(`/pair#${token}`);
-  await devicePage.waitForURL('**/counter');
+  await completeDevicePairing(devicePage, token);
 
   const adminContext = await browser.newContext();
   const adminPage = await adminContext.newPage();

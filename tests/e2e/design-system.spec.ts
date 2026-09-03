@@ -1,15 +1,16 @@
 import { test, expect, Page } from '@playwright/test';
 import {
-  ADMIN_USERNAME,
   ADMIN_PASSWORD,
+  ADMIN_USERNAME,
   AdminSession,
-  getAdminSession,
-  createDraftEventWithMainCheckpoint,
+  adminApi,
+  beginClosingEvent,
+  completeDevicePairing,
   createDeviceInviteToken,
+  createDraftEventWithMainCheckpoint,
+  getAdminSession,
   getEventDevices,
   startEvent,
-  beginClosingEvent,
-  adminApi,
 } from './helpers.js';
 
 /**
@@ -244,8 +245,7 @@ test('révoquer un appareil passe par une confirmation, pas par une boîte navig
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
   const phoneContext = await browser.newContext();
   const phone = await phoneContext.newPage();
-  await phone.goto(`/pair#${token}`);
-  await phone.waitForURL('**/counter');
+  await completeDevicePairing(phone, token);
 
   await expect.poll(async () => (await getEventDevices(session, topo.eventId)).length).toBe(1);
 

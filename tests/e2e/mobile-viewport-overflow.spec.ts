@@ -1,14 +1,15 @@
 import { test, expect, Page } from '@playwright/test';
 import {
-  ADMIN_USERNAME,
   ADMIN_PASSWORD,
+  ADMIN_USERNAME,
   AdminSession,
-  getAdminSession,
-  createLongNamedTopology,
-  createDeviceInviteToken,
-  startEvent,
-  LongNamedTopology,
   LONG_FIXTURE_NAMES,
+  LongNamedTopology,
+  completeDevicePairing,
+  createDeviceInviteToken,
+  createLongNamedTopology,
+  getAdminSession,
+  startEvent,
 } from './helpers.js';
 import { assertScreenFitsViewport } from './responsive-helpers.js';
 
@@ -143,8 +144,7 @@ test('les statistiques et l’état système tiennent dans le viewport', async (
 
 test('le compteur tient dans le viewport', async ({ page }) => {
   const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
-  await page.goto(`/pair#${token}`);
-  await page.waitForURL('**/counter');
+  await completeDevicePairing(page, token);
   await expect(page.getByTestId('count-a-to-b')).toBeVisible();
   await assertScreenFitsViewport(page, '/counter (CounterView)');
 });
