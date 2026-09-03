@@ -213,15 +213,19 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
 
         {/* Preparation is editable right up to the moment the event starts,
             and a preflight refusal is only actionable if the screen that
-            fixes it is one tap away. This link exists only in `draft`: past
-            that, the topology is locked server-side and offering to edit it
-            would be a lie. */}
-        <Button asChild variant="secondary" className="w-full sm:w-auto sm:min-w-56">
-          <Link to={`/admin/events/${event.id}/edit`}>
-            <Pencil />
-            Modifier le brouillon
-          </Link>
-        </Button>
+            fixes it is one tap away. This link exists only in `draft` — past
+            that the topology is locked server-side — and only for an admin,
+            because every mutation the editor makes requires the admin role.
+            A supervisor following it would meet a form whose every save the
+            server refuses. */}
+        {isAdmin ? (
+          <Button asChild variant="secondary" className="w-full sm:w-auto sm:min-w-56">
+            <Link to={`/admin/events/${event.id}/edit`}>
+              <Pencil />
+              Modifier le brouillon
+            </Link>
+          </Button>
+        ) : null}
 
         <ConfirmAction
           disabled={actionLoading || !ready}

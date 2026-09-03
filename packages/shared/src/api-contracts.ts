@@ -53,19 +53,39 @@ export const UpdateEventRequestSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   capacity: z.number().int().min(0).optional(),
   /**
-   * Changeable only while the event is a draft.
+   * Changeable only while the event is a draft, and only to a real IANA zone.
+   *
+   * Deliberately laxer here than at creation, and the route is what tightens
+   * it. Events created before RC2-C could store any 1–50 character string,
+   * `GMT` and `EST` among them, and a schema that rejected those outright
+   * would make such an event uneditable: every save resends the timezone,
+   * so a legacy value would block a rename. So the schema accepts what the
+   * column accepts, and the route requires IANA validity only when the value
+   * actually *changes* — an unchanged legacy zone rides along, a new one
+   * never does. Creation stays strict (`CreateEventRequestSchema`).
    *
    * Once counting has started the timezone is the frame every recorded
    * movement has already been read in; moving it would silently redraw the
-   * day boundaries of a ledger that is append-only by design. The route
-   * enforces that, not this schema — the schema only says the value must be
-   * a real zone.
+   * day boundaries of a ledger that is append-only by design, so the route
+   * refuses a change past `draft` with `TIMEZONE_LOCKED`.
    */
-  timezone: TimezoneSchema.optional(),
+  timezone: z.string().min(1).max(50).optional(),
   warningRatio1: z.number().min(0).max(1).optional(),
   warningRatio2: z.number().min(0).max(1).optional(),
   startsAtMs: z.number().int().positive().nullable().optional(),
   endsAtMs: z.number().int().positive().nullable().optional(),
+  /**
+   * A precondition, not a field: reject this write unless the event is still
+   * a draft when it is applied.
+   *
+   * The draft editor always sends it. Without it a stale editor — opened on
+   * a draft, left open while somebody else started the event — could still
+   * PATCH a live event's name and capacity, because this route legitimately
+   * allows exactly that for the supervision surface. The server checks it
+   * inside the same SQLite transaction that writes, so a refetch immediately
+   * before the request cannot substitute for it.
+   */
+  expectedStatus: z.literal('draft').optional(),
 });
 export type UpdateEventRequest = z.infer<typeof UpdateEventRequestSchema>;
 

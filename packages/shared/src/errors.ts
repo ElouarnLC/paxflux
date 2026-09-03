@@ -18,6 +18,12 @@ export type ErrorCode =
   | 'TOPOLOGY_LOCKED'
   /** The timezone may only change while the event is a draft. */
   | 'TIMEZONE_LOCKED'
+  /**
+   * A write that required the event to still be a draft, applied when it was
+   * not. Distinct from `TOPOLOGY_LOCKED`: nothing structural was attempted,
+   * the caller simply held a view of the event that time has passed by.
+   */
+  | 'EVENT_NO_LONGER_DRAFT'
   | 'INVALID_TOPOLOGY'
   | 'SPACE_NOT_FOUND'
   | 'SPACE_IN_USE'

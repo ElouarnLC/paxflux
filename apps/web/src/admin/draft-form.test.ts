@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CheckpointModel, SpaceModel } from '@paxflux/shared';
 import {
   EditableCheckpoint,
+  EditableSpace,
   applyEventCapacity,
   defaultDirectionLabel,
   describeDirection,
@@ -360,5 +361,95 @@ describe('reconciling a reload with what is still being typed', () => {
     expect(merged[0].name, 'untouched name follows the server').toBe('Entrée Nord');
     expect(merged[0].spaceBId, 'unsaved move survives').toBe('space-9');
     expect(merged[0].allowBToA, 'unsaved toggle survives').toBe(false);
+  });
+});
+
+describe('provenance survives the reloads a save causes', () => {
+  const space = (over: Partial<SpaceModel> = {}): SpaceModel =>
+    ({
+      id: 'space-1',
+      eventId: 'event-1',
+      name: 'Site',
+      kind: 'leaf',
+      parentId: null,
+      capacity: 500,
+      isActive: true,
+      sortOrder: 1,
+      ...over,
+    }) as SpaceModel;
+
+  const checkpoint = (over: Partial<CheckpointModel> = {}): CheckpointModel =>
+    ({
+      id: 'cp-new',
+      eventId: 'event-1',
+      name: 'Nouvelle porte',
+      spaceAId: 'ext-1',
+      spaceBId: 'space-1',
+      allowAToB: true,
+      allowBToA: true,
+      labelAToB: 'ENTRÉE +1',
+      labelBToA: 'SORTIE −1',
+      isActive: true,
+      sortOrder: 1,
+      ...over,
+    }) as CheckpointModel;
+
+  it('keeps an explicit capacity link through an unrelated reload', () => {
+    // The defect: clicking "Même capacité que l'événement", saving, then
+    // doing anything else — the reload rebuilt the zone as `independent`
+    // because its stored number now matched, and the link was silently gone.
+    const previous = [space({ capacity: 500 })];
+    const linked: EditableSpace[] = [{ ...toEditableSpaces(previous)[0], capacity: relinkCapacity(500) }];
+    const next = [space({ capacity: 500 })];
+
+    const merged = reconcileSpaces(previous, linked, next);
+    expect(merged[0].capacity.link, 'the operator’s choice survives the reload').toBe('linked');
+
+    // And it still behaves as a link afterwards.
+    expect(applyEventCapacity(merged[0].capacity, 1200).capacity).toBe(1200);
+  });
+
+  it('does not invent a link for a zone that merely matches the event', () => {
+    const previous = [space({ capacity: 500 })];
+    const loaded = toEditableSpaces(previous);
+    const merged = reconcileSpaces(previous, loaded, [space({ capacity: 500 })]);
+
+    expect(merged[0].capacity.link).toBe('independent');
+    expect(applyEventCapacity(merged[0].capacity, 1200).capacity, 'still answers to nobody').toBe(500);
+  });
+
+  it('keeps a checkpoint the client just created as a generated suggestion', () => {
+    // The POST that creates a door is followed by a reload. The row is new
+    // to the merge, so without knowing the client generated its labels the
+    // suggestion would be adopted as the operator's own wording.
+    const merged = reconcileCheckpoints([], [], [checkpoint()], new Set(['cp-new']));
+
+    expect(merged[0].labelAToB.provenance).toBe('generated');
+    expect(merged[0].labelBToA.provenance).toBe('generated');
+
+    // Which is what lets it follow the endpoints afterwards.
+    const followed = relabelForEndpoints(merged[0].labelAToB, VIP, SITE);
+    expect(followed.value).toBe('VERS SITE');
+  });
+
+  it('leaves a checkpoint it did not create as the operator’s own wording', () => {
+    const merged = reconcileCheckpoints([], [], [checkpoint()], new Set());
+    expect(merged[0].labelAToB.provenance).toBe('edited');
+    expect(relabelForEndpoints(merged[0].labelAToB, VIP, SITE).value).toBe('ENTRÉE +1');
+  });
+
+  it('lets a manual edit end the suggestion for good', () => {
+    const created = reconcileCheckpoints([], [], [checkpoint()], new Set(['cp-new']))[0];
+    const typed: EditableCheckpoint = { ...created, labelAToB: editedLabel('MONTÉE CONTRÔLÉE') };
+
+    // A later reload must not hand provenance back to the generator.
+    const merged = reconcileCheckpoints(
+      [checkpoint()],
+      [typed],
+      [checkpoint({ labelAToB: 'MONTÉE CONTRÔLÉE' })],
+      new Set(['cp-new'])
+    );
+    expect(merged[0].labelAToB.provenance).toBe('edited');
+    expect(relabelForEndpoints(merged[0].labelAToB, VIP, SITE).value).toBe('MONTÉE CONTRÔLÉE');
   });
 });

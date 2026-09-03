@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useAuth } from '../auth/AuthProvider.js';
 import { apiFetch } from '../api/client.js';
 import {
+  CheckpointModel,
   EventDetailResponse,
   EventModel,
   PreflightResponse,
@@ -17,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect } from '@/components/ui/native-select';
 import { PageHeader, Section } from '@/components/paxflux/layout';
+import { ConfirmAction } from '@/components/paxflux/confirm-action';
 import { StatusBadge, eventStatusKey } from '@/components/paxflux/status';
 import { TimezoneField } from './TimezoneField.js';
 import {
@@ -36,7 +39,6 @@ import {
   reconcileSpaces,
   relabelForEndpoints,
   relinkCapacity,
-  toEditableCheckpoints,
   toEditableSpaces,
 } from './draft-form.js';
 
@@ -102,11 +104,32 @@ export const DraftEditor: React.FC = () => {
    */
   const lastServerRef = useRef<EventDetailResponse | null>(null);
 
+  /**
+   * Doors this screen created, whose labels it generated.
+   *
+   * The POST that creates one is followed by a reload, at which point the
+   * row is new to the merge. Without this it would be adopted as the
+   * operator's own wording and stop following its zones. Provenance is
+   * recorded from the act of generating, never guessed from the text.
+   */
+  const generatedLabelIdsRef = useRef<Set<string>>(new Set());
+
+  const { user } = useAuth();
+  const isAdmin = user.role === 'admin';
+
   // Event fields are edited locally and committed explicitly, so a slow
   // keystroke never races a request.
   const [name, setName] = useState('');
   const [capacity, setCapacityState] = useState(0);
   const [timezone, setTimezone] = useState('');
+  /**
+   * The timezone as the server last reported it.
+   *
+   * Used to tell an edit from a resend. Events created before the IANA rule
+   * could store `GMT`, `EST` or any 1–50 character string; such a value is
+   * loaded and kept exactly, and only a *change* has to be a real zone.
+   */
+  const [storedTimezone, setStoredTimezone] = useState('');
 
   /**
    * Re-reads the draft from the server and rebuilds the form from it.
@@ -125,12 +148,17 @@ export const DraftEditor: React.FC = () => {
           ? {
               event: detail.event,
               spaces: reconcileSpaces(previous.spaces, current.spaces, detail.spaces),
-              checkpoints: reconcileCheckpoints(previous.checkpoints, current.checkpoints, detail.checkpoints),
+              checkpoints: reconcileCheckpoints(
+                previous.checkpoints,
+                current.checkpoints,
+                detail.checkpoints,
+                generatedLabelIdsRef.current
+              ),
             }
           : {
               event: detail.event,
               spaces: toEditableSpaces(detail.spaces),
-              checkpoints: toEditableCheckpoints(detail.checkpoints),
+              checkpoints: reconcileCheckpoints([], [], detail.checkpoints, generatedLabelIdsRef.current),
             }
       );
       setName((local) => (previous ? reconcileField(previous.event.name, local, detail.event.name) : detail.event.name));
@@ -140,6 +168,7 @@ export const DraftEditor: React.FC = () => {
       setTimezone((local) =>
         previous ? reconcileField(previous.event.timezone, local, detail.event.timezone) : detail.event.timezone
       );
+      setStoredTimezone(detail.event.timezone);
 
       lastServerRef.current = detail;
       setLoadError(null);
@@ -213,7 +242,21 @@ export const DraftEditor: React.FC = () => {
     return mutate(() =>
       apiFetch(`/api/v1/events/${eventId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name: trimmed, capacity, timezone }),
+        body: JSON.stringify({
+          name: trimmed,
+          capacity,
+          // Sent only when it actually changed. An event created before the
+          // IANA rule existed may hold something the current validator
+          // rejects; resending it would make that event permanently
+          // uneditable, and rewriting it silently would be worse.
+          ...(timezone === storedTimezone ? {} : { timezone }),
+          // The precondition, checked server-side inside the transaction
+          // that writes. This screen may have been open for minutes; the
+          // generic route legitimately allows a *live* event's name and
+          // capacity to change, and nothing from a stale draft editor may
+          // ride in on that.
+          expectedStatus: 'draft',
+        }),
       })
     );
   };
@@ -292,8 +335,8 @@ export const DraftEditor: React.FC = () => {
       return Promise.resolve(false);
     }
 
-    return mutate(() =>
-      apiFetch(`/api/v1/events/${eventId}/checkpoints`, {
+    return mutate(async () => {
+      const created = await apiFetch<CheckpointModel>(`/api/v1/events/${eventId}/checkpoints`, {
         method: 'POST',
         body: JSON.stringify({
           name: 'Nouvelle porte',
@@ -307,8 +350,12 @@ export const DraftEditor: React.FC = () => {
           labelBToA: defaultDirectionLabel(second, first),
           sortOrder: (draft?.checkpoints.length ?? 0) + 1,
         }),
-      })
-    );
+      });
+      // Remembered before the reload that follows, which is the moment the
+      // provenance would otherwise be lost.
+      generatedLabelIdsRef.current.add(created.id);
+      return created;
+    });
   };
 
   const deleteCheckpoint = (checkpoint: EditableCheckpoint) =>
@@ -372,6 +419,32 @@ export const DraftEditor: React.FC = () => {
     );
   }
 
+  // Every mutation this screen makes requires the admin role server-side.
+  // Showing a supervisor the form would be showing them a screen where each
+  // save comes back 403 — a half-working editor is worse than none.
+  if (!isAdmin) {
+    return (
+      <div className="mx-auto w-full max-w-3xl flex-1 space-y-4 p-4 sm:p-6">
+        <PageHeader title="Préparation réservée aux administrateurs" />
+        <Alert tone="warning">
+          <AlertCircle />
+          <div className="min-w-0">
+            <AlertTitle>Modification réservée aux administrateurs</AlertTitle>
+            <AlertDescription>
+              La préparation d’un événement — zones, portes, capacités — ne peut être modifiée que par un compte
+              administrateur. La supervision de l’événement reste accessible.
+            </AlertDescription>
+          </div>
+        </Alert>
+        <Button asChild variant="secondary">
+          <Link to={`/admin?event=${draft.event.id}`}>
+            <ArrowLeft /> Retour à la supervision
+          </Link>
+        </Button>
+      </div>
+    );
+  }
+
   // The editor is for preparation. Once an event is live its topology is
   // locked server-side, and pretending otherwise would invite an operator to
   // type changes that can only be refused.
@@ -379,6 +452,21 @@ export const DraftEditor: React.FC = () => {
     return (
       <div className="mx-auto w-full max-w-3xl flex-1 space-y-4 p-4 sm:p-6">
         <PageHeader title="Préparation verrouillée" />
+        {/* If a save is what brought us here, say so. Converging silently to
+            a lock screen leaves the operator to guess whether the thing they
+            just typed went through; it did not, and that is the first thing
+            they need to know. */}
+        <div aria-live="polite" data-testid="draft-save-state">
+          {save.kind === 'failed' ? (
+            <Alert tone="danger">
+              <AlertCircle />
+              <div className="min-w-0">
+                <AlertTitle>Modification non enregistrée</AlertTitle>
+                <AlertDescription>{save.detail}</AlertDescription>
+              </div>
+            </Alert>
+          ) : null}
+        </div>
         <Alert tone="warning">
           <AlertCircle />
           <div className="min-w-0">
@@ -458,12 +546,18 @@ export const DraftEditor: React.FC = () => {
                 onChange={(e) => setCapacity(parseInt(e.target.value, 10) || 0)}
               />
             </div>
-            <TimezoneField value={timezone} onChange={setTimezone} />
+            <TimezoneField value={timezone} onChange={setTimezone} storedValue={storedTimezone} />
           </div>
 
           <Button
             onClick={saveEvent}
-            disabled={save.kind === 'saving' || name.trim().length === 0 || !isValidTimezone(timezone)}
+            disabled={
+              save.kind === 'saving' ||
+              name.trim().length === 0 ||
+              // Only a *changed* timezone has to be valid: a legacy value
+              // left alone is not this save's business.
+              (timezone !== storedTimezone && !isValidTimezone(timezone))
+            }
           >
             Enregistrer l’événement
           </Button>
@@ -524,16 +618,31 @@ export const DraftEditor: React.FC = () => {
                         className="flex-1 font-mono sm:w-32 sm:flex-none"
                       />
                     ) : null}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Supprimer la zone ${space.name}`}
-                      onClick={() => deleteSpace(space)}
+                    {/* Deleting a zone is not undoable from this screen, so
+                        it asks first — through the same dialog the lifecycle
+                        transitions use. Cancelling sends nothing. */}
+                    <ConfirmAction
                       disabled={save.kind === 'saving'}
-                      className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger"
-                    >
-                      <Trash2 />
-                    </Button>
+                      busy={save.kind === 'saving'}
+                      title={`Supprimer la zone « ${space.name} » ?`}
+                      description="Cette zone et sa jauge disparaissent de la préparation. Une zone encore reliée à une porte ne peut pas être supprimée."
+                      confirmLabel="Supprimer la zone"
+                      confirmVariant="destructive"
+                      onConfirm={async () => {
+                        await deleteSpace(space);
+                      }}
+                      trigger={
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Supprimer la zone ${space.name}`}
+                          disabled={save.kind === 'saving'}
+                          className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger"
+                        >
+                          <Trash2 />
+                        </Button>
+                      }
+                    />
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" variant="secondary" onClick={() => saveSpace(space)} disabled={save.kind === 'saving'}>
@@ -572,7 +681,10 @@ export const DraftEditor: React.FC = () => {
             const from = spaceOf(checkpoint.spaceAId);
             const to = spaceOf(checkpoint.spaceBId);
             return (
-              <CardPanel key={checkpoint.id} className="space-y-3">
+              // Addressable per door: two doors between the same pair of
+              // zones legitimately carry the same direction wording, so a
+              // test (or an assistive technology) needs the row itself.
+              <CardPanel key={checkpoint.id} data-testid={`checkpoint-${checkpoint.id}`} className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <Input
                     aria-label={`Nom de la porte ${checkpoint.name}`}
@@ -580,16 +692,28 @@ export const DraftEditor: React.FC = () => {
                     onChange={(e) => updateCheckpoint(checkpoint.id, { name: e.target.value })}
                     className="w-full sm:flex-1"
                   />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Supprimer la porte ${checkpoint.name}`}
-                    onClick={() => deleteCheckpoint(checkpoint)}
+                  <ConfirmAction
                     disabled={save.kind === 'saving'}
-                    className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger"
-                  >
-                    <Trash2 />
-                  </Button>
+                    busy={save.kind === 'saving'}
+                    title={`Supprimer la porte « ${checkpoint.name} » ?`}
+                    description="Cette porte et les invitations QR émises pour elle disparaissent de la préparation. Une porte à laquelle un appareil est appairé ne peut pas être supprimée."
+                    confirmLabel="Supprimer la porte"
+                    confirmVariant="destructive"
+                    onConfirm={async () => {
+                      await deleteCheckpoint(checkpoint);
+                    }}
+                    trigger={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Supprimer la porte ${checkpoint.name}`}
+                        disabled={save.kind === 'saving'}
+                        className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger"
+                      >
+                        <Trash2 />
+                      </Button>
+                    }
+                  />
                 </div>
 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

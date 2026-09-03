@@ -312,7 +312,14 @@ export function reconcileSpaces(
       id: next.id,
       kind: next.kind,
       name: reconcileField(previous.name, current.name, next.name),
-      capacity: capacityUntouched ? independentCapacity(next.capacity ?? '') : current.capacity,
+      // The *value* may follow the server; the link never does. Rebuilding
+      // it from the reload would quietly undo "Même capacité que
+      // l'événement" the first time any unrelated save reloaded the draft —
+      // which is the same inference-from-numbers this module exists to
+      // avoid, just arriving by a different door.
+      capacity: capacityUntouched
+        ? { link: current.capacity.link, capacity: next.capacity ?? '' }
+        : current.capacity,
     };
   });
 }
@@ -320,7 +327,18 @@ export function reconcileSpaces(
 export function reconcileCheckpoints(
   previousServer: CheckpointModel[],
   local: EditableCheckpoint[],
-  nextServer: CheckpointModel[]
+  nextServer: CheckpointModel[],
+  /**
+   * Checkpoints this client created, whose labels it generated itself.
+   *
+   * A door added through the editor is POSTed with labels derived from the
+   * zones it connects, and the POST is followed by a reload — at which point
+   * the row is new to the merge and would otherwise be adopted as
+   * `'edited'`, freezing a suggestion the operator never wrote. Provenance
+   * comes from knowing the client generated the value, never from reading
+   * the text back.
+   */
+  clientGeneratedLabels: ReadonlySet<string> = new Set()
 ): EditableCheckpoint[] {
   const previousById = new Map(previousServer.map((c) => [c.id, c]));
   const localById = new Map(local.map((c) => [c.id, c]));
@@ -328,7 +346,16 @@ export function reconcileCheckpoints(
   return nextServer.map((next) => {
     const previous = previousById.get(next.id);
     const current = localById.get(next.id);
-    if (!previous || !current) return toEditableCheckpoints([next])[0];
+    if (!previous || !current) {
+      const loaded = toEditableCheckpoints([next])[0];
+      return clientGeneratedLabels.has(next.id)
+        ? {
+            ...loaded,
+            labelAToB: { provenance: 'generated', value: loaded.labelAToB.value },
+            labelBToA: { provenance: 'generated', value: loaded.labelBToA.value },
+          }
+        : loaded;
+    }
 
     // Provenance belongs to the local field, not to the reload: a suggestion
     // the operator never accepted must still follow its zones afterwards, so

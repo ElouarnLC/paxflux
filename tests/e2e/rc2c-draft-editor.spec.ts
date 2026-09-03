@@ -62,6 +62,15 @@ async function openEditor(page: Page, eventId: string): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Modifier le brouillon' })).toBeVisible();
 }
 
+/**
+ * Deletion is destructive, so the editor asks first. Reaching the request
+ * means confirming: this opens the dialog and confirms in it.
+ */
+async function confirmDelete(page: Page, trigger: string, confirmLabel: string): Promise<void> {
+  await page.getByRole('button', { name: trigger }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: confirmLabel }).click();
+}
+
 /** Waits for the editor's own confirmation that the server took the change. */
 async function expectSaved(page: Page): Promise<void> {
   await expect(page.getByTestId('draft-save-state')).toContainText('Enregistré à', { timeout: 15_000 });
@@ -136,7 +145,7 @@ test('ajouter puis supprimer une zone modifie la topologie du brouillon', async 
   const added = spaces.find((s: any) => s.name === 'Nouvelle zone');
   expect(added).toBeDefined();
 
-  await page.getByRole('button', { name: 'Supprimer la zone Nouvelle zone' }).click();
+  await confirmDelete(page, 'Supprimer la zone Nouvelle zone', 'Supprimer la zone');
   await expectSaved(page);
 
   spaces = await getEventSpaces(session, topo.eventId);
@@ -210,7 +219,7 @@ test('une zone encore utilisée par une porte ne peut pas être supprimée, et l
   await loginAsAdmin(page);
   await openEditor(page, topo.eventId);
 
-  await page.getByRole('button', { name: `Supprimer la zone ${site.name}` }).click();
+  await confirmDelete(page, `Supprimer la zone ${site.name}`, 'Supprimer la zone');
 
   await expect(page.getByTestId('draft-save-state')).toContainText('Modification non enregistrée', {
     timeout: 15_000,
@@ -286,7 +295,7 @@ test('une modification structurelle rafraîchit le verdict de préparation du se
   // Removing the only door makes the event unstartable. A structural edit
   // does not bump `event.version`, so nothing but an explicit refetch would
   // have invalidated the verdict above.
-  await page.getByRole('button', { name: 'Supprimer la porte Porte Principale' }).click();
+  await confirmDelete(page, 'Supprimer la porte Porte Principale', 'Supprimer la porte');
   await expectSaved(page);
 
   await expect(page.getByTestId('draft-preflight')).not.toContainText('Préparation complète');
@@ -460,9 +469,9 @@ test('sans deuxième zone, « Ajouter une porte » le dit au lieu de ne rien fai
 
   // Strip the draft back to the boundary sentinel alone: the door first,
   // because the zone cannot go while it is referenced.
-  await page.getByRole('button', { name: 'Supprimer la porte Porte Principale' }).click();
+  await confirmDelete(page, 'Supprimer la porte Porte Principale', 'Supprimer la porte');
   await expectSaved(page);
-  await page.getByRole('button', { name: `Supprimer la zone ${site.name}` }).click();
+  await confirmDelete(page, `Supprimer la zone ${site.name}`, 'Supprimer la zone');
   await expectSaved(page);
 
   await page.getByRole('button', { name: 'Ajouter une porte' }).click();
@@ -511,4 +520,147 @@ test('enregistrer une section ne jette pas ce qui est en cours de saisie dans un
   expect(after.event.name).toBe('Nom pas encore enregistré');
   expect(after.checkpoints[0].name).toBe('Porte pas encore enregistrée');
   expect(after.checkpoints[0].id, 'toujours la même porte').toBe(topo.mainCheckpointId);
+});
+
+// ---------------------------------------------------------------------------
+// External review round 1
+// ---------------------------------------------------------------------------
+
+test('un éditeur laissé ouvert n’écrit rien sur un événement démarré entre-temps', async ({ page }) => {
+  const topo = await draft('RC2C Éditeur périmé');
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  // Another actor starts the event. The editor is not reloaded — that is
+  // the whole point: a refetch before saving would not close this window.
+  await startEvent(session, topo.eventId);
+
+  await page.getByLabel('Nom de l’événement').fill('Nom écrit trop tard');
+  await page.getByRole('button', { name: 'Enregistrer l’événement' }).click();
+
+  await expect(page.getByTestId('draft-save-state')).toContainText('Modification non enregistrée', {
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId('draft-save-state')).not.toContainText('Enregistré à');
+
+  // Nothing from the stale screen reached the server.
+  const state = await getEventState(session, topo.eventId);
+  expect(state.event.name).not.toBe('Nom écrit trop tard');
+  expect(state.event.status).toBe('live');
+
+  // And the screen converges to the truth rather than leaving a form open.
+  await expect(page.getByRole('heading', { name: 'Préparation verrouillée' })).toBeVisible();
+});
+
+test('supprimer une zone demande confirmation, et annuler n’envoie rien', async ({ page }) => {
+  const topo = await draft('RC2C Confirmation suppression');
+  const zone = await addZone(topo.eventId, 'Zone jetable', 40);
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  await page.getByRole('button', { name: 'Supprimer la zone Zone jetable' }).click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Supprimer la zone « Zone jetable » ?');
+
+  await dialog.getByRole('button', { name: 'Annuler' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByTestId('draft-save-state')).not.toContainText('Enregistré à');
+  expect(
+    (await getEventSpaces(session, topo.eventId)).some((s: any) => s.id === zone.id),
+    'annuler n’a rien envoyé'
+  ).toBe(true);
+
+  // Confirming is the only path to the request.
+  await page.getByRole('button', { name: 'Supprimer la zone Zone jetable' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Supprimer la zone' }).click();
+  await expectSaved(page);
+  expect((await getEventSpaces(session, topo.eventId)).some((s: any) => s.id === zone.id)).toBe(false);
+});
+
+test('supprimer une porte demande confirmation', async ({ page }) => {
+  const topo = await draft('RC2C Confirmation porte');
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  await page.getByRole('button', { name: 'Supprimer la porte Porte Principale' }).click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toContainText('Supprimer la porte « Porte Principale » ?');
+  await dialog.getByRole('button', { name: 'Annuler' }).click();
+
+  expect(await getEventCheckpoints(session, topo.eventId)).toHaveLength(1);
+});
+
+test('un lien de capacité demandé explicitement survit aux rechargements', async ({ page }) => {
+  const topo = await draft('RC2C Lien persistant');
+  const spaces = await getEventSpaces(session, topo.eventId);
+  const site = spaces.find((s: any) => s.id === topo.siteSpaceId);
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  await page.getByRole('button', { name: 'Même capacité que l’événement' }).click();
+  await page.getByRole('button', { name: 'Enregistrer la zone' }).first().click();
+  await expectSaved(page);
+
+  // An unrelated save, purely to force another server reload through the
+  // three-way merge. This is where the link used to be silently dropped:
+  // the stored capacity now matched the event's, so the zone came back as
+  // "independent" — a link inferred away by numeric equality.
+  await page.getByLabel('Nom de l’événement').fill('Nom sans rapport');
+  await page.getByRole('button', { name: 'Enregistrer l’événement' }).click();
+  await expectSaved(page);
+
+  await page.getByLabel('Capacité maximale').fill('1800');
+  await expect(page.getByLabel(`Capacité de la zone ${site.name}`)).toHaveValue('1800');
+});
+
+test('la porte créée par l’éditeur garde une suggestion de libellé jusqu’à ce qu’on la réécrive', async ({
+  page,
+}) => {
+  const topo = await draft('RC2C Provenance libellé');
+  await addZone(topo.eventId, 'Terrasse', 60);
+
+  await loginAsAdmin(page);
+  await openEditor(page, topo.eventId);
+
+  // The POST that creates the door is followed by a reload; the label it
+  // generated must come back as a suggestion, not as the operator's wording.
+  await page.getByRole('button', { name: 'Ajouter une porte' }).click();
+  await expectSaved(page);
+
+  const created = (await getEventCheckpoints(session, topo.eventId)).find(
+    (c: any) => c.name === 'Nouvelle porte'
+  );
+  expect(created).toBeDefined();
+
+  const spaces = await getEventSpaces(session, topo.eventId);
+  const site = spaces.find((s: any) => s.id === topo.siteSpaceId);
+
+  // Scoped to the new door: two doors between the same pair of zones
+  // legitimately carry the same direction wording.
+  const card = page.getByTestId(`checkpoint-${created.id}`);
+
+  // A suggestion follows the zones it was generated from. Both ends are set
+  // explicitly: the door is created against whichever internal zone the
+  // server lists first, which is not this test's business.
+  await card.getByLabel('Deuxième zone de la porte Nouvelle porte').selectOption({ label: 'Terrasse' });
+  await card.getByLabel('Première zone de la porte Nouvelle porte').selectOption({ label: site.name });
+  await expect(card.getByLabel(`Libellé du bouton : De ${site.name} vers Terrasse`)).toHaveValue(
+    'VERS TERRASSE'
+  );
+
+  // Written over, it stops following — and stays written after a save and
+  // the reload that comes with it.
+  await card.getByLabel(`Libellé du bouton : De ${site.name} vers Terrasse`).fill('MONTÉE CONTRÔLÉE');
+  await card.getByRole('button', { name: 'Enregistrer la porte' }).click();
+  await expectSaved(page);
+
+  await card.getByLabel('Deuxième zone de la porte Nouvelle porte').selectOption({ label: 'Extérieur' });
+  await expect(card.getByLabel(`Libellé du bouton : De ${site.name} vers Extérieur`)).toHaveValue(
+    'MONTÉE CONTRÔLÉE'
+  );
 });
