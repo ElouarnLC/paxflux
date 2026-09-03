@@ -16,6 +16,9 @@ import {
   RenameDeviceResponse,
 } from '@paxflux/shared';
 import { CLIENT_APP_VERSION } from '../version.js';
+import { useInstallPrompt } from '../pwa/useInstallPrompt.js';
+import { shouldOfferInstall } from '../pwa/install-state.js';
+import { Download } from 'lucide-react';
 
 interface PairDeviceResponse {
   success: boolean;
@@ -47,6 +50,17 @@ export const PairingPage: React.FC = () => {
   const [label, setLabel] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
+
+  /**
+   * The browser's own install offer, if it made one.
+   *
+   * Progressive enhancement: no install API, an insecure origin, or an
+   * already-installed window all produce no button, and pairing and counting
+   * work identically either way. PaxFlux cannot make a browser install
+   * anything and does not pretend to — the CTA appears only when the browser
+   * has handed over a real prompt.
+   */
+  const { state: installState, promptToInstall } = useInstallPrompt();
 
   useEffect(() => {
     async function handlePairing() {
@@ -216,6 +230,18 @@ export const PairingPage: React.FC = () => {
                   </AlertDescription>
                 </div>
               </Alert>
+            ) : null}
+
+            {shouldOfferInstall(installState) ? (
+              <Button
+                variant="secondary"
+                onClick={promptToInstall}
+                data-testid="install-app"
+                block
+              >
+                <Download />
+                Installer l’application
+              </Button>
             ) : null}
 
             <div className="flex flex-col gap-2">

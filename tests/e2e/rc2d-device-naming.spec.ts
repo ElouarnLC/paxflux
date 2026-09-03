@@ -283,3 +283,62 @@ test('un libellé en vol ne peut pas franchir une frontière d’appairage', asy
 
   await expect(page.getByTestId('counter-device-label')).toContainText('Appareil B');
 });
+
+test('aucune invitation à installer quand le navigateur n’en propose pas', async ({ page }) => {
+  // Playwright's Chromium does not fire `beforeinstallprompt` for a test
+  // origin, which is exactly the state most field browsers are in — iOS has
+  // no install API at all, and a plain-HTTP LAN origin never meets the
+  // criteria. What must not happen is a button that leads nowhere.
+  await pairAndStop(page, 'RC2D pas d’installation');
+
+  await expect(page.getByTestId('install-app')).toHaveCount(0);
+  // And the flow is entirely usable without it.
+  await expect(page.getByRole('button', { name: 'Continuer sans renommer' })).toBeEnabled();
+});
+
+test('l’invitation à installer apparaît quand le navigateur en propose une', async ({ page }) => {
+  // The prompt is synthesised rather than provoked: no vendor hack can make
+  // Chromium offer one here, and forcing it is explicitly out of scope. What
+  // is under test is our own contract — a real event produces the CTA, the
+  // browser's prompt is what gets asked, and nothing claims success the
+  // browser has not confirmed.
+  const topo = await liveEvent('RC2D installation disponible');
+  const token = await createDeviceInviteToken(session, topo.eventId, topo.mainCheckpointId);
+
+  await page.goto(`/pair#${token}`);
+  await expect(page.getByText('Appairage réussi')).toBeVisible();
+
+  // Dispatched once the screen is up, so the listener is certainly attached:
+  // firing it on `load` races React's effects.
+  await page.evaluate(() => {
+    const event = new Event('beforeinstallprompt') as Event & {
+      prompt: () => Promise<void>;
+      userChoice: Promise<{ outcome: string }>;
+    };
+    event.prompt = async () => {
+      (window as unknown as { __paxfluxInstallPrompted?: boolean }).__paxfluxInstallPrompted = true;
+    };
+    event.userChoice = Promise.resolve({ outcome: 'dismissed' });
+    window.dispatchEvent(event);
+  });
+
+  const install = page.getByTestId('install-app');
+  await expect(install).toBeVisible();
+  await install.click();
+
+  // The browser's own prompt was asked for.
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { __paxfluxInstallPrompted?: boolean }).__paxfluxInstallPrompted)
+    )
+    .toBe(true);
+
+  // And because it was dismissed, the button goes away rather than claiming
+  // anything happened. A prompt can only be shown once.
+  await expect(install).toHaveCount(0);
+  await expect(page.getByText(/installée|installation réussie/i)).toHaveCount(0);
+
+  // Counting is unaffected either way.
+  await page.getByRole('button', { name: 'Continuer sans renommer' }).click();
+  await page.waitForURL('**/counter');
+});
