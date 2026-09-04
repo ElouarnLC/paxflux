@@ -91,16 +91,16 @@ test('les quatre étapes du wizard tiennent dans le viewport', async ({ page }) 
   // Step 2 — spaces: name, capacity and delete on one row, twice.
   await page.getByRole('button', { name: 'Suivant' }).click();
   await expect(page.getByRole('heading', { name: '2. Espaces' })).toBeVisible();
-  await page.getByLabel("Nom de l'espace intérieur").first().fill(LONG_FIXTURE_NAMES.siteSpace);
-  await page.getByLabel("Capacité de l'espace").first().fill('12500');
+  await page.getByLabel("Nom de l’espace intérieur").first().fill(LONG_FIXTURE_NAMES.siteSpace);
+  await page.getByLabel("Capacité de l’espace").first().fill('12500');
   await page.getByRole('button', { name: 'Ajouter un espace intérieur' }).click();
-  await page.getByLabel("Nom de l'espace intérieur").nth(1).fill(LONG_FIXTURE_NAMES.vipSpace);
-  await page.getByLabel("Capacité de l'espace").nth(1).fill('850');
+  await page.getByLabel("Nom de l’espace intérieur").nth(1).fill(LONG_FIXTURE_NAMES.vipSpace);
+  await page.getByLabel("Capacité de l’espace").nth(1).fill('850');
   await assertScreenFitsViewport(page, '/admin/events/new — étape 2 (Espaces)');
 
   // Step 3 — doors: two endpoints and two directional labels per door.
   await page.getByRole('button', { name: 'Suivant' }).click();
-  await expect(page.getByRole('heading', { name: '3. Portes & Checkpoints' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '3. Portes' })).toBeVisible();
   await page.getByLabel('Nom de la porte').first().fill(LONG_FIXTURE_NAMES.mainCheckpoint);
   await inboundLabel(page).first().fill(LONG_FIXTURE_NAMES.labelAToB);
   await outboundLabel(page).first().fill(LONG_FIXTURE_NAMES.labelBToA);
@@ -113,14 +113,14 @@ test('les quatre étapes du wizard tiennent dans le viewport', async ({ page }) 
   // Step 4 — the topology summary, where every long string appears at once.
   await page.getByRole('button', { name: 'Suivant' }).click();
   await expect(page.getByRole('heading', { name: '4. Validation de la Topologie' })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Créer l'événement/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Créer l’événement/ })).toBeVisible();
   await assertScreenFitsViewport(page, '/admin/events/new — étape 4 (Validation)');
 });
 
 test('la gestion des appareils et le QR généré tiennent dans le viewport', async ({ page }) => {
   await loginAsAdmin(page);
   await page.goto(`/admin/events/${topo.eventId}/devices`);
-  await expect(page.getByRole('heading', { name: 'Gestion des Appareils et QR Codes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Gestion des appareils et QR codes' })).toBeVisible();
   await assertScreenFitsViewport(page, '/admin/events/:id/devices');
 
   // The generated QR panel: a 180px code, a badge, explanatory copy and a
@@ -138,7 +138,7 @@ test('les statistiques et l’état système tiennent dans le viewport', async (
   await assertScreenFitsViewport(page, '/admin/events/:id/analytics');
 
   await page.goto('/admin/system');
-  await expect(page.getByRole('heading', { name: 'État Système & Sauvegardes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'État système et sauvegardes' })).toBeVisible();
   await assertScreenFitsViewport(page, '/admin/system');
 });
 

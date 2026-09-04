@@ -15,7 +15,14 @@ export const Progress = React.forwardRef<
   <ProgressPrimitive.Root
     ref={ref}
     className={cn('relative h-3 w-full overflow-hidden rounded-full border border-border bg-background', className)}
-    value={value}
+    // Clamped to the bar's own 0–100 scale, which is not the same thing as
+    // clamping the count: the occupancy beside it is written out in full and
+    // an incoherent one is reported, never corrected (ADR-004). Radix
+    // `console.error`s a value outside the range and then renders nothing,
+    // so an over-capacity or negative gauge — the two states this bar most
+    // needs to be legible in — is where it would give up. `null` still means
+    // indeterminate and is passed through.
+    value={value === null || value === undefined ? value : Math.min(Math.max(value, 0), 100)}
     {...props}
   >
     <ProgressPrimitive.Indicator

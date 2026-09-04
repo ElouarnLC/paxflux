@@ -69,20 +69,20 @@ export const SystemPanel: React.FC = () => {
 
   return (
     <div className="mx-auto w-full max-w-5xl flex-1 space-y-4 p-4 sm:space-y-6 sm:p-6">
-      <PageHeader title="État Système & Sauvegardes" />
+      <PageHeader title="État système et sauvegardes" />
 
       {/* Same breakpoint reasoning as the analytics stats: two columns only
           once they can be read. */}
       <div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 sm:gap-4 md:grid-cols-4">
         <MetricCard label="Version" value={status.version} hint={status.nodeVersion} />
         <MetricCard
-          label="Intégrité DB"
+          label="Intégrité de la base"
           tone={status.database.quickCheckOk ? 'success' : 'danger'}
           value={status.database.quickCheckOk ? 'OK' : 'ATTENTION'}
           hint="PRAGMA quick_check"
         />
         <MetricCard
-          label="Taille Base"
+          label="Taille de la base"
           value={
             <>
               {(status.database.sizeBytes / 1024).toFixed(1)}{' '}
@@ -105,7 +105,7 @@ export const SystemPanel: React.FC = () => {
       </div>
 
       <Section
-        title="Historique des Sauvegardes SQLite"
+        title="Historique des sauvegardes SQLite"
         contentClassName="p-0 sm:p-0"
         actions={
           <Button size="sm" disabled={backingUp} onClick={handleManualBackup}>

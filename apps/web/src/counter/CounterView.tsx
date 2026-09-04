@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { localDb } from '../offline/db.js';
+import { readDeviceTruthSnapshot } from '../offline/truth-snapshot.js';
 import {
   enqueueCountAction,
   enqueueReversalAction,
@@ -20,6 +21,16 @@ import {
   getConfirmedActions,
 } from '../offline/confirmed-actions.js';
 import { projectPendingActions, projectedSpaceOccupancy } from '../offline/projection.js';
+import {
+  ZONE_PENDING_ONLY_MESSAGE,
+  describeAnomalyForCounter,
+  describeAuthoritative,
+  describePendingDelta,
+  formatCount,
+  readOccupancyTruth,
+  readPendingDisclosure,
+} from './occupancy-truth.js';
+import { vibrate } from './haptics.js';
 import {
   describeOutboxError,
   isRetryable,
@@ -98,18 +109,48 @@ function describeBlockedAction(
 }
 
 /**
- * Haptic confirmation for a tap (SPEC §10.4). Failing is inconsequential —
- * the count is already recorded — and logging on every tap would be noise,
- * so the outcome is deliberately not surfaced.
+ * One zone's projected occupancy.
+ *
+ * Marked rather than annotated when this device holds unacknowledged
+ * movements for it: the disclosure sentence above the badges has already
+ * said what is pending and on whose handset, and repeating a signed delta
+ * inside every badge is precisely the duplication RC2-E is here to remove.
+ * The dot is decorative and paired with text, never colour alone.
  */
-function vibrate(pattern: number | number[]): void {
-  if (typeof navigator === 'undefined' || !navigator.vibrate) return;
-  try {
-    navigator.vibrate(pattern);
-  } catch {
-    // Some browsers throw when vibration is disabled by the user.
-  }
-}
+const ZoneOccupancyBadge: React.FC<{
+  testId: string;
+  name: string;
+  occupancy: number | null;
+  pendingDelta: number | null;
+}> = ({ testId, name, occupancy, pendingDelta }) => {
+  if (occupancy === null) return null;
+  const pending = pendingDelta !== null && pendingDelta !== 0;
+
+  // `data-occupancy` carries the figure machine-readably: the badge's own
+  // text ends in a screen-reader sentence when something is pending, so
+  // reading the number off the end of it is not sound.
+  return (
+    <span
+      data-testid={testId}
+      data-occupancy={occupancy}
+      data-pending={pending ? 'true' : 'false'}
+      className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg border border-border bg-card text-foreground/90 font-mono inline-flex items-baseline gap-1"
+    >
+      {/* Only the zone name gives way. The occupancy is the reason the badge
+          exists, so it never truncates. */}
+      <span className="min-w-0 truncate">{name}</span>
+      <strong className="flex-shrink-0 text-foreground">{formatCount(occupancy)}</strong>
+      {pending ? (
+        <>
+          <span aria-hidden="true" className="flex-shrink-0 text-warning">
+            •
+          </span>
+          <span className="sr-only">, en attente sur cet appareil</span>
+        </>
+      ) : null}
+    </span>
+  );
+};
 
 export const CounterView: React.FC = () => {
   // The pairing configuration is read live from storage, not held in
@@ -120,25 +161,44 @@ export const CounterView: React.FC = () => {
   const storedConfig = useLiveQuery(() => localDb.device_config.get('current'), []);
   const bootstrap: DeviceBootstrapResponse | null = storedConfig?.bootstrap ?? null;
   const awaitingConfigurationFor = storedConfig?.bootstrap ? null : (storedConfig?.pendingSessionId ?? null);
-  // The authoritative state and the lifecycle marker are read live from
-  // storage rather than mirrored into React state.
+  // The authoritative state and the outbox are read live from storage
+  // rather than mirrored into React state.
   //
   // Every writer — bootstrap, batch response, SSE frame — goes through the
   // same persistence funnel, so reading the result back is the only way the
   // screen cannot disagree with what the device actually holds. Mirroring
   // it into component state is how a stale `live`, restored at startup,
   // came to shadow a `closing` learnt later from a batch response.
-  const storedSnapshot = useLiveQuery(() => localDb.event_state.get('current'), []);
+  //
+  // Both come from *one* query, and that is load-bearing rather than tidy.
+  // The gauge is `authoritative + pending`, one term from each table. As two
+  // subscriptions they re-query independently after a write and emit in
+  // whichever order they finish, so React renders the pair mid-flight: on an
+  // acknowledgment the outbox emitted first and the gauge fell 1 → 0 → 1
+  // before settling. One querier means one emission, one render, and no
+  // arithmetic across two different instants.
+  //
+  // One querier is not by itself one snapshot, though: two awaits inside it
+  // still leave a window an acknowledgment can commit into, and Dexie's
+  // re-query only protects a subscription it has already established — not
+  // the first execution, which is exactly when a device reopening with a
+  // queue flushes it. `readDeviceTruthSnapshot` makes the pair one readonly
+  // transaction; the write side is transactional for the same reason
+  // (`flushOutbox`), and this is the read side of it.
+  const storedTruth = useLiveQuery(() => readDeviceTruthSnapshot(), []);
+  // Undefined while the first query is in flight, exactly as before, and
+  // undefined again when there is no stored state — the two are treated
+  // alike by `snapshotMatchesPairing` below.
+  const storedSnapshot = storedTruth?.snapshot;
   const [lastAction, setLastAction] = useState<UndoCandidate | null>(null);
   const [confirmedActions, setConfirmedActions] = useState<ConfirmedActionRecord[]>([]);
   const [isUndoing, setIsUndoing] = useState(false);
   const [undoNotice, setUndoNotice] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-  // One live query over the whole outbox: every count the screen needs is
-  // derived from it, so they can never disagree with each other.
-  const outboxActions =
-    useLiveQuery(() => localDb.outbox_actions.orderBy('sequence').toArray(), []) ?? [];
+  // Every count the screen shows is derived from the same array, so they can
+  // never disagree with each other.
+  const outboxActions = storedTruth?.outboxActions ?? [];
   const unresolvedCount = outboxActions.length;
   const retryableCount = outboxActions.filter(isRetryable).length;
   const blockedActions = outboxActions.filter(needsReconciliation);
@@ -323,8 +383,25 @@ export const CounterView: React.FC = () => {
     // projection recomputes whenever the outbox actually changes.
   }, [authoritativeState, bootstrap, outboxActions, confirmedActions]);
 
-  const displayedOccupancy = projection?.projectedEventOccupancy ?? authoritativeState?.eventOccupancy ?? 0;
   const capacity = authoritativeState?.eventCapacity ?? bootstrap?.event.capacity ?? 0;
+
+  /**
+   * The three numbers behind the gauge: what the server confirmed, what this
+   * device still holds, and the sum the operator sees.
+   *
+   * The sum is still what the big number shows — a tap must move the gauge
+   * immediately, and that is unchanged. What is new is that the split is
+   * disclosed whenever it is non-zero, so "104" stops meaning two different
+   * things depending on the outbox.
+   */
+  const occupancy = readOccupancyTruth({
+    authoritative: authoritativeState?.eventOccupancy ?? 0,
+    // Straight from the existing projection: no movement arithmetic is
+    // reimplemented here.
+    pendingDelta: projection?.globalDelta ?? 0,
+    capacity,
+  });
+  const displayedOccupancy = occupancy.displayed;
   const remaining = capacity - displayedOccupancy;
 
   const spaceAOccupancy =
@@ -335,6 +412,14 @@ export const CounterView: React.FC = () => {
     authoritativeState && projection && bootstrap
       ? projectedSpaceOccupancy(authoritativeState, bootstrap.checkpoint.spaceBId, projection)
       : null;
+
+  // The zone badges are projected exactly as the gauge is, so what is
+  // unacknowledged *per zone* decides whether each badge is marked. Read
+  // from the same projection rather than recomputed.
+  const spaceADelta = projection?.spaceDeltas.get(bootstrap?.checkpoint.spaceAId ?? '') ?? null;
+  const spaceBDelta = projection?.spaceDeltas.get(bootstrap?.checkpoint.spaceBId ?? '') ?? null;
+  // One sentence for the whole section — see `readPendingDisclosure`.
+  const pendingDisclosure = readPendingDisclosure(projection?.globalDelta ?? 0, [spaceADelta, spaceBDelta]);
 
   // The marker wins only while it is more recent than the state frame in
   // hand. A device that was offline through `begin-closing` never saw the
@@ -357,6 +442,9 @@ export const CounterView: React.FC = () => {
     async (direction: Direction) => {
       if (!isCountingAllowed || !owner) return;
 
+      // Fire-and-forget on purpose (SPEC §10.4): the outcome is a diagnostic
+      // for the pairing screen's test button, never a condition here. The
+      // movement below is enqueued whether or not the phone can buzz.
       vibrate(25);
       const action = await enqueueCountAction(direction, owner);
       setLastAction({
@@ -677,7 +765,7 @@ export const CounterView: React.FC = () => {
       {/* 2. Global Occupancy Readout */}
       <section className="px-4 py-3 text-center">
         <div className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-0.5">
-          Jauge Globale
+          Jauge globale
         </div>
         {/* Six-figure gauges exist. The pair wraps rather than widening the
             document, and the capacity drops to its own line if it must. */}
@@ -686,7 +774,10 @@ export const CounterView: React.FC = () => {
             data-testid="global-occupancy"
             className="text-4xl sm:text-5xl font-black text-foreground tracking-tight"
           >
-            {displayedOccupancy.toLocaleString('fr-FR')}
+            {/* `formatCount`, not `toLocaleString`: CLDR gives French the
+                ASCII hyphen, and a gauge reading `-1` two lines above an
+                anomaly reading `−1` is the same number in two glyphs. */}
+            {formatCount(displayedOccupancy)}
           </span>
           <span className="text-lg sm:text-xl font-bold text-muted-foreground">
             / {capacity.toLocaleString('fr-FR')}
@@ -699,6 +790,49 @@ export const CounterView: React.FC = () => {
           </span>
         </div>
 
+        {/* What the numbers in this section are made of — one sentence for
+            all of them, never one per figure.
+
+            `global`: the gauge is a sum, so the delta is named.
+            `zones-only`: an internal transfer is pending. The gauge is at
+            the server's own figure and correct; the zone badges below are
+            not, and are marked. "+0 en attente" is not written because the
+            global gauge has not moved and any number here would be read as
+            though it had. */}
+        {pendingDisclosure !== 'none' ? (
+          <p
+            data-testid="occupancy-pending-disclosure"
+            data-pending-scope={pendingDisclosure}
+            className="mt-1.5 text-[11px] font-semibold text-muted-foreground"
+          >
+            {describeAuthoritative(occupancy)}
+            <span aria-hidden="true"> · </span>
+            <span className="text-warning">
+              {pendingDisclosure === 'global' ? describePendingDelta(occupancy) : ZONE_PENDING_ONLY_MESSAGE}
+            </span>
+          </p>
+        ) : null}
+
+        {/* An incoherent total is reported, never corrected: ADR-004 keeps
+            the movements exactly as they were counted. Written in full
+            rather than signalled by the badge's colour, and scoped — the
+            server's own anomaly reads differently from one only this
+            device's unacknowledged arithmetic reaches. */}
+        {occupancy.anomaly ? (
+          <Alert
+            tone={occupancy.anomaly.scope === 'authoritative' ? 'danger' : 'warning'}
+            className="mt-2 text-left"
+            data-testid="occupancy-anomaly"
+            data-anomaly-scope={occupancy.anomaly.scope}
+            data-anomaly-kind={occupancy.anomaly.kind}
+          >
+            <AlertTriangle />
+            <AlertDescription className="mt-0 text-[11px] leading-snug text-foreground/90">
+              {describeAnomalyForCounter(occupancy.anomaly, capacity)}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         {/* This door's own two zones, projected the same way. An internal
             transfer leaves the global gauge above untouched while these two
             move by −1 and +1, which is the only place that is visible. An
@@ -708,28 +842,18 @@ export const CounterView: React.FC = () => {
             at most half the row and truncates its name — the number, which
             is the point of the badge, always stays readable. */}
         <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
-          {spaceAOccupancy !== null ? (
-            <span
-              data-testid="space-a-occupancy"
-              className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg border border-border bg-card text-foreground/90 font-mono inline-flex items-baseline gap-1"
-            >
-              {/* Only the zone name gives way. The occupancy is the reason
-                  the badge exists, so it never truncates. */}
-              <span className="min-w-0 truncate">{bootstrap.checkpoint.spaceAName}</span>
-              <strong className="flex-shrink-0 text-foreground">{spaceAOccupancy}</strong>
-            </span>
-          ) : null}
-          {spaceBOccupancy !== null ? (
-            <span
-              data-testid="space-b-occupancy"
-              className="max-w-[48%] min-w-0 px-2 py-1 rounded-lg border border-border bg-card text-foreground/90 font-mono inline-flex items-baseline gap-1"
-            >
-              {/* Only the zone name gives way. The occupancy is the reason
-                  the badge exists, so it never truncates. */}
-              <span className="min-w-0 truncate">{bootstrap.checkpoint.spaceBName}</span>
-              <strong className="flex-shrink-0 text-foreground">{spaceBOccupancy}</strong>
-            </span>
-          ) : null}
+          <ZoneOccupancyBadge
+            testId="space-a-occupancy"
+            name={bootstrap.checkpoint.spaceAName}
+            occupancy={spaceAOccupancy}
+            pendingDelta={spaceADelta}
+          />
+          <ZoneOccupancyBadge
+            testId="space-b-occupancy"
+            name={bootstrap.checkpoint.spaceBName}
+            occupancy={spaceBOccupancy}
+            pendingDelta={spaceBDelta}
+          />
         </div>
       </section>
 

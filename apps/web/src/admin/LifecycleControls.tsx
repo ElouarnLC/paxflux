@@ -197,7 +197,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
           <Alert tone="warning">
             <AlertTriangle />
             <AlertDescription className="mt-0 text-foreground/90">
-              {describePreflightError(preflight.data.error) || "Cet événement n'est pas prêt à démarrer."}
+              {describePreflightError(preflight.data.error) || "Cet événement n’est pas prêt à démarrer."}
             </AlertDescription>
           </Alert>
         ) : (
@@ -230,15 +230,15 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
         <ConfirmAction
           disabled={actionLoading || !ready}
           busy={actionLoading}
-          title="Démarrer l'événement ?"
-          description="L'événement passe en direct et les compteurs sur le terrain commencent à accepter des comptages."
-          confirmLabel="Démarrer l'événement"
+          title="Démarrer l’événement ?"
+          description="L’événement passe en direct et les compteurs sur le terrain commencent à accepter des comptages."
+          confirmLabel="Démarrer l’événement"
           confirmVariant="success"
           onConfirm={() => runTransition('start')}
           trigger={
             <Button variant="success" className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading || !ready}>
               {actionLoading ? <Loader2 className="animate-spin" /> : <PlayCircle />}
-              Démarrer l'événement
+              Démarrer l’événement
             </Button>
           }
         />
@@ -254,7 +254,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
           disabled={actionLoading}
           busy={actionLoading}
           title="Débuter la fermeture ?"
-          description="Les compteurs sur le terrain n'accepteront plus de nouveaux comptages. Ceux déjà enregistrés hors ligne continueront d'être drainés."
+          description="Les compteurs sur le terrain n’accepteront plus de nouveaux comptages. Ceux déjà enregistrés hors ligne continueront d’être drainés."
           confirmLabel="Débuter la fermeture"
           confirmVariant="closing"
           onConfirm={() => runTransition('begin-closing')}
@@ -341,15 +341,15 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
         <ConfirmAction
           disabled={actionLoading || !allSynced}
           busy={actionLoading}
-          title="Clôturer l'événement ?"
+          title="Clôturer l’événement ?"
           description="Tous les appareils actifs sont synchronisés. La jauge finale sera figée et le comptage définitivement arrêté."
-          confirmLabel="Clôturer l'événement"
+          confirmLabel="Clôturer l’événement"
           confirmVariant="destructive"
           onConfirm={() => runTransition('close')}
           trigger={
             <Button variant="destructive" className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading || !allSynced}>
               {actionLoading ? <Loader2 className="animate-spin" /> : <XCircle />}
-              Clôturer l'événement
+              Clôturer l’événement
             </Button>
           }
         />
@@ -359,7 +359,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
             disabled={actionLoading}
             busy={actionLoading}
             title="Fermeture forcée"
-            description="Cette clôture ignore des appareils potentiellement non synchronisés : les comptages qu'ils détiennent encore ne seront pas intégrés à la jauge finale. Le motif est obligatoire et conservé dans le journal d'audit."
+            description="Cette clôture ignore des appareils potentiellement non synchronisés : les comptages qu’ils détiennent encore ne seront pas intégrés à la jauge finale. Le motif est obligatoire et conservé dans le journal d’audit."
             confirmLabel="Confirmer la fermeture forcée"
             confirmVariant="danger"
             reasonLabel="Motif de la fermeture forcée *"
@@ -381,7 +381,7 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
     if (!isAdmin) {
       return (
         <p className="text-xs text-muted-foreground">
-          Événement clos. Seul un administrateur peut le réouvrir ou l'archiver.
+          Événement clos. Seul un administrateur peut le réouvrir ou l’archiver.
         </p>
       );
     }
@@ -392,9 +392,9 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
         <ReasonAction
           disabled={actionLoading}
           busy={actionLoading}
-          title="Réouvrir l'événement clos ?"
-          description="L'événement repasse en direct et les compteurs recommencent à accepter des comptages. Le motif est obligatoire et conservé dans le journal d'audit."
-          confirmLabel="Réouvrir l'événement"
+          title="Réouvrir l’événement clos ?"
+          description="L’événement repasse en direct et les compteurs recommencent à accepter des comptages. Le motif est obligatoire et conservé dans le journal d’audit."
+          confirmLabel="Réouvrir l’événement"
           confirmVariant="default"
           reasonLabel="Motif de la réouverture *"
           reasonPlaceholder="Ex : clôture anticipée par erreur"
@@ -402,22 +402,22 @@ export const LifecycleControls: React.FC<LifecycleControlsProps> = ({ event, onC
           trigger={
             <Button className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading}>
               {actionLoading ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-              Réouvrir l'événement
+              Réouvrir l’événement
             </Button>
           }
         />
         <ConfirmAction
           disabled={actionLoading}
           busy={actionLoading}
-          title="Archiver l'événement ?"
-          description="Cette action est terminale : l'événement passe en lecture seule et ne pourra plus être réouvert."
-          confirmLabel="Archiver l'événement"
+          title="Archiver l’événement ?"
+          description="Cette action est terminale : l’événement passe en lecture seule et ne pourra plus être réouvert."
+          confirmLabel="Archiver l’événement"
           confirmVariant="destructive"
           onConfirm={() => runTransition('archive')}
           trigger={
             <Button variant="secondary" className="w-full sm:w-auto sm:min-w-56" disabled={actionLoading}>
               {actionLoading ? <Loader2 className="animate-spin" /> : <Archive />}
-              Archiver l'événement
+              Archiver l’événement
             </Button>
           }
         />

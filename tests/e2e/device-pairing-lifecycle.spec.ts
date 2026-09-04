@@ -90,7 +90,7 @@ test('cycle appareil complet : appairage sur un second appareil, heartbeat, supe
   await adminContext.close();
 });
 
-test("l'admin affiche l'URL d'appairage fournie par le serveur, sans la reconstruire depuis le navigateur", async ({
+test("l’admin affiche l’URL d’appairage fournie par le serveur, sans la reconstruire depuis le navigateur", async ({
   page,
 }) => {
   const session = await getAdminSession();

@@ -18,7 +18,8 @@ import {
 import { CLIENT_APP_VERSION } from '../version.js';
 import { useInstallPrompt } from '../pwa/useInstallPrompt.js';
 import { shouldOfferInstall } from '../pwa/install-state.js';
-import { Download } from 'lucide-react';
+import { HAPTIC_TEST_PATTERN, HapticReport, describeHapticOutcome, vibrate } from './haptics.js';
+import { Download, Vibrate } from 'lucide-react';
 
 interface PairDeviceResponse {
   success: boolean;
@@ -61,6 +62,23 @@ export const PairingPage: React.FC = () => {
    * has handed over a real prompt.
    */
   const { state: installState, promptToInstall } = useInstallPrompt();
+
+  /**
+   * The result of the last `Tester la vibration`, if it was pressed.
+   *
+   * Pairing is the one moment an operator is holding the phone, not yet at a
+   * door, and can find out whether it buzzes — before a shift where a silent
+   * handset would be read as a missed tap. It is a diagnostic and nothing
+   * more: no state is stored, the answer is not sent anywhere, and counting
+   * is unaffected either way.
+   */
+  const [hapticReport, setHapticReport] = useState<HapticReport | null>(null);
+
+  const testVibration = () => {
+    // Synchronous, inside the click handler: the API requires user
+    // activation, and deferring the call past it is itself a refusal.
+    setHapticReport(describeHapticOutcome(vibrate(HAPTIC_TEST_PATTERN)));
+  };
 
   useEffect(() => {
     async function handlePairing() {
@@ -183,7 +201,7 @@ export const PairingPage: React.FC = () => {
     <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
       <CenteredPanel
         icon={Smartphone}
-        title="Appairage Compteur"
+        title="Appairage compteur"
         description="Configuration de l’appareil de comptage terrain..."
         className="text-center"
       >
@@ -253,6 +271,28 @@ export const PairingPage: React.FC = () => {
                 Continuer sans renommer
               </Button>
             </div>
+
+            {/* Below the way out, on purpose. This is a diagnostic — it
+                re-pairs nothing, counts nothing and navigates nowhere — and
+                on a 320px handset a secondary action that pushes `Continuer`
+                off the fold has made the screen worse to reach a phone's
+                vibration motor. */}
+            <Button variant="ghost" onClick={testVibration} data-testid="test-haptics" block>
+              <Vibrate />
+              Tester la vibration
+            </Button>
+
+            {hapticReport ? (
+              <Alert
+                tone={hapticReport.tone}
+                className="text-left"
+                data-testid="haptic-result"
+                data-haptic-outcome={hapticReport.outcome}
+              >
+                <Vibrate />
+                <AlertDescription>{hapticReport.message}</AlertDescription>
+              </Alert>
+            ) : null}
           </div>
         ) : null}
 

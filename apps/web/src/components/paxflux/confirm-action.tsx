@@ -221,7 +221,7 @@ export function ReasonAction({
 
 export interface RenameActionProps extends Omit<ConfirmActionProps, 'onConfirm' | 'description'> {
   description?: React.ReactNode;
-  /** Field label, e.g. "Nom de l'appareil". */
+  /** Field label, e.g. "Nom de l’appareil". */
   fieldLabel: string;
   /** The value as it stands. Every opening starts from this, not from the last attempt. */
   currentValue: string;

@@ -46,11 +46,105 @@ PaxFlux is now listening at `http://localhost:3000`.
 
 ### 3. Production Deployment with Caddy (Automatic HTTPS)
 
-For live events requiring HTTPS and public domain names:
+This is the supported shape of a live event. Everything else on this page
+works over plain HTTP; **installing the counter on a phone and counting
+offline do not.**
 
 ```bash
 DOMAIN=counter.yourfestival.org docker compose -f docker-compose.caddy.yml up -d
 ```
+
+`docker-compose.caddy.yml` runs two containers: PaxFlux itself, unexposed on
+the internal network, and Caddy on 80/443 obtaining and renewing a
+certificate for `DOMAIN` automatically. It sets `TRUST_PROXY=true` and
+`PUBLIC_BASE_URL=https://${DOMAIN}` for you.
+
+#### Why HTTPS is not optional for phones
+
+A browser grants a **secure context** to HTTPS origins and to loopback, and
+nothing else. Two separate capabilities are gated on it, and it is worth
+keeping them apart:
+
+* **Service-worker registration**, which is what gives the counter an offline
+  shell. It happens in an ordinary browser tab, with nobody installing
+  anything.
+* **Installation as a home-screen web app**, which is what gives an operator a
+  standalone launcher to open at a door. Chromium offers it through a
+  JavaScript prompt PaxFlux surfaces as a button; iOS and iPadOS offer it
+  manually through Safari's *Share → Add to Home Screen*, with no such prompt
+  — the absence of the prompt says nothing about whether the platform can
+  install the app.
+
+So a handset opening PaxFlux over `http://192.168.1.x:3000` can pair and count
+perfectly well *while online*, and gets neither of the two. That is a browser
+rule, not a PaxFlux limitation, and PaxFlux says so on the pairing screen
+rather than letting a volunteer discover it in a dead spot.
+
+| Origin the phone opens | Pair & count online | Service worker registers | Install to home screen |
+| :--- | :---: | :---: | :---: |
+| `https://counter.yourfestival.org` | yes | yes | yes |
+| `http://<LAN-IP>:3000` | yes | **no** | **no** |
+| `http://localhost:3000` | yes | yes | yes — *the browser's own development exception, on the machine itself* |
+
+Use LAN-IP HTTP to try PaxFlux out. Do not run an event on it.
+
+#### `PUBLIC_BASE_URL` and the QR codes
+
+`PUBLIC_BASE_URL` must be **the origin the phones can reach**, which is not
+always the one staff are using: an administrator may well be on
+`http://localhost:3000` through an SSH tunnel while the handsets need the
+public name.
+
+The server, not the browser, decides what a pairing QR encodes
+(`apps/server/src/auth/pairing.ts`):
+
+* when `PUBLIC_BASE_URL` is set it wins outright, and the QR resolves to it;
+* when it is unset, the origin of the request that generated the QR is used —
+  correct for the common LAN case, where staff and phones share an address;
+* when neither yields anything usable, generating the QR **fails** rather
+  than encoding a link no handset can open.
+
+Two conditions are detected and reported next to the QR rather than left to
+be discovered in the field: a base URL on loopback, which no phone can reach,
+and a base URL that is not a secure context, which pairs and counts but never
+installs. Setting `PUBLIC_BASE_URL` to an `https://` origin also switches on
+`Secure` cookies and the CSP `upgrade-insecure-requests` directive.
+
+#### What the reverse proxy must not break
+
+* **SSE must stream.** Live supervision is a `text/event-stream` that stays
+  open; a proxy that buffers responses turns it into a dashboard that updates
+  when the connection eventually closes. The bundled `Caddyfile` sets
+  `flush_interval -1` on the `reverse_proxy` for exactly this reason. Any
+  substitute needs the equivalent — `proxy_buffering off` on nginx.
+* **`/api` is never served from cache.** The service worker registers
+  `NetworkOnly` for `/api/` and `/health/`, and excludes both from the
+  navigation fallback (`apps/web/vite.config.ts`). Occupancy is authoritative
+  server state; a cached mutation response would be a wrong number presented
+  as a confirmed one. A proxy or CDN in front of PaxFlux must not add caching
+  of its own for those paths.
+* **`TRUST_PROXY=true`** so the application sees the real client protocol and
+  address rather than the proxy's.
+
+Any reverse proxy meeting those conditions works — Caddy is what this
+repository ships and tests. If you terminate TLS somewhere else (a cloud
+tunnel, an existing nginx, a load balancer), the requirements above are the
+contract; the origin the phone opens still has to be the one in
+`PUBLIC_BASE_URL`.
+
+#### Data, backups and restores are unchanged by any of this
+
+The database and snapshots live on the `paxflux_data` and `paxflux_backups`
+volumes in both Compose files; the proxy holds no application state. Restoring
+is the offline procedure documented under [Restoring from Backup](#restoring-from-backup),
+and it invalidates every session by design — staff log in again and **every
+counter phone must be paired again with a fresh QR code**. Re-pairing is also
+what gives a handset the restored occupancy as its baseline, so nobody needs
+to be told to clear site data.
+
+Before the first real event, work through
+[`docs/FIELD_ACCEPTANCE_RC2.md`](docs/FIELD_ACCEPTANCE_RC2.md) on the actual
+phones you will use. No amount of CI covers a physical handset.
 
 ---
 

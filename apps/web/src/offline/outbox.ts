@@ -580,28 +580,56 @@ export async function flushOutbox(): Promise<FlushOutcome> {
     const acknowledged = data.acknowledged;
     const byId = new Map(batch.map((a) => [a.clientActionId, a]));
 
-    // Remember the counts the server confirmed *before* deleting them, so
-    // undo survives the acknowledgment that removes them (SPEC §11.2).
-    for (const ack of acknowledged) {
-      if (ack.status !== 'applied' && ack.status !== 'duplicate') continue;
-      const action = byId.get(ack.clientActionId);
-      if (!action) continue;
-      await recordConfirmedAction(action, { spaceAId: pairing.spaceAId, spaceBId: pairing.spaceBId });
-    }
+    // Everything the acknowledgment implies, committed together.
+    //
+    // The counter's gauge is `authoritative + pendingDelta`, one term from
+    // `event_state` and one from `outbox_actions`. Written as two commits,
+    // the database itself passes through a state that was never true — the
+    // acknowledged action already gone from the outbox while the total that
+    // absorbed it has not landed — and any reader observes it. On a single
+    // pending entry the gauge visibly fell 1 → 0 → 1 as the ACK arrived; on
+    // the other ordering it would read 1 → 2 → 1, the double jump. Dexie
+    // publishes live queries at commit, so one transaction makes the
+    // intermediate unobservable rather than merely unlikely. `CounterView`
+    // reads both through a single querier for the matching reason; neither
+    // half is sufficient alone.
+    //
+    // A throw in here now rolls the whole thing back rather than leaving
+    // some actions transitioned and others not: the rows stay `sending`,
+    // `recoverInFlightActions` returns them to `pending` at the next
+    // startup, and `clientActionId` idempotence makes the re-send safe.
+    await localDb.transaction(
+      'rw',
+      localDb.outbox_actions,
+      localDb.confirmed_actions,
+      localDb.event_state,
+      async () => {
+        // Remember the counts the server confirmed *before* deleting them,
+        // so undo survives the acknowledgment that removes them (SPEC §11.2).
+        for (const ack of acknowledged) {
+          if (ack.status !== 'applied' && ack.status !== 'duplicate') continue;
+          const action = byId.get(ack.clientActionId);
+          if (!action) continue;
+          await recordConfirmedAction(action, { spaceAId: pairing.spaceAId, spaceBId: pairing.spaceBId });
+        }
 
-    await applyTransitions(acknowledged.map(acknowledgmentTransition));
+        await applyTransitions(acknowledged.map(acknowledgmentTransition));
 
-    // An action that was sent but came back unmentioned has no verdict, so
-    // it must not stay stuck in `sending`.
-    const answered = new Set(acknowledged.map((ack) => ack.clientActionId));
-    const unanswered = batch.filter((a) => !answered.has(a.clientActionId));
-    await applyTransitions(unanswered.map((a) => networkFailureTransition(a, 'NO_ACKNOWLEDGMENT')));
+        // An action that was sent but came back unmentioned has no verdict,
+        // so it must not stay stuck in `sending`.
+        const answered = new Set(acknowledged.map((ack) => ack.clientActionId));
+        const unanswered = batch.filter((a) => !answered.has(a.clientActionId));
+        await applyTransitions(unanswered.map((a) => networkFailureTransition(a, 'NO_ACKNOWLEDGMENT')));
 
-    // A batch response carries the authoritative state too, and it goes
-    // through the same funnel as bootstrap and SSE.
-    if (data.state) {
-      await persistAuthoritativeState(pairing.owner.eventId, data.state, 'batch');
-    }
+        // A batch response carries the authoritative state too, and it goes
+        // through the same funnel as bootstrap and SSE — which opens its own
+        // `rw` transaction on `event_state`, joining this one. Its staleness
+        // guard is unchanged and still decides whether the frame is stored.
+        if (data.state) {
+          await persistAuthoritativeState(pairing.owner.eventId, data.state, 'batch');
+        }
+      }
+    );
 
     notifyOutboxChanged();
 

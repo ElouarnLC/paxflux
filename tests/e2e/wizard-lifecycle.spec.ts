@@ -33,7 +33,7 @@ test.describe('Wizard de création d\'événement', () => {
     await page.getByRole('button', { name: 'Suivant' }).click(); // step1 -> step2
     await page.getByRole('button', { name: 'Suivant' }).click(); // step2 -> step3
     await page.getByRole('button', { name: 'Suivant' }).click(); // step3 -> step4
-    await page.getByRole('button', { name: /Créer l'événement/i }).click();
+    await page.getByRole('button', { name: /Créer l’événement/i }).click();
     await page.waitForTimeout(1000);
 
     // The wizard must not surface an error while creating the event, and
@@ -75,7 +75,7 @@ test.describe('Wizard de création d\'événement', () => {
     await page.getByRole('button', { name: 'Suivant' }).click();
     await page.getByRole('button', { name: 'Suivant' }).click();
     await page.getByRole('button', { name: 'Suivant' }).click();
-    await page.getByRole('button', { name: /Créer l'événement/i }).click();
+    await page.getByRole('button', { name: /Créer l’événement/i }).click();
 
     await page.waitForURL(/\/admin\?event=/);
 
@@ -85,7 +85,7 @@ test.describe('Wizard de création d\'événement', () => {
     // <select> options) — and its lifecycle controls must offer the
     // draft -> live "Démarrer" action, not "Débuter la fermeture".
     await expect(page.getByTestId('dashboard-event-name')).toHaveText('Nouveau Brouillon À Revoir');
-    await expect(page.getByRole('button', { name: /Démarrer l'événement/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Démarrer l’événement/i })).toBeVisible();
   });
 
   test('le wizard permet de configurer plusieurs portes entre les mêmes espaces (scénario d\'acceptation Phase 4)', async ({ page }) => {
@@ -101,9 +101,9 @@ test.describe('Wizard de création d\'événement', () => {
     // Step 2 — Espaces: "Site" already exists by default; add "VIP". No
     // door back to Extérieur is created for VIP — it stays reachable only
     // through Site<->VIP, per the reference scenario.
-    await page.getByLabel("Nom de l'espace intérieur").first().fill('Site');
+    await page.getByLabel("Nom de l’espace intérieur").first().fill('Site');
     await page.getByRole('button', { name: /ajouter un espace intérieur/i }).click();
-    await page.getByLabel("Nom de l'espace intérieur").nth(1).fill('VIP');
+    await page.getByLabel("Nom de l’espace intérieur").nth(1).fill('VIP');
     await page.getByRole('button', { name: 'Suivant' }).click(); // step2 -> step3
 
     // Step 3 — Portes: the default checkpoint is already Extérieur<->Site.
@@ -122,11 +122,11 @@ test.describe('Wizard de création d\'événement', () => {
     await page.getByLabel('Deuxième zone de la porte').nth(3).selectOption({ label: 'VIP' });
 
     await page.getByRole('button', { name: 'Suivant' }).click(); // step3 -> step4
-    await page.getByRole('button', { name: /Créer l'événement/i }).click();
+    await page.getByRole('button', { name: /Créer l’événement/i }).click();
 
     await page.waitForURL(/\/admin\?event=/);
     await expect(page.getByTestId('dashboard-event-name')).toHaveText('Festival Test');
-    await expect(page.getByRole('button', { name: /Démarrer l'événement/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Démarrer l’événement/i })).toBeVisible();
 
     const eventId = new URL(page.url()).searchParams.get('event')!;
     const session = await getAdminSession();

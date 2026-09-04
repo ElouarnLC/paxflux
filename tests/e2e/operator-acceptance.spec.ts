@@ -202,9 +202,9 @@ test('B. préparation de l’événement : 3 espaces, 4 portes, draft persistant
   await page.getByRole('button', { name: 'Suivant' }).click();
 
   // 8. Exactly three spaces: Extérieur (seeded), Site, VIP.
-  await page.getByLabel("Nom de l'espace intérieur").first().fill('Site');
+  await page.getByLabel("Nom de l’espace intérieur").first().fill('Site');
   await page.getByRole('button', { name: /ajouter un espace intérieur/i }).click();
-  await page.getByLabel("Nom de l'espace intérieur").nth(1).fill('VIP');
+  await page.getByLabel("Nom de l’espace intérieur").nth(1).fill('VIP');
   await page.getByRole('button', { name: 'Suivant' }).click();
 
   // 9. Exactly four doors: three on the external boundary, one internal.
@@ -227,7 +227,7 @@ test('B. préparation de l’événement : 3 espaces, 4 portes, draft persistant
   await expect(page.getByRole('heading', { name: /Validation de la Topologie/i })).toBeVisible();
 
   // 11. Save.
-  await page.getByRole('button', { name: /Créer l'événement/i }).click();
+  await page.getByRole('button', { name: /Créer l’événement/i }).click();
   await page.waitForURL(/\/admin\?event=/);
   scenario.eventId = new URL(page.url()).searchParams.get('event')!;
 
@@ -282,8 +282,8 @@ test('B. préparation de l’événement : 3 espaces, 4 portes, draft persistant
   );
 
   // 16. Counting opens only when the operator explicitly says so.
-  await page.getByRole('button', { name: /Démarrer l'événement/i }).click();
-  await page.getByRole('button', { name: /^Démarrer l'événement$/ }).last().click();
+  await page.getByRole('button', { name: /Démarrer l’événement/i }).click();
+  await page.getByRole('button', { name: /^Démarrer l’événement$/ }).last().click();
   await expect
     .poll(async () => (await api<{ status: string }>('GET', `/api/v1/events/${scenario.eventId}`)).status)
     .toBe('live');
@@ -310,7 +310,7 @@ test('C. appairage de trois téléphones distincts sur trois portes', async ({ p
 
   for (const door of ['Porte A', 'Porte B', 'Accès VIP'] as const) {
     await page.locator('#checkpoint-picker').selectOption({ label: door });
-    await page.getByRole('button', { name: /Générer le QR Code d'appairage/i }).click();
+    await page.getByRole('button', { name: /Générer le QR Code d’appairage/i }).click();
     await expect(shown).toBeVisible({ timeout: 10_000 });
 
     // From the second door on, the panel still shows the *previous*

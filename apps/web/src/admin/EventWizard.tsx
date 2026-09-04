@@ -320,7 +320,7 @@ export const EventWizard: React.FC = () => {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="event-name">Nom de l'événement *</Label>
+              <Label htmlFor="event-name">Nom de l’événement *</Label>
               <Input
                 id="event-name"
                 type="text"
@@ -365,7 +365,7 @@ export const EventWizard: React.FC = () => {
               <h2 className="text-xl font-bold text-foreground">2. Espaces</h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 "Extérieur" existe toujours pour le comptage de frontière. Ajoutez les zones intérieures
-                utiles — une zone n'a pas forcément besoin de sa propre porte vers l'extérieur.
+                utiles — une zone n’a pas forcément besoin de sa propre porte vers l’extérieur.
               </p>
             </div>
 
@@ -382,7 +382,7 @@ export const EventWizard: React.FC = () => {
                 <div key={s.clientId} className="flex flex-wrap items-center gap-2">
                   <Input
                     type="text"
-                    aria-label="Nom de l'espace intérieur"
+                    aria-label="Nom de l’espace intérieur"
                     placeholder="Nom de la zone"
                     value={s.name}
                     onChange={(e) => updateInternalSpace(s.clientId, { name: e.target.value })}
@@ -390,7 +390,7 @@ export const EventWizard: React.FC = () => {
                   />
                   <Input
                     type="number"
-                    aria-label="Capacité de l'espace"
+                    aria-label="Capacité de l’espace"
                     placeholder="Capacité"
                     value={s.capacity.capacity}
                     onChange={(e) =>
@@ -439,7 +439,7 @@ export const EventWizard: React.FC = () => {
         {step === 3 ? (
           <div className="space-y-4">
             <div>
-              <h2 className="text-xl font-bold text-foreground">3. Portes &amp; Checkpoints</h2>
+              <h2 className="text-xl font-bold text-foreground">3. Portes</h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 Configurez autant de portes physiques que nécessaire, y compris plusieurs entre les deux
                 mêmes espaces.
@@ -586,7 +586,7 @@ export const EventWizard: React.FC = () => {
             <div>
               <h2 className="text-xl font-bold text-foreground">4. Validation de la Topologie</h2>
               <p className="mt-1 text-xs text-muted-foreground">
-                Vérifiez la structure, puis enregistrez l'événement en brouillon. Vous le lancerez
+                Vérifiez la structure, puis enregistrez l’événement en brouillon. Vous le lancerez
                 explicitement depuis le tableau de bord, après vérification du préflight.
               </p>
             </div>
@@ -630,7 +630,7 @@ export const EventWizard: React.FC = () => {
               </Button>
               <Button variant="success" disabled={loading} onClick={handleCreateEvent}>
                 <CheckCircle />
-                Créer l'événement (brouillon)
+                Créer l’événement (brouillon)
               </Button>
             </div>
           </div>

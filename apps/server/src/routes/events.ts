@@ -383,7 +383,7 @@ export async function registerEventRoutes(app: FastifyInstance, sqlite: Database
               503,
               'DATABASE_INTEGRITY_CHECK_FAILED',
               'Base de données non saine',
-              "La vérification d'intégrité de la base de données a échoué juste avant le passage en direct. L'événement n'a pas été démarré."
+              "La vérification d’intégrité de la base de données a échoué juste avant le passage en direct. L’événement n’a pas été démarré."
             )
           );
       }
