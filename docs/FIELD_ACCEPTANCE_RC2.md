@@ -7,7 +7,7 @@
 > result cell is `NOT RUN` until someone fills it in.
 >
 > **No automated suite can produce this evidence.** CI runs headless Chromium
-> on a Linux runner: it cannot install a PWA on an iPhone, cannot feel a
+> on a Linux runner: it cannot add PaxFlux to an iPhone's Home Screen, cannot feel a
 > vibration motor, and cannot lose signal in a marquee. That is the entire
 > reason this file exists.
 
@@ -44,11 +44,44 @@ Each step is labelled:
   instance, is a capability iOS browsers do not expose, and PaxFlux never
   promises counting depends on it.
 
-The one place the distinction is easy to get wrong: **PWA installation is a
-GATE** on a browser that supports installation over HTTPS, because installing
-the counter is how a phone gets a service worker and therefore how it survives
-losing the network. On a browser with no install API at all, record
-`NOT SUPPORTED` and say which browser.
+### Three things that are not the same thing
+
+Getting this wrong is the easiest way to mark a working phone as unsupported,
+so name which one you are recording:
+
+1. **The browser's JavaScript install prompt.** `beforeinstallprompt` and the
+   in-page *Installer l'application* button PaxFlux shows from it. Chromium
+   only. **Its absence is not a verdict about anything else.**
+2. **Platform installation as a home-screen web app.** What actually produces a
+   standalone launcher. Some platforms offer it through the browser's prompt;
+   iOS and iPadOS offer it through Safari's *Share → Add to Home Screen* (or
+   *Add to Dock* on macOS Safari), with no JS prompt involved at all. Other
+   browsers have their own menu item.
+3. **Service-worker registration and control.** What gives the app an offline
+   shell. It follows from **HTTPS plus a successful registration**, and it
+   happens in an ordinary browser tab whether or not anyone ever installs
+   anything.
+
+So installing the app is *not* "how the phone gets a service worker" — the two
+are independent lifecycles. HTTPS and a controlling service worker are what
+make offline work (steps 10 and 14); installation is required here separately,
+because RC2 is validating the **standalone field launch experience**: an
+operator opening a home-screen icon at a door, not a tab they must find again.
+
+**Installation is therefore a GATE**, and `NOT SUPPORTED` is only valid when
+the tested browser and platform genuinely offer **no** installed or
+home-screen web-app mechanism at all. A missing `beforeinstallprompt` on iOS
+Safari is **not** that: Safari installs web apps manually, so that phone is
+expected to `PASS` step 9 by the manual route. Record in step 9 *which
+mechanism you used*: `browser prompt`, `manual Add to Home Screen / Open as
+Web App`, or the platform's own equivalent, named.
+
+**At least one representative target handset and browser must PASS step 9 end
+to end** — installation or home-screen web app → standalone launch → `/` →
+`/counter` → offline reopen. A physical acceptance in which every intended
+field phone is marked `NOT SUPPORTED` for installation does not pass: it means
+the deployment target has not been demonstrated, not that the requirement does
+not apply.
 
 ### Evidence hygiene
 
@@ -83,7 +116,9 @@ step 16; three is closer to a real event.
 | OS and version | | |
 | Browser and version | | |
 | Launched in ordinary browser or installed standalone | | |
-| Did the browser offer installation? | | |
+| Did the browser offer a JS install prompt (`beforeinstallprompt`)? | | |
+| Installation mechanism actually used (browser prompt / manual Add to Home Screen / other — name it) | | |
+| Did a service worker register and take control? (offline shell; independent of installation) | | |
 | Does the installed icon open `/` and land on `/counter`? | | |
 | Does it still launch with the network unavailable? | | |
 
@@ -108,7 +143,7 @@ step 16; three is closer to a real event.
 | 6 | Pair the physical phone by scanning the QR | The phone reaches the completion step. The token is single-use: scanning the same code again is refused. | GATE | NOT RUN | |
 | 7 | Name the device | The optional name is accepted and appears on the counter and in supervision. Continuing without renaming also works. | GATE | NOT RUN | |
 | 8 | Press **Tester la vibration** | Record what the screen reports: *demandée* (accepted), *refusée*, or *ce navigateur ne propose pas la vibration*. Whichever it is, the screen stays usable and counting is unaffected. | OBS | NOT RUN | Record the exact wording shown. `NOT SUPPORTED` is the expected result on iOS. |
-| 9 | Install the application | The browser offers installation; install it; launch it from the home screen or app launcher; the smart root opens the **paired counter**, not a staff login. | GATE (see note above) | NOT RUN | |
+| 9 | Install the application as a home-screen web app | By whichever mechanism this platform offers — the browser's own prompt, or Safari's *Share → Add to Home Screen*, or another named equivalent. Launch it from the home screen or app launcher: it opens **standalone** (no browser chrome) and the smart root lands on the **paired counter**, not a staff login. **Record the mechanism used.** `NOT SUPPORTED` only if this browser and platform offer no installed web-app mechanism at all — a missing JS prompt is not that. | GATE | NOT RUN | Mechanism: |
 | 10 | Read the identity on screen | The **phone's name** and the **checkpoint's name** are separately legible and not confusable. | GATE | NOT RUN | |
 
 ### Counting
@@ -118,7 +153,7 @@ step 16; three is closer to a real event.
 | 11 | Count online, both allowed directions, on two phones | Each tap gives immediate visual feedback. The gauge moves. Supervision reflects both doors. | GATE | NOT RUN | |
 | 12 | Read the server/pending split | With counts queued, the counter states what the server holds and what this handset still owes it (`Serveur : n` · `+n en attente sur cet appareil`), and an operator can say which is which. | GATE | NOT RUN | |
 | 13 | Reproduce a negative occupancy safely | From an occupancy of zero, count one outward movement (only if the topology allows it — otherwise `NOT SUPPORTED`). The value becomes `−1`, is **not** clamped to 0, and the anomaly notice is understandable. **Reset only by an audited correction or a fresh test event — never by editing database files.** | GATE | NOT RUN | |
-| 14 | Offline counting | From a normally synced state, disable connectivity. Perform several counts: the projected value changes immediately and the pending state is understandable. Close and reopen the **installed** application while still offline — the counter shell and local state are still there. | GATE | NOT RUN | |
+| 14 | Offline counting | From a normally synced state, disable connectivity. Perform several counts: the projected value changes immediately and the pending state is understandable. Close and reopen the **installed** application while still offline — the counter shell and local state are still there. This exercises the service worker (registered at step 1 over HTTPS, not by installing) *through* the standalone launcher, which is why it is worth doing after step 9 rather than instead of it. | GATE | NOT RUN | |
 | 15 | Reconnect | Queued counts drain. No duplicate. The displayed gauge **does not jump** as the acknowledgement lands. The pending indicator clears. Supervision converges to the same figure. | GATE | NOT RUN | |
 
 ### Supervision, closing and recovery
@@ -165,5 +200,6 @@ Chromium:
   restore cycle asserting that pre-snapshot sessions are rejected.
 
 What it cannot cover, and what the steps above exist for: a real certificate
-on a real domain, a real browser's install prompt, a real home-screen launch,
+on a real domain, a real home-screen installation by whatever route the
+platform offers,
 a real radio losing signal, and a real vibration motor.

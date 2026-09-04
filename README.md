@@ -62,14 +62,25 @@ certificate for `DOMAIN` automatically. It sets `TRUST_PROXY=true` and
 #### Why HTTPS is not optional for phones
 
 A browser grants a **secure context** to HTTPS origins and to loopback, and
-nothing else. Service workers are gated on it, so a handset opening PaxFlux
-over `http://192.168.1.x:3000` can pair and count perfectly well *while
-online*, but the browser will never offer to install it and there is no
-service worker to open the counter without a network. That is a browser rule,
-not a PaxFlux limitation, and PaxFlux says so on the pairing screen rather
-than letting a volunteer discover it in a dead spot.
+nothing else. Two separate capabilities are gated on it, and it is worth
+keeping them apart:
 
-| Origin the phone opens | Pair & count online | Install to home screen | Launch with no network |
+* **Service-worker registration**, which is what gives the counter an offline
+  shell. It happens in an ordinary browser tab, with nobody installing
+  anything.
+* **Installation as a home-screen web app**, which is what gives an operator a
+  standalone launcher to open at a door. Chromium offers it through a
+  JavaScript prompt PaxFlux surfaces as a button; iOS and iPadOS offer it
+  manually through Safari's *Share → Add to Home Screen*, with no such prompt
+  — the absence of the prompt says nothing about whether the platform can
+  install the app.
+
+So a handset opening PaxFlux over `http://192.168.1.x:3000` can pair and count
+perfectly well *while online*, and gets neither of the two. That is a browser
+rule, not a PaxFlux limitation, and PaxFlux says so on the pairing screen
+rather than letting a volunteer discover it in a dead spot.
+
+| Origin the phone opens | Pair & count online | Service worker registers | Install to home screen |
 | :--- | :---: | :---: | :---: |
 | `https://counter.yourfestival.org` | yes | yes | yes |
 | `http://<LAN-IP>:3000` | yes | **no** | **no** |

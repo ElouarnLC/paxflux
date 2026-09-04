@@ -57,13 +57,31 @@ The tag is immutable and is not moved by any of this work.
 
 ## 3. Current automated evidence
 
-Measured on this pull request's head. **CI on Node 24 is the authority**; the
-figures below are read from that run, not from a developer machine.
+### What this section is, and what it is not
+
+A document cannot state its own commit: naming a SHA changes the file, which
+changes the SHA. So three different things are kept apart here rather than
+collapsed into one "current head" that is false the moment it is written.
+
+1. **The RC2-E functional evidence run** — the commit whose CI produced the
+   figures below. It is a *fixed* commit: the last one that changed shipped
+   behaviour. Documentation and review commits after it do not invalidate it,
+   because they do not change what was measured.
+2. **The final required-check status of the pull request** — read from GitHub
+   on whatever the head turns out to be when review ends. That belongs in the
+   pull request, which is versionless and can say it accurately; it is not
+   restated here.
+3. **The merge commit** — the release authority. Whatever lands on `main` is
+   what a deployment runs, and its own CI is the last word. Nothing in this
+   file supersedes it.
+
+**CI on Node 24 is the authority for every figure below**; none was taken from
+a developer machine.
 
 | | |
 | :--- | :--- |
-| Head SHA | `e39b449e3e7d933c1426aee78142494c6a519267` |
-| CI run | [#33799271689](https://github.com/ElouarnLC/paxflux/actions/runs/33799271689) — all four jobs green |
+| RC2-E functional evidence commit | `e39b449e3e7d933c1426aee78142494c6a519267` |
+| Its CI run | [#33799271689](https://github.com/ElouarnLC/paxflux/actions/runs/33799271689) — all four jobs green |
 | `npm run typecheck` | green, 3 workspaces |
 | `npm run lint` (Biome) | **0 diagnostics**, 177 files |
 | `npm test` (Vitest) | **489 / 489**, 38 files |
@@ -81,6 +99,11 @@ viewport projects.
 
 No test was removed, skipped, weakened, retried or made conditional in any
 RC2 phase.
+
+Commits after the evidence run add the coherent-read regression, correct the
+field runbook's installation semantics and rewrite this section; the counts
+above therefore move upward as review lands, and the pull request reports the
+figures for its own final head.
 
 ## 4. Physical field evidence — PENDING
 

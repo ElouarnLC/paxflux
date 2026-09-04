@@ -48,6 +48,18 @@ describe('the acceptance report does not present Phase 10 as current', () => {
     }
   });
 
+  it('does not claim to state its own commit', () => {
+    // A document cannot name its own SHA: writing it changes the file. The
+    // previous wording said "measured on this pull request's head" beside a
+    // SHA that a later documentation commit had already superseded.
+    const current = report.slice(0, historicalAt);
+    expect(current).not.toContain("Measured on this pull request's head");
+    expect(current).toContain('RC2-E functional evidence commit');
+    // And it says where the authoritative answers actually live.
+    expect(current).toContain('final required-check status of the pull request');
+    expect(current).toContain('The merge commit');
+  });
+
   it('points at the physical runbook and calls it pending, in the current part', () => {
     const current = report.slice(0, historicalAt);
     expect(current).toContain('FIELD_ACCEPTANCE_RC2.md');
@@ -91,6 +103,29 @@ describe('the field acceptance runbook is a runbook, not a result', () => {
     // distinction to mean anything.
     expect(types.some((t) => t.startsWith('GATE'))).toBe(true);
     expect(types.some((t) => t.startsWith('OBS'))).toBe(true);
+  });
+
+  it('does not treat a missing JavaScript prompt as an unsupported platform', () => {
+    // The review round that added this: iOS has no `beforeinstallprompt` and
+    // installs web apps manually through Safari, so reading the prompt's
+    // absence as NOT SUPPORTED would mark the whole iPhone fleet
+    // untestable — and a physical acceptance where every field handset is
+    // NOT SUPPORTED for installation has demonstrated nothing.
+    const flat = runbook.replace(/\s+/g, ' ');
+    expect(flat).toContain('Add to Home Screen');
+    expect(flat).toContain('A missing `beforeinstallprompt` on iOS Safari is **not** that');
+    expect(flat, 'at least one target handset must actually pass').toContain(
+      'At least one representative target handset and browser must PASS step 9'
+    );
+  });
+
+  it('keeps installation and service-worker registration as separate lifecycles', () => {
+    const flat = runbook.replace(/\s+/g, ' ');
+    // Installing does not create a service worker; HTTPS plus a successful
+    // registration does, in an ordinary tab. Installation is required here
+    // for the standalone launch, which is a different claim.
+    expect(flat).toContain('is *not* "how the phone gets a service worker"');
+    expect(flat).toContain('standalone field launch experience');
   });
 
   it('warns against pasting credentials into the evidence', () => {
