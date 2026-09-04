@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { localDb } from '../offline/db.js';
+import { readDeviceTruthSnapshot } from '../offline/truth-snapshot.js';
 import {
   enqueueCountAction,
   enqueueReversalAction,
@@ -175,15 +176,16 @@ export const CounterView: React.FC = () => {
   // whichever order they finish, so React renders the pair mid-flight: on an
   // acknowledgment the outbox emitted first and the gauge fell 1 → 0 → 1
   // before settling. One querier means one emission, one render, and no
-  // arithmetic across two different instants. The write side is transactional
-  // for the same reason (`flushOutbox`); this is the read side of it.
-  const storedTruth = useLiveQuery(
-    async () => ({
-      snapshot: await localDb.event_state.get('current'),
-      outboxActions: await localDb.outbox_actions.orderBy('sequence').toArray(),
-    }),
-    []
-  );
+  // arithmetic across two different instants.
+  //
+  // One querier is not by itself one snapshot, though: two awaits inside it
+  // still leave a window an acknowledgment can commit into, and Dexie's
+  // re-query only protects a subscription it has already established — not
+  // the first execution, which is exactly when a device reopening with a
+  // queue flushes it. `readDeviceTruthSnapshot` makes the pair one readonly
+  // transaction; the write side is transactional for the same reason
+  // (`flushOutbox`), and this is the read side of it.
+  const storedTruth = useLiveQuery(() => readDeviceTruthSnapshot(), []);
   // Undefined while the first query is in flight, exactly as before, and
   // undefined again when there is no stored state — the two are treated
   // alike by `snapshotMatchesPairing` below.
